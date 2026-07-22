@@ -101,6 +101,81 @@ fn db_wedge_recovery_decision(
     DbWedgeRecoveryDecision::Restart
 }
 
+/// A DB-wedge restart rebuilds CoreAudio in the same process. On macOS the
+/// rebuilt input can exist without ever receiving a callback; that exact state
+/// needs a process boundary. Wait for an input stream to exist first so slow
+/// model startup, disabled audio, and missing devices never trigger a relaunch.
+#[cfg(target_os = "macos")]
+fn watch_rebuilt_audio(
+    app: tauri::AppHandle,
+    audio_manager: Arc<screenpipe_audio::audio_manager::AudioManager>,
+    server_state: Arc<tokio::sync::Mutex<Option<crate::server_core::ServerCore>>>,
+    wants_recording: Arc<std::sync::atomic::AtomicBool>,
+) {
+    const START_WAIT: Duration = Duration::from_secs(120);
+    const CALLBACK_WAIT: Duration = Duration::from_secs(35);
+
+    tauri::async_runtime::spawn(async move {
+        let guard_started = std::time::Instant::now();
+        let mut input_opened_at = None;
+
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            if guard_started.elapsed() >= START_WAIT {
+                return;
+            }
+
+            let same_generation = server_state.lock().await.as_ref().is_some_and(|server| {
+                Arc::ptr_eq(&server.audio_manager, &audio_manager)
+            });
+            if !same_generation
+                || !wants_recording.load(Ordering::SeqCst)
+                || audio_manager.is_disabled().await
+                || screenpipe_config::should_pause_audio_for_lock()
+            {
+                return;
+            }
+
+            let inputs = audio_manager
+                .current_devices()
+                .into_iter()
+                .filter(|device| {
+                    device.device_type == screenpipe_audio::core::device::DeviceType::Input
+                })
+                .map(|device| device.to_string())
+                .collect::<std::collections::HashSet<_>>();
+            if inputs.is_empty() {
+                input_opened_at = None;
+                continue;
+            }
+
+            let levels = audio_manager.metrics.per_device_rms_snapshot();
+            if inputs.iter().any(|input| levels.contains_key(input)) {
+                info!("db wedge auto-recovery: rebuilt macOS input is receiving callbacks");
+                return;
+            }
+
+            let opened_at = input_opened_at.get_or_insert_with(std::time::Instant::now);
+            if opened_at.elapsed() < CALLBACK_WAIT {
+                continue;
+            }
+
+            error!(
+                "db wedge auto-recovery: rebuilt macOS input produced no callbacks for {}s; \
+                 relaunching the app",
+                CALLBACK_WAIT.as_secs()
+            );
+            crate::process_exit::run_blocking_pre_exit_teardown(app.clone());
+            crate::process_exit::request_app_relaunch(
+                app,
+                "macOS audio did not restart after DB recovery",
+                Duration::from_millis(250),
+            );
+            return;
+        }
+    });
+}
+
 /// Build the `PersistentFailureHook` the DB layer fires when writes wedge
 /// persistently. The hook itself is sync (`Fn()`), so it spawns the async
 /// restart. Captures an `AppHandle` (cheap clone, Send+Sync) and the shared
@@ -247,6 +322,24 @@ async fn recover_from_db_wedge(
         // manual recovery threshold rather than waiting for the health
         // watchdog to grind through more doomed respawns.
         crate::db_relaunch::note_respawn_failure(&app, &e).await;
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    let audio_manager = {
+        let server = recording_state.server.lock().await;
+        server
+            .as_ref()
+            .map(|server| server.audio_manager.clone())
+    };
+    #[cfg(target_os = "macos")]
+    if let Some(audio_manager) = audio_manager {
+        watch_rebuilt_audio(
+            app.clone(),
+            audio_manager,
+            recording_state.server.clone(),
+            recording_state.wants_recording.clone(),
+        );
     }
 }
 
