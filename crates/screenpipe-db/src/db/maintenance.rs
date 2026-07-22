@@ -4,7 +4,7 @@
 
 use super::*;
 
-const WAL_BACKLOG_WARNING_PAGES: i32 = 40_000;
+const WAL_HARD_CAP_PAGES: i32 = 40_000;
 
 async fn run_routine_wal_checkpoint(pool: &SqlitePool) -> Result<(i32, i32, i32), sqlx::Error> {
     // Routine maintenance must never shorten the live WAL file. A TRUNCATE
@@ -15,6 +15,19 @@ async fn run_routine_wal_checkpoint(pool: &SqlitePool) -> Result<(i32, i32, i32)
     // the app's many long-lived readers.
     let row = sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
         .fetch_one(pool)
+        .await?;
+    Ok((row.get(0), row.get(1), row.get(2)))
+}
+
+async fn run_wal_restart_checkpoint(
+    connection: &mut sqlx::SqliteConnection,
+) -> Result<(i32, i32, i32), sqlx::Error> {
+    // RESTART has the same completion guarantee as the former hard-cap
+    // TRUNCATE checkpoint, but deliberately leaves the WAL file allocated.
+    // Once existing readers drain, SQLite can reuse the file from its start
+    // without changing its physical length underneath another connection.
+    let row = sqlx::query("PRAGMA wal_checkpoint(RESTART)")
+        .fetch_one(connection)
         .await?;
     Ok((row.get(0), row.get(1), row.get(2)))
 }
@@ -1397,6 +1410,10 @@ impl DatabaseManager {
             // small under sustained write load.
             const INTERVAL: Duration = Duration::from_secs(60);
             let mut interval = tokio::time::interval(INTERVAL);
+            // `interval()` yields its first tick immediately. Startup has just
+            // run a serialized checkpoint, so consume that tick and wait a
+            // full interval instead of racing callers' first transactions.
+            interval.tick().await;
             loop {
                 tokio::select! {
                     _ = interval.tick() => {}
@@ -1431,11 +1448,57 @@ impl DatabaseManager {
                 match run_routine_wal_checkpoint(&pool).await {
                     Ok((busy, log_pages, checkpointed)) => {
                         let backlog_pages = log_pages.saturating_sub(checkpointed);
-                        if backlog_pages > WAL_BACKLOG_WARNING_PAGES {
+                        if backlog_pages > WAL_HARD_CAP_PAGES {
                             warn!(
-                                "passive wal checkpoint left {} pages pending (log={}, checkpointed={}, busy={})",
+                                "passive wal checkpoint left {} pages pending; waiting for a non-truncating restart checkpoint (log={}, checkpointed={}, busy={})",
                                 backlog_pages, log_pages, checkpointed, busy
                             );
+                            // PASSIVE must remain the common path, but a reader
+                            // can otherwise pin the WAL forever. Preserve the
+                            // hard growth ceiling with RESTART: it waits for old
+                            // readers and makes the next writer reuse the WAL,
+                            // without physically shortening the live file.
+                            match pool.acquire().await {
+                                Ok(mut conn) => {
+                                    if let Err(e) = sqlx::query("PRAGMA busy_timeout = 60000")
+                                        .execute(&mut *conn)
+                                        .await
+                                    {
+                                        warn!("failed to set checkpoint busy timeout: {}", e);
+                                    }
+                                    match run_wal_restart_checkpoint(&mut conn).await {
+                                        Ok((restart_busy, restart_log, restart_checkpointed)) => {
+                                            let restart_backlog =
+                                                restart_log.saturating_sub(restart_checkpointed);
+                                            if restart_busy == 1 || restart_backlog > 0 {
+                                                warn!(
+                                                    "restart wal checkpoint left {} pages pending (log={}, checkpointed={}, busy={})",
+                                                    restart_backlog,
+                                                    restart_log,
+                                                    restart_checkpointed,
+                                                    restart_busy
+                                                );
+                                            } else {
+                                                info!(
+                                                    "restart wal checkpoint completed without truncation (checkpointed {}/{})",
+                                                    restart_checkpointed, restart_log
+                                                );
+                                            }
+                                        }
+                                        Err(e) => warn!("restart wal checkpoint failed: {}", e),
+                                    }
+                                    if let Err(e) = sqlx::query("PRAGMA busy_timeout = 5000")
+                                        .execute(&mut *conn)
+                                        .await
+                                    {
+                                        warn!("failed to restore checkpoint busy timeout: {}", e);
+                                    }
+                                }
+                                Err(e) => warn!(
+                                    "failed to acquire connection for restart checkpoint: {}",
+                                    e
+                                ),
+                            }
                         } else {
                             debug!(
                                 "passive wal checkpoint: busy={}, checkpointed {}/{} pages ({} pending)",
@@ -1572,7 +1635,7 @@ impl DatabaseManager {
 
 #[cfg(test)]
 mod wal_maintenance_tests {
-    use super::run_routine_wal_checkpoint;
+    use super::{run_routine_wal_checkpoint, run_wal_restart_checkpoint};
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
     use sqlx::Row;
 
@@ -1636,6 +1699,98 @@ mod wal_maintenance_tests {
             .get(0);
         assert_eq!(integrity, "ok");
 
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn restart_checkpoint_drains_reader_backlog_without_truncating_wal() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("db.sqlite");
+        let wal_path = dir.path().join("db.sqlite-wal");
+        let options = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .pragma("wal_autocheckpoint", "0")
+            .busy_timeout(std::time::Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .min_connections(3)
+            .max_connections(3)
+            .connect_with(options)
+            .await
+            .expect("open WAL database");
+
+        sqlx::query("CREATE TABLE events (id INTEGER PRIMARY KEY, body TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .expect("create table");
+        run_routine_wal_checkpoint(&pool)
+            .await
+            .expect("checkpoint setup frames");
+
+        let mut reader = pool.begin().await.expect("begin reader");
+        let _: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events")
+            .fetch_one(&mut *reader)
+            .await
+            .expect("establish reader snapshot");
+
+        for id in 0..128 {
+            sqlx::query("INSERT INTO events (body) VALUES (?1)")
+                .bind(format!("event-{id}-{}", "x".repeat(1024)))
+                .execute(&pool)
+                .await
+                .expect("insert event");
+        }
+        let wal_size_before = std::fs::metadata(&wal_path)
+            .expect("WAL exists before checkpoint")
+            .len();
+
+        let (_, log_pages, checkpointed) = run_routine_wal_checkpoint(&pool)
+            .await
+            .expect("passive checkpoint with reader");
+        assert!(
+            log_pages > checkpointed,
+            "reader must leave frames pending for the escalation test"
+        );
+
+        let mut checkpoint_connection = pool.acquire().await.expect("checkpoint connection");
+        let checkpoint = tokio::spawn(async move {
+            let result = run_wal_restart_checkpoint(&mut checkpoint_connection).await;
+            (result, checkpoint_connection)
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            !checkpoint.is_finished(),
+            "restart checkpoint must wait while the old reader is active"
+        );
+        reader.rollback().await.expect("release reader snapshot");
+        let (checkpoint_result, checkpoint_connection) = checkpoint
+            .await
+            .expect("restart checkpoint task must not panic");
+        let (busy, restart_log, restart_checkpointed) =
+            checkpoint_result.expect("restart checkpoint");
+        assert_eq!(busy, 0, "restart checkpoint should complete");
+        assert_eq!(restart_checkpointed, restart_log, "all frames must drain");
+
+        let wal_size_after = std::fs::metadata(&wal_path)
+            .expect("WAL remains allocated after restart checkpoint")
+            .len();
+        assert_eq!(
+            wal_size_after, wal_size_before,
+            "restart escalation must not physically truncate the live WAL"
+        );
+
+        sqlx::query("INSERT INTO events (body) VALUES ('after-restart')")
+            .execute(&pool)
+            .await
+            .expect("write after restart");
+        let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+            .fetch_one(&pool)
+            .await
+            .expect("integrity check");
+        assert_eq!(integrity, "ok");
+
+        drop(checkpoint_connection);
         pool.close().await;
     }
 }
