@@ -4,6 +4,21 @@
 
 use super::*;
 
+const WAL_BACKLOG_WARNING_PAGES: i32 = 40_000;
+
+async fn run_routine_wal_checkpoint(pool: &SqlitePool) -> Result<(i32, i32, i32), sqlx::Error> {
+    // Routine maintenance must never shorten the live WAL file. A TRUNCATE
+    // checkpoint can make an already-open connection short-read the old WAL
+    // extent if its wal-index generation is stale. PASSIVE still copies every
+    // safe frame into the main database, but leaves WAL reuse/reset to SQLite's
+    // normal writer path instead of physically truncating the file underneath
+    // the app's many long-lived readers.
+    let row = sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
+        .fetch_one(pool)
+        .await?;
+    Ok((row.get(0), row.get(1), row.get(2)))
+}
+
 impl DatabaseManager {
     pub async fn execute_raw_sql(&self, query: &str) -> Result<serde_json::Value, sqlx::Error> {
         // This API intentionally executes caller-supplied maintenance SQL.
@@ -1367,15 +1382,11 @@ impl DatabaseManager {
     ///
     /// Since `wal_autocheckpoint = 0` (see [`WAL_SAFETY_PRAGMAS`]), committing
     /// connections do not checkpoint inline. This task therefore owns routine
-    /// checkpointing: it must (a) run often enough to keep the WAL small and
-    /// (b) never let the WAL grow without bound when readers keep a plain
-    /// `TRUNCATE` busy. It does a normal `TRUNCATE` each tick, and if the WAL is
-    /// over a hard page cap while still busy it escalates to the
-    /// serialized exclusive checkpoint (the routine pass already holds the
-    /// process-wide write permit, then bumps `busy_timeout` to wait out
-    /// short-lived readers) — the same reliable mechanism `compact()` uses.
-    /// That escalation is the ceiling that keeps `autocheckpoint = 0` from
-    /// trading one failure mode for an unbounded WAL on the heaviest install.
+    /// checkpointing: it runs a non-truncating `PASSIVE` checkpoint often enough
+    /// to copy safe frames into the main database without shortening the WAL
+    /// underneath long-lived readers. Explicit startup, backup, and compaction
+    /// paths still use serialized `TRUNCATE` checkpoints when a physical reset
+    /// is required.
     pub fn start_wal_maintenance(&self) {
         let pool = self.pool.clone();
         let shutdown = self.close_token.clone();
@@ -1385,9 +1396,6 @@ impl DatabaseManager {
             // the whole interval between ticks, so check more often to keep it
             // small under sustained write load.
             const INTERVAL: Duration = Duration::from_secs(60);
-            // ~40k pages * 4KB ≈ 160MB. Above this we force the checkpoint
-            // through rather than tolerate more growth.
-            const WAL_HARD_CAP_PAGES: i32 = 40_000;
             let mut interval = tokio::time::interval(INTERVAL);
             loop {
                 tokio::select! {
@@ -1420,58 +1428,18 @@ impl DatabaseManager {
                         return;
                     }
                 };
-                match sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-                    .fetch_one(&pool)
-                    .await
-                {
-                    Ok(row) => {
-                        let busy: i32 = row.get(0);
-                        let log_pages: i32 = row.get(1);
-                        let checkpointed: i32 = row.get(2);
-                        if busy == 1 && log_pages > WAL_HARD_CAP_PAGES {
-                            // Readers kept the plain TRUNCATE busy and the WAL is
-                            // over the cap. The routine pass already holds the
-                            // single write permit; wait out short-lived readers.
+                match run_routine_wal_checkpoint(&pool).await {
+                    Ok((busy, log_pages, checkpointed)) => {
+                        let backlog_pages = log_pages.saturating_sub(checkpointed);
+                        if backlog_pages > WAL_BACKLOG_WARNING_PAGES {
                             warn!(
-                                "wal checkpoint: busy with {} pages (> {} cap) — forcing exclusive checkpoint",
-                                log_pages, WAL_HARD_CAP_PAGES
-                            );
-                            match pool.acquire().await {
-                                Ok(mut conn) => {
-                                    let _ = sqlx::query("PRAGMA busy_timeout = 60000")
-                                        .execute(&mut *conn)
-                                        .await;
-                                    match sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-                                        .fetch_one(&mut *conn)
-                                        .await
-                                    {
-                                        Ok(r2) => {
-                                            let b2: i32 = r2.get(0);
-                                            let lp2: i32 = r2.get(1);
-                                            warn!(
-                                                "forced wal checkpoint done: busy={}, {} pages remain",
-                                                b2, lp2
-                                            );
-                                        }
-                                        Err(e) => warn!("forced wal checkpoint failed: {}", e),
-                                    }
-                                    // Restore the default busy_timeout before the
-                                    // connection returns to the pool.
-                                    let _ = sqlx::query("PRAGMA busy_timeout = 5000")
-                                        .execute(&mut *conn)
-                                        .await;
-                                }
-                                Err(e) => warn!("forced wal checkpoint: acquire failed: {}", e),
-                            }
-                        } else if busy == 1 {
-                            debug!(
-                                "wal checkpoint: busy (could not truncate), {} pages in WAL",
-                                log_pages
+                                "passive wal checkpoint left {} pages pending (log={}, checkpointed={}, busy={})",
+                                backlog_pages, log_pages, checkpointed, busy
                             );
                         } else {
                             debug!(
-                                "wal checkpoint: truncated, checkpointed {}/{} pages",
-                                checkpointed, log_pages
+                                "passive wal checkpoint: busy={}, checkpointed {}/{} pages ({} pending)",
+                                busy, checkpointed, log_pages, backlog_pages
                             );
                         }
                     }
@@ -1599,5 +1567,75 @@ impl DatabaseManager {
             .execute(&mut *conn)
             .await;
         result
+    }
+}
+
+#[cfg(test)]
+mod wal_maintenance_tests {
+    use super::run_routine_wal_checkpoint;
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+    use sqlx::Row;
+
+    #[tokio::test]
+    async fn routine_checkpoint_never_truncates_the_live_wal() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("db.sqlite");
+        let wal_path = dir.path().join("db.sqlite-wal");
+        let options = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .pragma("wal_autocheckpoint", "0");
+        let pool = SqlitePoolOptions::new()
+            .min_connections(2)
+            .max_connections(2)
+            .connect_with(options)
+            .await
+            .expect("open WAL database");
+
+        sqlx::query("CREATE TABLE events (id INTEGER PRIMARY KEY, body TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .expect("create table");
+        for id in 0..128 {
+            sqlx::query("INSERT INTO events (body) VALUES (?1)")
+                .bind(format!("event-{id}-{}", "x".repeat(1024)))
+                .execute(&pool)
+                .await
+                .expect("insert event");
+        }
+
+        let wal_size_before = std::fs::metadata(&wal_path)
+            .expect("WAL exists before checkpoint")
+            .len();
+        assert!(wal_size_before > 0, "test must create a non-empty WAL");
+
+        let (busy, log_pages, checkpointed) = run_routine_wal_checkpoint(&pool)
+            .await
+            .expect("passive checkpoint");
+        assert_eq!(busy, 0, "passive checkpoint should not report busy");
+        assert!(log_pages > 0, "checkpoint must observe WAL frames");
+        assert_eq!(checkpointed, log_pages, "all safe frames should checkpoint");
+
+        let wal_size_after = std::fs::metadata(&wal_path)
+            .expect("WAL remains allocated after routine checkpoint")
+            .len();
+        assert_eq!(
+            wal_size_after, wal_size_before,
+            "routine checkpoint must not physically truncate the live WAL"
+        );
+
+        sqlx::query("INSERT INTO events (body) VALUES ('after-checkpoint')")
+            .execute(&pool)
+            .await
+            .expect("write after checkpoint");
+        let integrity: String = sqlx::query("PRAGMA integrity_check")
+            .fetch_one(&pool)
+            .await
+            .expect("integrity check")
+            .get(0);
+        assert_eq!(integrity, "ok");
+
+        pool.close().await;
     }
 }
