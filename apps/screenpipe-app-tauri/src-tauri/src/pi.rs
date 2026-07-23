@@ -1581,9 +1581,20 @@ pub async fn pi_start(
 
 /// Kill orphan Pi RPC processes left over from a previous app crash.
 /// Only kills if the managed child is dead or absent.
+fn should_cleanup_orphan_pi_processes(managed_alive: bool, is_e2e: bool) -> bool {
+    !managed_alive && !is_e2e
+}
+
 fn kill_orphan_pi_processes(managed_alive: bool) {
-    if managed_alive {
-        debug!("Managed Pi child is alive, skipping orphan cleanup");
+    // Desktop E2E runs alongside the developer's installed Screenpipe app on
+    // separate data/IPC ports. A system-wide pkill/taskkill from the isolated
+    // test instance would terminate the real app's healthy Pi workers.
+    let is_e2e = std::env::var_os("SCREENPIPE_E2E_SEED").is_some();
+    if !should_cleanup_orphan_pi_processes(managed_alive, is_e2e) {
+        debug!(
+            "Skipping system-wide orphan Pi cleanup (managed_alive={}, e2e={})",
+            managed_alive, is_e2e
+        );
         return;
     }
 
@@ -4400,6 +4411,14 @@ mod tests {
                 super::PiSessionReapReason::IdleTimeout
             )]
         );
+    }
+
+    #[test]
+    fn orphan_cleanup_never_crosses_into_an_e2e_or_managed_app() {
+        assert!(super::should_cleanup_orphan_pi_processes(false, false));
+        assert!(!super::should_cleanup_orphan_pi_processes(true, false));
+        assert!(!super::should_cleanup_orphan_pi_processes(false, true));
+        assert!(!super::should_cleanup_orphan_pi_processes(true, true));
     }
 
     fn write_package_json(package_dir: &std::path::Path, name: &str, version: &str) {
