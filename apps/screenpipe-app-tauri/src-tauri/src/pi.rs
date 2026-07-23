@@ -109,6 +109,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tauri::Emitter;
 use tauri::{AppHandle, State};
 use tokio::sync::Mutex;
@@ -446,7 +447,7 @@ pub struct PiManager {
     stdin: Option<ChildStdin>,
     project_dir: Option<String>,
     app_handle: AppHandle,
-    last_activity: std::time::Instant,
+    last_activity: Instant,
     /// Guard: ensures only one `pi_terminated` event is emitted per session.
     terminated_emitted: Arc<AtomicBool>,
     /// Channels waiting for RPC responses, keyed by request ID.
@@ -467,7 +468,7 @@ impl PiManager {
             stdin: None,
             project_dir: None,
             app_handle,
-            last_activity: std::time::Instant::now(),
+            last_activity: Instant::now(),
             terminated_emitted: Arc::new(AtomicBool::new(false)),
             pending_responses: Arc::new(std::sync::Mutex::new(HashMap::new())),
             queue_handle: None,
@@ -1528,7 +1529,16 @@ pub async fn pi_info(
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
     let mut pool = state.0.lock().await;
     match pool.sessions.get_mut(&sid) {
-        Some(m) => Ok(m.snapshot(&sid)),
+        Some(m) => {
+            let info = m.snapshot(&sid);
+            // The frontend polls only the currently visible chat. Treat that
+            // status read as a foreground heartbeat so the idle reaper can
+            // distinguish an open chat from abandoned background sessions.
+            if info.running {
+                m.last_activity = Instant::now();
+            }
+            Ok(info)
+        }
         None => Ok(PiInfo::default()),
     }
 }
@@ -1685,15 +1695,161 @@ fn resolve_pi_model(requested: &str, provider: &str) -> String {
     }
 }
 
-/// Soft cap on concurrent Pi sessions. Each session is its own bun + node
-/// subprocess holding ~150–300 MB RSS plus a live LLM connection, so we
-/// guard against accidental fork-bombs (a misbehaving caller spawning
-/// hundreds of sessions). Originally 4, raised to 20 on 2026-04-24 because
-/// 4 was too small for normal multi-tab chat use — opening a 5th tab would
-/// silently kill the least-recently-active session mid-stream, which was
-/// confusing UX. 20 leaves enough headroom that real users won't hit it
-/// while still preventing a runaway loop from melting the machine.
+/// Hard safety cap for concurrently working Pi sessions. Busy sessions are
+/// never evicted, so this remains high enough for parallel chat turns while
+/// preventing a faulty caller from spawning an unbounded number of workers.
 const MAX_PI_SESSIONS: usize = 20;
+
+/// Pi 0.80 workers currently settle around 600–750 MB RSS on macOS. Keep only
+/// one inactive worker warm for fast tab switching; the visible chat is kept
+/// alive by `pi_info` heartbeats and working chats are always exempt.
+const MAX_WARM_IDLE_PI_SESSIONS: usize = 1;
+const PI_FOREGROUND_HEARTBEAT_GRACE: Duration = Duration::from_secs(45);
+const PI_IDLE_SESSION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const PI_IDLE_REAPER_INTERVAL: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PiSessionReapCandidate {
+    session_id: String,
+    idle_for: Duration,
+    running: bool,
+    has_in_flight_work: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PiSessionReapReason {
+    IdleLimit,
+    IdleTimeout,
+}
+
+impl PiSessionReapReason {
+    fn event_reason(self) -> &'static str {
+        match self {
+            Self::IdleLimit => "idle_session_limit",
+            Self::IdleTimeout => "idle_timeout",
+        }
+    }
+}
+
+fn select_pi_sessions_to_reap(
+    mut candidates: Vec<PiSessionReapCandidate>,
+    max_warm_idle_sessions: usize,
+    foreground_grace: Duration,
+    idle_timeout: Duration,
+) -> Vec<(String, PiSessionReapReason)> {
+    candidates.retain(|candidate| {
+        candidate.running && !candidate.has_in_flight_work && candidate.idle_for >= foreground_grace
+    });
+    // Oldest first so the warm-session budget preserves the most recently
+    // used background chat.
+    candidates.sort_by(|a, b| b.idle_for.cmp(&a.idle_for));
+    let excess_idle_sessions = candidates.len().saturating_sub(max_warm_idle_sessions);
+
+    candidates
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, candidate)| {
+            let reason = if candidate.idle_for >= idle_timeout {
+                Some(PiSessionReapReason::IdleTimeout)
+            } else if index < excess_idle_sessions {
+                Some(PiSessionReapReason::IdleLimit)
+            } else {
+                None
+            }?;
+            Some((candidate.session_id, reason))
+        })
+        .collect()
+}
+
+async fn reap_idle_pi_sessions(app: &AppHandle, state: &PiState) {
+    let now = Instant::now();
+    let (stopped_sessions, dead_sessions) = {
+        let mut pool = state.0.lock().await;
+        let candidates: Vec<_> = pool
+            .sessions
+            .iter_mut()
+            .map(|(session_id, manager)| {
+                let running = manager.is_running();
+                PiSessionReapCandidate {
+                    session_id: session_id.clone(),
+                    idle_for: now.saturating_duration_since(manager.last_activity),
+                    running,
+                    has_in_flight_work: manager.has_in_flight_work(),
+                }
+            })
+            .collect();
+
+        let dead_sessions: Vec<_> = candidates
+            .iter()
+            .filter(|candidate| !candidate.running)
+            .map(|candidate| candidate.session_id.clone())
+            .collect();
+        let sessions_to_stop = select_pi_sessions_to_reap(
+            candidates,
+            MAX_WARM_IDLE_PI_SESSIONS,
+            PI_FOREGROUND_HEARTBEAT_GRACE,
+            PI_IDLE_SESSION_TIMEOUT,
+        );
+
+        let stopped_sessions: Vec<_> = sessions_to_stop
+            .into_iter()
+            .filter_map(|(session_id, reason)| {
+                pool.sessions
+                    .remove(&session_id)
+                    .map(|manager| (session_id, reason, manager))
+            })
+            .collect();
+        let dead_sessions: Vec<_> = dead_sessions
+            .into_iter()
+            .filter_map(|session_id| {
+                pool.sessions
+                    .remove(&session_id)
+                    .map(|manager| (session_id, manager))
+            })
+            .collect();
+        (stopped_sessions, dead_sessions)
+    };
+
+    if !dead_sessions.is_empty() {
+        debug!(
+            "Removed {} exited Pi sessions from the pool",
+            dead_sessions.len()
+        );
+    }
+    for (_, mut manager) in dead_sessions {
+        manager.stop();
+    }
+
+    for (session_id, reason, mut manager) in stopped_sessions {
+        info!(
+            "Stopping inactive Pi session '{}' ({})",
+            session_id,
+            reason.event_reason()
+        );
+        manager.stop();
+        let _ = app.emit(
+            "agent_session_evicted",
+            serde_json::json!({
+                "sessionId": session_id,
+                "source": "pi",
+                "reason": reason.event_reason(),
+            }),
+        );
+    }
+}
+
+pub fn start_pi_idle_reaper(app: AppHandle, state: PiState) {
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(PI_IDLE_REAPER_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // `interval` ticks immediately; no sessions exist during setup, and
+        // subsequent ticks enforce both the warm-session limit and timeout.
+        loop {
+            interval.tick().await;
+            reap_idle_pi_sessions(&app, &state).await;
+        }
+    });
+}
 
 /// Core Pi start logic — callable from both Tauri commands and Rust boot code.
 pub async fn pi_start_inner(
@@ -4168,6 +4324,82 @@ mod tests {
         let (tx, _rx) = tokio::sync::oneshot::channel();
         pending.lock().unwrap().insert("req_1".to_string(), tx);
         assert!(super::pi_session_has_in_flight_work(None, &pending));
+    }
+
+    fn reap_candidate(
+        session_id: &str,
+        idle_for: Duration,
+        running: bool,
+        has_in_flight_work: bool,
+    ) -> super::PiSessionReapCandidate {
+        super::PiSessionReapCandidate {
+            session_id: session_id.to_string(),
+            idle_for,
+            running,
+            has_in_flight_work,
+        }
+    }
+
+    #[test]
+    fn idle_reaper_preserves_foreground_busy_and_recent_sessions() {
+        let selected = super::select_pi_sessions_to_reap(
+            vec![
+                reap_candidate("foreground", Duration::from_secs(44), true, false),
+                reap_candidate("busy", Duration::from_secs(600), true, true),
+                reap_candidate("exited", Duration::from_secs(600), false, false),
+                reap_candidate("warm", Duration::from_secs(60), true, false),
+            ],
+            1,
+            Duration::from_secs(45),
+            Duration::from_secs(300),
+        );
+
+        assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn idle_reaper_keeps_newest_warm_session_and_reaps_oldest_first() {
+        let selected = super::select_pi_sessions_to_reap(
+            vec![
+                reap_candidate("newest", Duration::from_secs(60), true, false),
+                reap_candidate("oldest", Duration::from_secs(240), true, false),
+                reap_candidate("middle", Duration::from_secs(120), true, false),
+            ],
+            1,
+            Duration::from_secs(45),
+            Duration::from_secs(300),
+        );
+
+        assert_eq!(
+            selected,
+            vec![
+                ("oldest".to_string(), super::PiSessionReapReason::IdleLimit),
+                ("middle".to_string(), super::PiSessionReapReason::IdleLimit),
+            ]
+        );
+    }
+
+    #[test]
+    fn idle_reaper_expires_the_last_warm_session_at_timeout() {
+        let selected = super::select_pi_sessions_to_reap(
+            vec![reap_candidate(
+                "expired",
+                Duration::from_secs(300),
+                true,
+                false,
+            )],
+            1,
+            Duration::from_secs(45),
+            Duration::from_secs(300),
+        );
+
+        assert_eq!(
+            selected,
+            vec![(
+                "expired".to_string(),
+                super::PiSessionReapReason::IdleTimeout
+            )]
+        );
     }
 
     fn write_package_json(package_dir: &std::path::Path, name: &str, version: &str) {
