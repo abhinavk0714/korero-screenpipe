@@ -249,7 +249,7 @@ function SettingsContent() {
       items: [
         { id: "recording" as const, label: "Recording", icon: <Video className="h-4 w-4" /> },
         { id: "ai" as const, label: "AI Presets", icon: <Brain className="h-4 w-4" /> },
-        { id: "ai-settings" as const, label: "Other AI Settings", icon: <SlidersHorizontal className="h-4 w-4" /> },
+        { id: "ai-settings" as const, label: "AI Settings", icon: <SlidersHorizontal className="h-4 w-4" /> },
       ].filter((s) => !isSettingsSectionHidden(s.id)),
     },
     {

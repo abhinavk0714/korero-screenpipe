@@ -100,7 +100,7 @@ describe('Settings sections', () => {
     expect(existsSync(filepath)).toBe(true);
   });
 
-  it('moves AI preferences from General into Other AI Settings and covers enabled/disabled analysis flows', async () => {
+  it('moves AI preferences from General into AI Settings and covers enabled/disabled analysis flows', async () => {
     const navAiSettings = await $('[data-testid="settings-nav-ai-settings"]');
     await navAiSettings.waitForExist({ timeout: 8_000 });
     await navAiSettings.click();
@@ -127,7 +127,7 @@ describe('Settings sections', () => {
     await preview.waitForExist({ timeout: 5_000 });
 
     await section.moveTo();
-    const enabledFilepath = await saveScreenshot('settings-other-ai-analysis-enabled');
+    const enabledFilepath = await saveScreenshot('settings-ai-analysis-enabled');
     expect(existsSync(enabledFilepath)).toBe(true);
 
     await mediaAnalysisToggle.click();
@@ -138,7 +138,7 @@ describe('Settings sections', () => {
     await preview.waitForExist({ reverse: true, timeout: 5_000 });
 
     await section.moveTo();
-    const disabledFilepath = await saveScreenshot('settings-other-ai-analysis-disabled');
+    const disabledFilepath = await saveScreenshot('settings-ai-analysis-disabled');
     expect(existsSync(disabledFilepath)).toBe(true);
 
     // Restore the seeded preference so this flow does not leak state into the
