@@ -1635,9 +1635,11 @@ impl DatabaseManager {
 
 #[cfg(test)]
 mod wal_maintenance_tests {
-    use super::{run_routine_wal_checkpoint, run_wal_restart_checkpoint};
+    use super::{run_routine_wal_checkpoint, run_wal_restart_checkpoint, DatabaseManager};
+    use screenpipe_config::{DbConfig, DeviceTier};
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
     use sqlx::Row;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn routine_checkpoint_never_truncates_the_live_wal() {
@@ -1792,5 +1794,96 @@ mod wal_maintenance_tests {
 
         drop(checkpoint_connection);
         pool.close().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "manual 60-second production scheduler chaos test with a ~170 MB WAL"]
+    async fn production_scheduler_restarts_oversized_reader_pinned_wal_without_truncation() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("db.sqlite");
+        let wal_path = dir.path().join("db.sqlite-wal");
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let db = DatabaseManager::new(&db_path_string, DbConfig::for_tier(DeviceTier::Low))
+            .await
+            .expect("production database manager");
+        sqlx::query("CREATE TABLE wal_cap_chaos(id INTEGER PRIMARY KEY, payload BLOB NOT NULL)")
+            .execute(&db.pool)
+            .await
+            .expect("create chaos table");
+        run_routine_wal_checkpoint(&db.pool)
+            .await
+            .expect("checkpoint setup frames");
+
+        let mut reader = db.pool.begin().await.expect("begin pinned reader");
+        let _: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM wal_cap_chaos")
+            .fetch_one(&mut *reader)
+            .await
+            .expect("establish reader snapshot");
+
+        // One transaction creates more than WAL_HARD_CAP_PAGES real pages while
+        // the old reader pins the first frame. This exercises the exact
+        // production timer + threshold + RESTART branch after 60 seconds.
+        sqlx::query(
+            "WITH RECURSIVE rows(n) AS (\
+                VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < 42000\
+             ) INSERT INTO wal_cap_chaos(payload) SELECT zeroblob(4096) FROM rows",
+        )
+        .execute(&db.pool)
+        .await
+        .expect("create oversized WAL");
+        let (_, log_pages, checkpointed) = run_routine_wal_checkpoint(&db.pool)
+            .await
+            .expect("measure reader-pinned backlog");
+        let backlog = log_pages.saturating_sub(checkpointed);
+        assert!(
+            backlog > super::WAL_HARD_CAP_PAGES,
+            "test did not exceed hard cap: backlog={backlog}, log={log_pages}, checkpointed={checkpointed}"
+        );
+        let wal_size_before = std::fs::metadata(&wal_path)
+            .expect("oversized WAL exists")
+            .len();
+        assert!(
+            wal_size_before > 150 * 1024 * 1024,
+            "WAL was not realistically large"
+        );
+
+        // `start_wal_maintenance()` consumed its immediate tick at manager
+        // construction. At 60s it must enter RESTART and remain blocked on our
+        // reader until we release it here.
+        tokio::time::sleep(Duration::from_secs(62)).await;
+        reader.rollback().await.expect("release pinned reader");
+
+        // The coordinator is held until RESTART completes. A production write
+        // through the coordinator therefore proves the scheduled pass drained.
+        let mut tx = tokio::time::timeout(Duration::from_secs(10), db.begin_immediate_with_retry())
+            .await
+            .expect("scheduled restart did not release coordinator")
+            .expect("begin write after scheduled restart");
+        sqlx::query("INSERT INTO wal_cap_chaos(payload) VALUES (x'01')")
+            .execute(&mut **tx.conn())
+            .await
+            .expect("write after scheduled restart");
+        tx.commit().await.expect("commit after scheduled restart");
+
+        let wal_size_after = std::fs::metadata(&wal_path)
+            .expect("WAL remains allocated")
+            .len();
+        assert_eq!(
+            wal_size_after, wal_size_before,
+            "scheduled hard-cap escalation physically truncated the WAL"
+        );
+        let (_, reused_log_pages, _) = run_routine_wal_checkpoint(&db.pool)
+            .await
+            .expect("inspect reused WAL");
+        assert!(
+            reused_log_pages < 100,
+            "next writer did not reuse WAL from its start: {reused_log_pages} pages"
+        );
+        let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+            .fetch_one(&db.pool)
+            .await
+            .expect("integrity after scheduled restart");
+        assert_eq!(integrity, "ok");
+        db.close().await;
     }
 }
