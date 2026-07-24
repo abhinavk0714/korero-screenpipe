@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 enum WaylandCaptureMode {
     Auto,
     Grim,
+    Portal,
     Xcap,
 }
 
@@ -52,9 +53,27 @@ pub(super) fn should_try_grim_capture() -> bool {
 
     match parse_wayland_capture_mode(std::env::var("SCREENPIPE_WAYLAND_CAPTURE").ok().as_deref()) {
         WaylandCaptureMode::Grim => true,
-        WaylandCaptureMode::Xcap => false,
+        WaylandCaptureMode::Portal | WaylandCaptureMode::Xcap => false,
         WaylandCaptureMode::Auto => {
             *GRIM_AVAILABLE && desktop_prefers_grim(&current_desktop_hint())
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn should_try_portal_capture() -> bool {
+    if !is_wayland_session(
+        std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
+        std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+    ) {
+        return false;
+    }
+
+    match parse_wayland_capture_mode(std::env::var("SCREENPIPE_WAYLAND_CAPTURE").ok().as_deref()) {
+        WaylandCaptureMode::Portal => true,
+        WaylandCaptureMode::Grim | WaylandCaptureMode::Xcap => false,
+        WaylandCaptureMode::Auto => {
+            !(*GRIM_AVAILABLE && desktop_prefers_grim(&current_desktop_hint()))
         }
     }
 }
@@ -126,7 +145,8 @@ fn parse_wayland_capture_mode(value: Option<&str>) -> WaylandCaptureMode {
         .as_deref()
     {
         Some("grim" | "wlr" | "wlroots") => WaylandCaptureMode::Grim,
-        Some("xcap" | "dbus" | "portal" | "off" | "false" | "0") => WaylandCaptureMode::Xcap,
+        Some("portal" | "pipewire" | "xdg") => WaylandCaptureMode::Portal,
+        Some("xcap" | "dbus" | "off" | "false" | "0") => WaylandCaptureMode::Xcap,
         _ => WaylandCaptureMode::Auto,
     }
 }
@@ -243,7 +263,11 @@ mod tests {
         );
         assert_eq!(
             parse_wayland_capture_mode(Some("portal")),
-            WaylandCaptureMode::Xcap
+            WaylandCaptureMode::Portal
+        );
+        assert_eq!(
+            parse_wayland_capture_mode(Some("pipewire")),
+            WaylandCaptureMode::Portal
         );
     }
 

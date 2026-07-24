@@ -100,6 +100,10 @@ pub struct SafeMonitor {
     /// Monitor IDs are stable during a session, so we try the cached index first (O(1)).
     #[cfg(not(target_os = "macos"))]
     cached_monitor_index: Arc<std::sync::Mutex<Option<usize>>>,
+    /// Long-lived xdg-desktop-portal/PipeWire stream used by Wayland desktops
+    /// that do not implement the wlroots screencopy protocol.
+    #[cfg(target_os = "linux")]
+    portal_capture: Arc<linux::PortalCaptureState>,
     /// Persistent WGC capture session to avoid orange border flash from per-frame session lifecycle.
     /// Lazy-initialized on first capture_image() call.
     #[cfg(target_os = "windows")]
@@ -230,6 +234,8 @@ mod tests {
             cached_xcap: None,
             #[cfg(not(target_os = "macos"))]
             cached_monitor_index: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(target_os = "linux")]
+            portal_capture: Arc::new(linux::PortalCaptureState::default()),
             #[cfg(target_os = "windows")]
             persistent_capture: Arc::new(std::sync::Mutex::new(None)),
             #[cfg(target_os = "windows")]
