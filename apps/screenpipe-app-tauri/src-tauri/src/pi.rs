@@ -50,6 +50,8 @@ const TEXT_DELTA_EMIT_BATCH_CHARS: usize = 1_200;
 /// Keep in sync with TypeScript: lib/utils/internal-session.ts → INTERNAL_TITLE_PREFIX
 const TITLE_SESSION_PREFIX: &str = "__title:";
 const REQUIRED_PI_EXTENSION_PACKAGE: &str = "npm:pi-subagents";
+const PI_AGENT_BROWSER_PACKAGE: &str = "pi-agent-browser-native";
+const AGENT_BROWSER_RUNTIME_PACKAGE: &str = "agent-browser";
 
 struct PendingAgentTextDelta {
     event: Value,
@@ -3313,15 +3315,178 @@ fn valid_github_path_part(part: &str) -> bool {
 fn pi_package_source_looks_installed(source: &str) -> bool {
     if let Some(package_name) = npm_package_name_from_source(source) {
         if let Ok(config_dir) = get_pi_config_dir() {
-            return config_dir
+            let package_installed = config_dir
                 .join("npm")
                 .join("node_modules")
-                .join(package_name)
+                .join(&package_name)
                 .exists();
+            if package_name == PI_AGENT_BROWSER_PACKAGE {
+                let Some(pi_install_dir) = pi_local_install_dir() else {
+                    return false;
+                };
+                return package_installed
+                    && agent_browser_runtime_ready(&config_dir, &pi_install_dir);
+            }
+            return package_installed;
         }
     }
 
     true
+}
+
+fn agent_browser_runtime_entrypoint(config_dir: &Path) -> PathBuf {
+    config_dir
+        .join("npm")
+        .join("node_modules")
+        .join(AGENT_BROWSER_RUNTIME_PACKAGE)
+        .join("bin")
+        .join("agent-browser.js")
+}
+
+fn agent_browser_launcher_path(pi_install_dir: &Path) -> PathBuf {
+    let bin_dir = pi_install_dir.join("node_modules").join(".bin");
+    if cfg!(windows) {
+        bin_dir.join("agent-browser.cmd")
+    } else {
+        bin_dir.join("agent-browser")
+    }
+}
+
+fn agent_browser_runtime_ready(config_dir: &Path, pi_install_dir: &Path) -> bool {
+    agent_browser_runtime_entrypoint(config_dir).is_file()
+        && agent_browser_launcher_path(pi_install_dir).is_file()
+}
+
+fn agent_browser_baseline_version(wrapper_dir: &Path) -> Option<String> {
+    let baseline = std::fs::read_to_string(
+        wrapper_dir
+            .join("scripts")
+            .join("agent-browser-capability-baseline.mjs"),
+    )
+    .ok()?;
+    let marker = "upstreamPackageVersion:";
+    let value = baseline
+        .lines()
+        .find_map(|line| line.split_once(marker).map(|(_, value)| value.trim()))?;
+    let version = value
+        .trim_end_matches(',')
+        .trim()
+        .trim_matches(['\'', '"']);
+    valid_npm_version_spec(version).then(|| version.to_string())
+}
+
+#[cfg(unix)]
+fn shell_quote(value: &Path) -> String {
+    format!("'{}'", value.to_string_lossy().replace('\'', "'\"'\"'"))
+}
+
+fn write_agent_browser_launcher(
+    launcher_path: &Path,
+    bun: &Path,
+    entrypoint: &Path,
+) -> Result<(), String> {
+    let Some(parent) = launcher_path.parent() else {
+        return Err("Cannot determine the agent-browser launcher directory".to_string());
+    };
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("Failed to create agent-browser launcher directory: {}", e))?;
+
+    #[cfg(windows)]
+    let launcher = format!(
+        "@echo off\r\n\"{}\" \"{}\" %*\r\n",
+        bun.display(),
+        entrypoint.display()
+    );
+    #[cfg(not(windows))]
+    let launcher = format!(
+        "#!/bin/sh\nexec {} {} \"$@\"\n",
+        shell_quote(bun),
+        shell_quote(entrypoint)
+    );
+
+    std::fs::write(launcher_path, launcher)
+        .map_err(|e| format!("Failed to write agent-browser launcher: {}", e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(launcher_path)
+            .map_err(|e| format!("Failed to inspect agent-browser launcher: {}", e))?
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(launcher_path, permissions)
+            .map_err(|e| format!("Failed to make agent-browser launcher executable: {}", e))?;
+    }
+
+    Ok(())
+}
+
+fn ensure_agent_browser_runtime_blocking() -> Result<(), String> {
+    let bun = find_bun_executable().ok_or(
+        "Could not find bundled bun. Restart screenpipe or reinstall the app before repairing browser automation.",
+    )?;
+    let config_dir = get_pi_config_dir()?;
+    let npm_dir = config_dir.join("npm");
+    let wrapper_dir = npm_dir
+        .join("node_modules")
+        .join(PI_AGENT_BROWSER_PACKAGE);
+    let version = agent_browser_baseline_version(&wrapper_dir).ok_or_else(|| {
+        "The installed browser extension does not declare a supported agent-browser version. Update the extension and try again.".to_string()
+    })?;
+    let runtime_spec = format!("{}@{}", AGENT_BROWSER_RUNTIME_PACKAGE, version);
+
+    let mut install = bun_command(&bun);
+    install
+        .current_dir(&npm_dir)
+        .args(["add", "--exact", runtime_spec.as_str()]);
+    match run_command_output(install) {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            return Err(format!(
+                "agent-browser runtime install failed: {}",
+                format_install_failure("bun add", &output)
+            ));
+        }
+        Err(e) => return Err(format!("Could not install agent-browser runtime: {}", e)),
+    }
+
+    let entrypoint = agent_browser_runtime_entrypoint(&config_dir);
+    if !entrypoint.is_file() {
+        return Err(format!(
+            "agent-browser runtime install completed but {} is missing",
+            entrypoint.display()
+        ));
+    }
+    let pi_install_dir = pi_local_install_dir()
+        .ok_or_else(|| "Cannot determine the Screenpipe Pi install directory".to_string())?;
+    let launcher = agent_browser_launcher_path(&pi_install_dir);
+    write_agent_browser_launcher(&launcher, Path::new(&bun), &entrypoint)?;
+
+    let mut verify = bun_command(&bun);
+    verify.arg(&entrypoint).arg("--version");
+    match run_command_output(verify) {
+        Ok(output)
+            if output.status.success()
+                && String::from_utf8_lossy(&output.stdout)
+                    .contains(&format!("agent-browser {}", version)) =>
+        {
+            Ok(())
+        }
+        Ok(output) => Err(format!(
+            "agent-browser runtime verification failed: {}",
+            format_install_failure("version check", &output)
+        )),
+        Err(e) => Err(format!("Could not verify agent-browser runtime: {}", e)),
+    }
+}
+
+async fn ensure_extension_companion_runtime(source: &str) -> Result<(), String> {
+    if npm_package_name_from_source(source).as_deref() != Some(PI_AGENT_BROWSER_PACKAGE) {
+        return Ok(());
+    }
+    tokio::task::spawn_blocking(ensure_agent_browser_runtime_blocking)
+        .await
+        .map_err(|e| format!("agent-browser runtime install panicked: {}", e))?
 }
 
 fn ensure_pi_package_manager_settings(bun: &str) -> Result<(), String> {
@@ -3484,7 +3649,8 @@ pub async fn pi_install_extension_package(
 ) -> Result<Vec<PiExtensionPackage>, String> {
     let source = validate_pi_extension_package_source(&source)?;
     stop_idle_pi_sessions_for_package_change(&state).await?;
-    run_pi_package_command(vec!["install".to_string(), source]).await?;
+    run_pi_package_command(vec!["install".to_string(), source.clone()]).await?;
+    ensure_extension_companion_runtime(&source).await?;
     stop_idle_pi_sessions_for_package_change(&state).await?;
     pi_list_extension_packages().await
 }
@@ -4134,6 +4300,77 @@ mod tests {
         assert!(super::validate_pi_extension_package_source("git:repo").is_err());
         assert!(super::validate_pi_extension_package_source("../local-package").is_err());
         assert!(super::validate_pi_extension_package_source("").is_err());
+    }
+
+    #[test]
+    fn parses_agent_browser_version_from_wrapper_baseline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let scripts = dir.path().join("scripts");
+        std::fs::create_dir_all(&scripts).expect("create scripts");
+        std::fs::write(
+            scripts.join("agent-browser-capability-baseline.mjs"),
+            "const sourceEvidence = {\n  upstreamPackageVersion: \"0.33.0\",\n  other: true,\n};\n",
+        )
+        .expect("write baseline");
+
+        assert_eq!(
+            super::agent_browser_baseline_version(dir.path()).as_deref(),
+            Some("0.33.0")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_executable_bun_launcher_for_agent_browser() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = dir.path().join("bin").join("agent-browser");
+        let bun = dir.path().join("screenpipe bun");
+        let entrypoint = dir.path().join("agent browser.js");
+
+        super::write_agent_browser_launcher(&launcher, &bun, &entrypoint)
+            .expect("write launcher");
+
+        let contents = std::fs::read_to_string(&launcher).expect("read launcher");
+        assert!(contents.contains(&super::shell_quote(&bun)));
+        assert!(contents.contains(&super::shell_quote(&entrypoint)));
+        assert_ne!(
+            std::fs::metadata(&launcher)
+                .expect("launcher metadata")
+                .permissions()
+                .mode()
+                & 0o111,
+            0
+        );
+    }
+
+    #[test]
+    fn browser_runtime_health_requires_entrypoint_and_managed_launcher() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config_dir = dir.path().join("pi-config");
+        let pi_install_dir = dir.path().join("pi-agent");
+        let entrypoint = super::agent_browser_runtime_entrypoint(&config_dir);
+        let launcher = super::agent_browser_launcher_path(&pi_install_dir);
+
+        assert!(!super::agent_browser_runtime_ready(
+            &config_dir,
+            &pi_install_dir
+        ));
+        std::fs::create_dir_all(entrypoint.parent().expect("entrypoint parent"))
+            .expect("create entrypoint parent");
+        std::fs::write(&entrypoint, "#!/usr/bin/env node").expect("write entrypoint");
+        assert!(!super::agent_browser_runtime_ready(
+            &config_dir,
+            &pi_install_dir
+        ));
+        std::fs::create_dir_all(launcher.parent().expect("launcher parent"))
+            .expect("create launcher parent");
+        std::fs::write(&launcher, "launcher").expect("write launcher");
+        assert!(super::agent_browser_runtime_ready(
+            &config_dir,
+            &pi_install_dir
+        ));
     }
 
     #[test]

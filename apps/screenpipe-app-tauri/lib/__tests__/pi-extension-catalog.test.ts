@@ -21,6 +21,7 @@ describe("Pi extension catalog", () => {
     expect(PI_EXTENSION_CATALOG.map((item) => item.source)).toEqual(
       expect.arrayContaining([
         "npm:pi-subagents",
+        "npm:pi-agent-browser-native",
         "npm:@demigodmode/pi-web-agent",
         "npm:@eko24ive/pi-ask",
       ]),

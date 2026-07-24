@@ -110,6 +110,18 @@ function PiExtensionRow({
             aria-label={`${item.name} always enabled`}
             className="shrink-0"
           />
+        ) : stale ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={disabled || busy}
+            onClick={() => onToggle(true)}
+            aria-label={`Repair ${item.name}`}
+            className="h-7 shrink-0 px-2 text-[10px] uppercase tracking-[0.12em]"
+          >
+            repair
+          </Button>
         ) : (
           <Switch
             checked={enabled}

@@ -123,6 +123,39 @@ describe("PiExtensionsCard", () => {
     expect(onChanged).toHaveBeenCalledTimes(1);
   });
 
+  it("repairs an enabled browser package whose companion runtime is missing", async () => {
+    commandMocks.piListExtensionPackages.mockResolvedValueOnce({
+      status: "ok",
+      data: [
+        ...packageList("npm:pi-subagents"),
+        {
+          source: "npm:pi-agent-browser-native",
+          scope: "user",
+          filtered: false,
+          installed: false,
+        },
+      ],
+    });
+    commandMocks.piInstallExtensionPackage.mockResolvedValueOnce({
+      status: "ok",
+      data: packageList("npm:pi-subagents", "npm:pi-agent-browser-native"),
+    });
+    render(<PiExtensionsCard />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Repair Browser automation" }),
+    );
+
+    await waitFor(() =>
+      expect(commandMocks.piInstallExtensionPackage).toHaveBeenCalledWith(
+        "npm:pi-agent-browser-native",
+      ),
+    );
+    expect(
+      await screen.findByRole("switch", { name: "Disable Browser automation" }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
   it("shows installable Pi packages from npm registry search", async () => {
     vi.mocked(fetch).mockResolvedValueOnce({
       ok: true,
