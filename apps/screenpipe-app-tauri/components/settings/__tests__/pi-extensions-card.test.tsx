@@ -123,7 +123,7 @@ describe("PiExtensionsCard", () => {
     expect(onChanged).toHaveBeenCalledTimes(1);
   });
 
-  it("repairs an enabled browser package whose companion runtime is missing", async () => {
+  it("repairs an already configured browser package without promoting it to curated defaults", async () => {
     commandMocks.piListExtensionPackages.mockResolvedValueOnce({
       status: "ok",
       data: [
@@ -142,8 +142,14 @@ describe("PiExtensionsCard", () => {
     });
     render(<PiExtensionsCard />);
 
+    expect(screen.queryByText("Browser automation")).not.toBeInTheDocument();
+    expect(
+      await screen.findByText("Installed outside this list"),
+    ).toBeInTheDocument();
     fireEvent.click(
-      await screen.findByRole("button", { name: "Repair Browser automation" }),
+      screen.getByRole("button", {
+        name: "Repair npm:pi-agent-browser-native",
+      }),
     );
 
     await waitFor(() =>
@@ -152,7 +158,9 @@ describe("PiExtensionsCard", () => {
       ),
     );
     expect(
-      await screen.findByRole("switch", { name: "Disable Browser automation" }),
+      await screen.findByRole("switch", {
+        name: "Disable npm:pi-agent-browser-native",
+      }),
     ).toHaveAttribute("aria-checked", "true");
   });
 

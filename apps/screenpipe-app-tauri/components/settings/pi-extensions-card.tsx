@@ -335,7 +335,10 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
   }, [packages, registryItems]);
 
   const togglePackage = useCallback(
-    async (item: PiExtensionCatalogItem, checked: boolean) => {
+    async (
+      item: Pick<PiExtensionCatalogItem, "name" | "source">,
+      checked: boolean,
+    ) => {
       setBusySource(item.source);
       setError(null);
       try {
@@ -604,14 +607,34 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
                   {busySource === pkg.source ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
                   ) : (
-                    <Switch
-                      checked
-                      disabled={!!busySource}
-                      onCheckedChange={(checked) => {
-                        if (!checked) removePackageSource(pkg.source);
-                      }}
-                      aria-label={`Disable ${pkg.source}`}
-                    />
+                    <>
+                      {!pkg.installed && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={!!busySource}
+                          onClick={() =>
+                            togglePackage(
+                              { name: pkg.source, source: pkg.source },
+                              true,
+                            )
+                          }
+                          aria-label={`Repair ${pkg.source}`}
+                          className="h-7 px-2 text-[10px] uppercase tracking-[0.12em]"
+                        >
+                          repair
+                        </Button>
+                      )}
+                      <Switch
+                        checked
+                        disabled={!!busySource}
+                        onCheckedChange={(checked) => {
+                          if (!checked) removePackageSource(pkg.source);
+                        }}
+                        aria-label={`Disable ${pkg.source}`}
+                      />
+                    </>
                   )}
                 </div>
               </div>

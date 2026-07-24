@@ -21,10 +21,15 @@ describe("Pi extension catalog", () => {
     expect(PI_EXTENSION_CATALOG.map((item) => item.source)).toEqual(
       expect.arrayContaining([
         "npm:pi-subagents",
-        "npm:pi-agent-browser-native",
         "npm:@demigodmode/pi-web-agent",
         "npm:@eko24ive/pi-ask",
       ]),
+    );
+  });
+
+  it("does not promote the optional native browser package into curated defaults", () => {
+    expect(PI_EXTENSION_CATALOG.map((item) => item.source)).not.toContain(
+      "npm:pi-agent-browser-native",
     );
   });
 

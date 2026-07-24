@@ -59,20 +59,6 @@ const PI_PACKAGE_KEYWORDS = new Set([
 
 export const PI_EXTENSION_CATALOG: PiExtensionCatalogItem[] = [
   {
-    id: "pi-agent-browser-native",
-    name: "Browser automation",
-    source: "npm:pi-agent-browser-native",
-    summary: "Drive real browser sessions from Pi with the native agent_browser tool.",
-    details: "Screenpipe also installs the matching agent-browser runtime and exposes it to Pi.",
-    modelFit: "strong-model",
-    modelFitLabel: "Strong model",
-    modelFitCopy: "Browser work benefits from models that can preserve page state and recover from changed controls.",
-    risk: "Can open websites, interact with pages, and access browser state created through the tool.",
-    npmUrl: "https://www.npmjs.com/package/pi-agent-browser-native",
-    sourceUrl: "https://github.com/fitchmultz/pi-agent-browser-native",
-    tags: ["browser", "automation", "agent-browser"],
-  },
-  {
     id: "pi-subagents",
     name: "Subagents",
     source: "npm:pi-subagents",
