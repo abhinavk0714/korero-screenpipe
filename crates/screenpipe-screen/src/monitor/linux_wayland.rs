@@ -72,9 +72,7 @@ pub(super) fn should_try_portal_capture() -> bool {
     match parse_wayland_capture_mode(std::env::var("SCREENPIPE_WAYLAND_CAPTURE").ok().as_deref()) {
         WaylandCaptureMode::Portal => true,
         WaylandCaptureMode::Grim | WaylandCaptureMode::Xcap => false,
-        WaylandCaptureMode::Auto => {
-            !(*GRIM_AVAILABLE && desktop_prefers_grim(&current_desktop_hint()))
-        }
+        WaylandCaptureMode::Auto => desktop_prefers_portal(&current_desktop_hint()),
     }
 }
 
@@ -160,6 +158,16 @@ fn desktop_prefers_grim(desktop_hint: &str) -> bool {
     let normalized = desktop_hint.to_ascii_lowercase();
     [
         "dwl", "hyprland", "labwc", "niri", "river", "sway", "wayfire", "wlroots",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+}
+
+fn desktop_prefers_portal(desktop_hint: &str) -> bool {
+    let normalized = desktop_hint.to_ascii_lowercase();
+    [
+        "budgie", "cinnamon", "cosmic", "deepin", "gnome", "kde", "lxqt", "pantheon", "plasma",
+        "unity",
     ]
     .iter()
     .any(|needle| normalized.contains(needle))
@@ -279,6 +287,15 @@ mod tests {
         assert!(desktop_prefers_grim("river"));
         assert!(!desktop_prefers_grim("GNOME"));
         assert!(!desktop_prefers_grim("KDE"));
+    }
+
+    #[test]
+    fn test_mainstream_desktops_prefer_portal() {
+        assert!(desktop_prefers_portal("GNOME"));
+        assert!(desktop_prefers_portal("KDE:Plasma"));
+        assert!(desktop_prefers_portal("COSMIC"));
+        assert!(!desktop_prefers_portal("sway"));
+        assert!(!desktop_prefers_portal("unknown-compositor"));
     }
 
     #[test]

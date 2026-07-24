@@ -541,6 +541,7 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_repr",
+ "tokio",
  "url",
  "zbus",
 ]
@@ -11540,6 +11541,7 @@ version = "0.4.30"
 dependencies = [
  "accessibility-sys",
  "anyhow",
+ "ashpd",
  "atspi",
  "atspi-common",
  "atspi-proxies",
@@ -11552,6 +11554,7 @@ dependencies = [
  "image-compare",
  "libc",
  "once_cell",
+ "pipewire",
  "reqwest 0.13.3",
  "rusty-tesseract",
  "sck-rs",
