@@ -56,7 +56,6 @@ import {
   ArrowUpCircle,
   ExternalLink,
   GitFork,
-  Star,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { pickPipePreset } from "@/lib/utils/pick-pipe-preset";
@@ -1136,7 +1135,7 @@ function PipeCard({
     >
       {/* Header: icon + action */}
       <div className="flex items-start justify-between gap-3">
-        <div className="text-2xl bg-muted rounded-none h-11 w-11 flex items-center justify-center flex-shrink-0">
+        <div className="text-xl bg-muted rounded-none h-10 w-10 flex items-center justify-center flex-shrink-0 grayscale">
           {pipe.icon || "🔧"}
         </div>
         <Button
@@ -1168,25 +1167,17 @@ function PipeCard({
         </Button>
       </div>
 
-      {/* Title and publisher — full width, no truncation */}
+      {/* Title — full width, no truncation */}
       <h4 className="text-sm font-semibold mt-3 line-clamp-2 leading-snug">{pipe.title}</h4>
-      <PublisherIdentity publisher={publisher} className="mt-2" />
 
       {/* Description */}
-      <p className="text-xs text-muted-foreground line-clamp-2 mt-2 leading-relaxed flex-1">
+      <p className="text-xs text-muted-foreground line-clamp-2 mt-2.5 leading-relaxed flex-1">
         {pipe.description}
       </p>
 
-      {/* Footer: category + stats */}
-      <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
-        <div className="flex items-center gap-1.5">
-          {pipe.featured && (
-            <Star className="h-3 w-3 fill-foreground text-foreground flex-shrink-0" />
-          )}
-          <Badge variant="secondary" className="text-[10px] px-2 py-0.5 font-normal rounded-none">
-            {pipe.category}
-          </Badge>
-        </div>
+      {/* Footer: publisher + installs. Category already lives in the filters. */}
+      <div className="flex items-center justify-between gap-3 mt-4 pt-3 border-t border-border">
+        <PublisherIdentity publisher={publisher} compact />
         <span className="flex items-center gap-1 text-xs text-muted-foreground">
           <Download className="h-3 w-3" />
           {formatCount(pipe.install_count ?? 0)}
@@ -1199,37 +1190,65 @@ function PipeCard({
 function PublisherIdentity({
   publisher,
   className,
+  compact = false,
 }: {
   publisher: PipePublisherIdentity;
   className?: string;
+  compact?: boolean;
 }) {
+  const avatarClass = compact ? "h-4 w-4" : "h-5 w-5";
+
   return (
     <div
       data-testid="pipe-publisher-identity"
-      className={cn("flex min-w-0 items-center gap-2", className)}
+      aria-label={publisher.isScreenpipeTeam ? "official Screenpipe publisher" : undefined}
+      title={compact && publisher.isScreenpipeTeam ? "built by screenpipe team" : undefined}
+      className={cn(
+        "flex min-w-0 items-center",
+        compact ? "gap-1.5" : "gap-2",
+        className,
+      )}
     >
       {publisher.isScreenpipeTeam ? (
         <span
           aria-hidden="true"
-          className="h-5 w-5 flex-shrink-0 bg-cover bg-center"
+          className={cn(avatarClass, "flex-shrink-0 bg-cover bg-center")}
           style={{ backgroundImage: "url('/128x128.png')" }}
         />
       ) : (
         <span
           aria-hidden="true"
-          className="flex h-5 w-5 flex-shrink-0 items-center justify-center border border-border bg-muted text-[9px] font-semibold uppercase text-muted-foreground"
+          className={cn(
+            avatarClass,
+            "flex flex-shrink-0 items-center justify-center border border-border bg-muted font-semibold uppercase text-muted-foreground",
+            compact ? "text-[8px]" : "text-[9px]",
+          )}
         >
           {publisher.name.charAt(0)}
         </span>
       )}
-      <span className="truncate text-xs text-muted-foreground">
-        {publisher.isScreenpipeTeam ? "built by " : "by "}
-        <span className="font-medium text-foreground">{publisher.name}</span>
+      <span
+        className={cn(
+          "truncate text-muted-foreground",
+          compact ? "text-[11px]" : "text-xs",
+        )}
+      >
+        {compact ? (
+          <span className="font-medium">{publisher.name}</span>
+        ) : (
+          <>
+            {publisher.isScreenpipeTeam ? "built by " : "by "}
+            <span className="font-medium text-foreground">{publisher.name}</span>
+          </>
+        )}
       </span>
-      {publisher.verified && (
+      {publisher.verified && !publisher.isScreenpipeTeam && (
         <BadgeCheck
           aria-label="verified publisher"
-          className="h-3.5 w-3.5 flex-shrink-0 text-foreground"
+          className={cn(
+            "flex-shrink-0 text-foreground",
+            compact ? "h-3 w-3" : "h-3.5 w-3.5",
+          )}
         />
       )}
     </div>
