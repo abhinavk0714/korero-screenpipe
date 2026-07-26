@@ -42,6 +42,55 @@ struct OAuthTokens {
     expires_at: Option<u64>,
 }
 
+/// Serializes token refreshes within this process. OpenAI refresh tokens are
+/// single-use (rotating): two concurrent refreshes with the same token make
+/// the loser hit 401 `refresh_token_reused`, and repeated reuse can revoke
+/// the whole grant — the user is forced to sign in again. Callers that hold
+/// this lock re-read the store first so they adopt a concurrent winner's
+/// rotated pair instead of burning it.
+static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Last known-good tokens, kept in memory. After a refresh the rotated pair
+/// exists NOWHERE but this process until the store write commits — and the
+/// store lives in the busy engine `db.sqlite`, which can stall for tens of
+/// seconds at boot. If that write is lost the old refresh token is already
+/// burned server-side and the login is bricked. The cache holds the pair
+/// until [`CACHE_DIRTY`] is cleared by a successful persist (retried from
+/// the background loop).
+static TOKEN_CACHE: std::sync::Mutex<Option<OAuthTokens>> = std::sync::Mutex::new(None);
+static CACHE_DIRTY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn cache_get() -> Option<OAuthTokens> {
+    TOKEN_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+fn cache_put(tokens: Option<OAuthTokens>, dirty: bool) {
+    *TOKEN_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = tokens;
+    CACHE_DIRTY.store(dirty, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn cache_is_dirty() -> bool {
+    CACHE_DIRTY.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Clear the dirty flag only if the cache still holds `written`. A concurrent
+/// rotation may have replaced the cached pair while our store write was in
+/// flight — its pending write must not be marked clean (nor the cache value
+/// clobbered) by our now-stale copy.
+fn cache_mark_persisted(written: &OAuthTokens) {
+    let guard = TOKEN_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let unchanged = guard
+        .as_ref()
+        .map(|c| c.refresh_token == written.refresh_token)
+        .unwrap_or(false);
+    if unchanged {
+        CACHE_DIRTY.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 #[derive(Serialize, Deserialize, specta::Type)]
 pub struct ChatGptOAuthStatus {
     pub logged_in: bool,
@@ -149,12 +198,57 @@ async fn write_tokens_to_store(tokens: &OAuthTokens) -> Result<(), String> {
     Err(last_err)
 }
 
+/// Current tokens as this process knows them: the store merged with the
+/// in-memory cache, preferring whichever pair expires later (rotation always
+/// extends expiry, so "later" means "newer"). Falls back to the cache when
+/// the store is temporarily unreadable (DB stall at boot). `Ok(None)` — an
+/// explicit logout — is authoritative and never resurrected from cache,
+/// EXCEPT while the cache is dirty: then the store simply hasn't seen the
+/// pending write yet (e.g. login during a DB stall) and the cache is newer.
+async fn read_current_tokens() -> Result<Option<OAuthTokens>, String> {
+    let cached = cache_get();
+    match read_tokens_from_store().await {
+        Ok(Some(stored)) => Ok(Some(match cached {
+            Some(c) if c.expires_at.unwrap_or(0) > stored.expires_at.unwrap_or(0) => c,
+            _ => stored,
+        })),
+        Ok(None) if cache_is_dirty() => Ok(cached),
+        Ok(None) => Ok(None),
+        Err(e) => match cached {
+            Some(c) => {
+                warn!("chatgpt oauth: store unreadable, using in-memory tokens: {e}");
+                Ok(Some(c))
+            }
+            None => Err(e),
+        },
+    }
+}
+
+/// Record `tokens` as the current pair and try to persist them. The cache is
+/// updated FIRST: after a rotation the pair exists nowhere else, so a failed
+/// store write must not lose it. On write failure the dirty flag stays set
+/// and the background loop retries the persist every tick.
+async fn persist_tokens(tokens: &OAuthTokens) {
+    cache_put(Some(tokens.clone()), true);
+    match write_tokens_to_store(tokens).await {
+        Ok(()) => cache_mark_persisted(tokens),
+        Err(e) => warn!(
+            "chatgpt oauth: token persist failed (kept in memory, will retry): {}",
+            e
+        ),
+    }
+}
+
 async fn delete_tokens_from_store() -> Result<(), String> {
     let store = open_secret_store().await?;
     store
         .delete(SECRET_KEY)
         .await
-        .map_err(|e| format!("failed to delete token: {}", e))
+        .map_err(|e| format!("failed to delete token: {}", e))?;
+    // Drop the cache too or the background persist would resurrect the
+    // logged-out token on its next tick.
+    cache_put(None, false);
+    Ok(())
 }
 
 fn is_token_expired(tokens: &OAuthTokens) -> bool {
@@ -279,9 +373,55 @@ async fn do_refresh_token(refresh_token: &str) -> Result<OAuthTokens, String> {
         expires_at: Some(unix_now() + expires_in),
     };
 
-    write_tokens_to_store(&tokens).await?;
+    // The old refresh token is burned server-side at this point; a failed
+    // persist must not fail the refresh or the rotated pair is lost and the
+    // login bricks with `refresh_token_reused` on every later attempt.
+    persist_tokens(&tokens).await;
     info!("ChatGPT token refreshed successfully");
     Ok(tokens)
+}
+
+/// Does this refresh error mean the token was already rotated by someone
+/// else (concurrent refresher in this process, the pipes-side refresher, or
+/// another device via secret sync)?
+fn is_refresh_token_reused_error(err: &str) -> bool {
+    err.contains("refresh_token_reused") || err.contains("already been used")
+}
+
+/// Refresh under [`REFRESH_LOCK`], double-checking the store on both sides.
+///
+/// `stale_refresh_token` is the token the caller last saw. Before spending
+/// it we re-read the current pair: if it changed, someone else already
+/// rotated — adopt their pair instead of burning it (OpenAI refresh tokens
+/// are single-use). If our attempt still loses a cross-writer race
+/// (`refresh_token_reused`), re-read once more and adopt the winner.
+async fn refresh_tokens(stale_refresh_token: &str) -> Result<OAuthTokens, String> {
+    let _guard = REFRESH_LOCK.lock().await;
+
+    let mut refresh_token = stale_refresh_token.to_string();
+    if let Ok(Some(current)) = read_current_tokens().await {
+        if current.refresh_token != stale_refresh_token {
+            if !is_token_expired(&current) {
+                return Ok(current);
+            }
+            refresh_token = current.refresh_token;
+        } else if !is_token_expired(&current) {
+            // Another task refreshed while we waited on the lock.
+            return Ok(current);
+        }
+    }
+
+    match do_refresh_token(&refresh_token).await {
+        Ok(t) => Ok(t),
+        Err(e) if is_refresh_token_reused_error(&e) => match read_current_tokens().await {
+            Ok(Some(current)) if current.refresh_token != refresh_token => {
+                info!("chatgpt oauth: refresh raced another writer — adopting their tokens");
+                Ok(current)
+            }
+            _ => Err(e),
+        },
+        Err(e) => Err(e),
+    }
 }
 
 /// Get a valid access token, refreshing automatically if expired.
@@ -289,14 +429,14 @@ async fn do_refresh_token(refresh_token: &str) -> Result<OAuthTokens, String> {
 /// Retries the refresh once on transient failures (network blip, brief
 /// server error) before propagating the error.
 pub async fn get_valid_token() -> Result<String, String> {
-    let tokens = match read_tokens_from_store().await {
+    let tokens = match read_current_tokens().await {
         Ok(Some(t)) => t,
         Ok(None) => return Err("not logged in to ChatGPT".to_string()),
         Err(e) => return Err(e),
     };
 
     if is_token_expired(&tokens) {
-        match do_refresh_token(&tokens.refresh_token).await {
+        match refresh_tokens(&tokens.refresh_token).await {
             Ok(refreshed) => return Ok(refreshed.access_token),
             Err(first_err) => {
                 warn!(
@@ -304,7 +444,10 @@ pub async fn get_valid_token() -> Result<String, String> {
                     first_err
                 );
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                match do_refresh_token(&tokens.refresh_token).await {
+                // refresh_tokens re-reads the store, so the retry picks up a
+                // pair rotated by whoever beat us instead of replaying the
+                // same burned refresh token.
+                match refresh_tokens(&tokens.refresh_token).await {
                     Ok(refreshed) => return Ok(refreshed.access_token),
                     Err(retry_err) => {
                         return Err(format!("token refresh failed after retry: {}", retry_err));
@@ -357,7 +500,25 @@ pub fn start_background_refresh() {
                 continue;
             }
 
-            match read_tokens_from_store().await {
+            // A refresh may have rotated tokens while the store was stalled
+            // (boot-time DB saturation). Retry that persist before anything
+            // else — until it lands, the only copy of the pair is in memory.
+            if cache_is_dirty() {
+                if let Some(tokens) = cache_get() {
+                    match write_tokens_to_store(&tokens).await {
+                        Ok(()) => {
+                            info!("chatgpt background refresh: persisted pending tokens");
+                            cache_mark_persisted(&tokens);
+                        }
+                        Err(e) => warn!(
+                            "chatgpt background refresh: pending token persist still failing: {}",
+                            e
+                        ),
+                    }
+                }
+            }
+
+            match read_current_tokens().await {
                 Ok(Some(tokens)) => {
                     let needs_refresh = match tokens.expires_at {
                         Some(exp) => {
@@ -368,7 +529,7 @@ pub fn start_background_refresh() {
                     };
 
                     if needs_refresh {
-                        match do_refresh_token(&tokens.refresh_token).await {
+                        match refresh_tokens(&tokens.refresh_token).await {
                             Ok(_) => {
                                 info!("chatgpt background refresh: token refreshed proactively");
                                 consecutive_failures = 0;
@@ -562,7 +723,9 @@ pub async fn chatgpt_oauth_login(app_handle: AppHandle) -> Result<bool, String> 
         expires_at: Some(unix_now() + expires_in),
     };
 
-    write_tokens_to_store(&tokens).await?;
+    // Cache-first persist: even if the store write is stalled the login
+    // succeeds now and the background loop lands the write later.
+    persist_tokens(&tokens).await;
     info!("ChatGPT OAuth login successful — token saved to secret store");
 
     // Bring screenpipe back to the foreground so the user sees the preset form
@@ -581,7 +744,7 @@ pub async fn chatgpt_oauth_status() -> Result<ChatGptOAuthStatus, String> {
     // Only check token existence — no network refresh here.
     // Refresh happens lazily in chatgpt_oauth_get_token when actually needed.
     // 3-second timeout guards against a locked/slow SQLite DB.
-    match tokio::time::timeout(std::time::Duration::from_secs(3), read_tokens_from_store()).await {
+    match tokio::time::timeout(std::time::Duration::from_secs(3), read_current_tokens()).await {
         Ok(Ok(Some(_))) => Ok(ChatGptOAuthStatus {
             logged_in: true,
             error: None,
@@ -724,6 +887,60 @@ mod tests {
 
     #[test]
     fn rejects_malformed_base64_payload() {
-        assert_eq!(extract_chatgpt_account_id("head.%%%not-base64%%%.sig"), None);
+        assert_eq!(
+            extract_chatgpt_account_id("head.%%%not-base64%%%.sig"),
+            None
+        );
+    }
+
+    #[test]
+    fn detects_refresh_token_reused_errors() {
+        // Exact error observed in app logs (OpenAI 401 body).
+        assert!(is_refresh_token_reused_error(
+            r#"token refresh failed (401 Unauthorized): {"error":{"message":"Your refresh token has already been used to generate a new access token. Please try signing in again.","type":"invalid_request_error","param":null,"code":"refresh_token_reused"}}"#
+        ));
+        assert!(is_refresh_token_reused_error("code: refresh_token_reused"));
+        assert!(!is_refresh_token_reused_error(
+            "token refresh request failed: connection reset"
+        ));
+        assert!(!is_refresh_token_reused_error(
+            "token refresh failed (500): oops"
+        ));
+    }
+
+    #[test]
+    fn token_cache_round_trip_and_logout_clears_dirty() {
+        let tokens = OAuthTokens {
+            access_token: "at".into(),
+            refresh_token: "rt".into(),
+            expires_at: Some(123),
+        };
+        cache_put(Some(tokens.clone()), true);
+        assert!(cache_is_dirty());
+        assert_eq!(cache_get().unwrap().refresh_token, "rt");
+
+        // Persisting the pair we hold clears the flag and keeps the value.
+        cache_mark_persisted(&tokens);
+        assert!(!cache_is_dirty());
+        assert_eq!(cache_get().unwrap().refresh_token, "rt");
+
+        // A rotation lands while an older write was in flight: marking the
+        // OLD pair persisted must not clear the NEW pair's pending write.
+        let rotated = OAuthTokens {
+            access_token: "at2".into(),
+            refresh_token: "rt2".into(),
+            expires_at: Some(456),
+        };
+        cache_put(Some(rotated), true);
+        cache_mark_persisted(&tokens);
+        assert!(
+            cache_is_dirty(),
+            "stale persist must not mark rotated pair clean"
+        );
+        assert_eq!(cache_get().unwrap().refresh_token, "rt2");
+
+        cache_put(None, false);
+        assert!(cache_get().is_none());
+        assert!(!cache_is_dirty());
     }
 }
