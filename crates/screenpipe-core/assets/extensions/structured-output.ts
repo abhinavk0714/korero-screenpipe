@@ -65,9 +65,35 @@ function textResult(text: string) {
   return { content: [{ type: "text" as const, text }] };
 }
 
+export function hasAssignedTargets(
+  pipeName: string,
+  workingDirectory = process.cwd(),
+): boolean {
+  try {
+    const raw = readFileSync(
+      join(workingDirectory, "..", "..", "structured-outputs", "targets.json"),
+      "utf8",
+    );
+    const parsed = JSON.parse(raw) as {
+      targets?: Array<{ bound_pipe?: unknown; pipe_name?: unknown }>;
+    };
+    return Boolean(
+      parsed.targets?.some(
+        (target) =>
+          target.bound_pipe === pipeName || target.pipe_name === pipeName,
+      ),
+    );
+  } catch {
+    return false;
+  }
+}
+
 export default function (pi: ExtensionAPI) {
   const pipeName = process.env.SCREENPIPE_PIPE_NAME;
-  if (!pipeName) return;
+  // Do not register a tool or make an API request for ordinary Pipes. This
+  // keeps CLI/headless Pipe runs unchanged until a local consumer explicitly
+  // assigns structured output targets to that Pipe.
+  if (!pipeName || !hasAssignedTargets(pipeName)) return;
 
   const apiBase =
     process.env.SCREENPIPE_LOCAL_API_URL ||

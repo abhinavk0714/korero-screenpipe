@@ -177,6 +177,7 @@ export default function FirstDashboard() {
   const completingRef = useRef(false);
   const escapeCompletingRef = useRef(false);
   const createAttemptRef = useRef(0);
+  const buildAbortControllerRef = useRef<AbortController | null>(null);
   const latestStageRef = useRef<OnboardingLiveViewStage | null>(null);
   const mountedAtRef = useRef(Date.now());
   const dashboardIdRef = useRef(
@@ -189,6 +190,15 @@ export default function FirstDashboard() {
     const presets = (settings.aiPresets ?? []) as AIPreset[];
     return presets.find((preset) => preset.defaultPreset) ?? presets[0] ?? null;
   }, [settings.aiPresets]);
+
+  useEffect(
+    () => () => {
+      createAttemptRef.current += 1;
+      buildAbortControllerRef.current?.abort();
+      buildAbortControllerRef.current = null;
+    },
+    [],
+  );
 
   useEffect(() => {
     posthog.capture("onboarding_first_dashboard_viewed");
@@ -250,6 +260,9 @@ export default function FirstDashboard() {
 
     completingRef.current = true;
     const attemptId = ++createAttemptRef.current;
+    buildAbortControllerRef.current?.abort();
+    const abortController = new AbortController();
+    buildAbortControllerRef.current = abortController;
     setError(null);
     setSelectedPipes([]);
     setDashboardPrepared(false);
@@ -282,12 +295,16 @@ export default function FirstDashboard() {
         preparedView,
         preset: defaultPreset,
         userToken: settings.user?.token ?? null,
+        signal: abortController.signal,
         onProgress: (progress) => {
           if (createAttemptRef.current !== attemptId) return;
           reportProgress(progress);
         },
       });
       if (createAttemptRef.current !== attemptId) return;
+      if (buildAbortControllerRef.current === abortController) {
+        buildAbortControllerRef.current = null;
+      }
       posthog.capture("onboarding_first_dashboard_created", {
         goal_category: goalCategory,
         pipe_count: result.pipeSlugs.length,
@@ -313,6 +330,9 @@ export default function FirstDashboard() {
       });
     } catch (setupError) {
       if (createAttemptRef.current !== attemptId) return;
+      if (buildAbortControllerRef.current === abortController) {
+        buildAbortControllerRef.current = null;
+      }
       const knownError =
         setupError instanceof OnboardingLiveViewSetupError ? setupError : null;
       posthog.capture("onboarding_first_dashboard_failed", {
@@ -345,11 +365,13 @@ export default function FirstDashboard() {
     }
 
     escapeCompletingRef.current = true;
-    // Ignore any progress or result that arrives from the abandoned attempt.
+    buildAbortControllerRef.current?.abort();
+    buildAbortControllerRef.current = null;
+    // Ignore any progress or result that races with cancellation.
     createAttemptRef.current += 1;
     markOnboardingLiveViewSetupNeedsRetry(
       dashboardIdRef.current,
-      "Setup was paused before it finished.",
+      "Setup was stopped before it finished.",
     );
     setIsContinuingWithoutWaiting(true);
     posthog.capture("onboarding_first_dashboard_build_bypassed", {
@@ -442,8 +464,14 @@ export default function FirstDashboard() {
 
           {selectedPipes.length > 0 && (
             <div className="mt-4 border-t border-border pt-3 font-mono text-[10px] text-muted-foreground">
-              <span className="mr-2 lowercase tracking-wide">using</span>
-              {selectedPipes.map(displayPipeName).join(" + ")}
+              <div>
+                <span className="mr-2 lowercase tracking-wide">using</span>
+                {selectedPipes.map(displayPipeName).join(" + ")}
+              </div>
+              <p className="mt-1.5 text-[9px] leading-relaxed">
+                one update runs now. new recurring schedules stay off; existing
+                Pipe settings stay unchanged.
+              </p>
             </div>
           )}
 

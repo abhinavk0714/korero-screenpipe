@@ -248,6 +248,35 @@ function jsonBody(response: Response): Promise<Record<string, unknown>> {
     .catch(() => ({}));
 }
 
+function abortError(signal?: AbortSignal): Error {
+  return signal?.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Live View setup was stopped.", "AbortError");
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortError(signal);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+async function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+  await new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      window.clearTimeout(timeout);
+      reject(abortError(signal));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export function declaredFrontmatterConnections(source: string): string[] {
   const match = source.match(/^---\s*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
   if (!match) return [];
@@ -279,16 +308,21 @@ export function declaredFrontmatterConnections(source: string): string[] {
   return connections;
 }
 
-async function waitForServer(maxWaitMs = 20_000): Promise<void> {
+async function waitForServer(
+  maxWaitMs = 20_000,
+  signal?: AbortSignal,
+): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < maxWaitMs) {
+    throwIfAborted(signal);
     try {
-      const response = await localFetch("/health");
+      const response = await localFetch("/health", { signal });
       if (response.ok) return;
-    } catch {
+    } catch (error) {
+      if (isAbortError(error) || signal?.aborted) throw abortError(signal);
       // The engine may still be finishing its startup handoff.
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await abortableDelay(500, signal);
   }
   throw new OnboardingLiveViewSetupError(
     "server_not_ready",
@@ -300,7 +334,9 @@ async function waitForServer(maxWaitMs = 20_000): Promise<void> {
 async function loadStoreCandidates(
   goal: string,
   goalCategory: OnboardingGoalCategory,
+  signal?: AbortSignal,
 ): Promise<OnboardingPipeCandidate[]> {
+  throwIfAborted(signal);
   const preferredSlugs = preferredStorePipeSlugs(goalCategory);
   let rawPipes: StorePipeRecord[] = [];
   if (preferredSlugs.length > 0) {
@@ -309,6 +345,7 @@ async function loadStoreCandidates(
         preferredSlugs.map(async (slug) => {
           const response = await localFetch(
             `/pipes/store/${encodeURIComponent(slug)}`,
+            { signal },
           );
           if (!response.ok) return null;
           const body = await jsonBody(response);
@@ -319,13 +356,15 @@ async function loadStoreCandidates(
           return typeof candidate.slug === "string" ? candidate : null;
         }),
       );
+      throwIfAborted(signal);
       if (detailResults.every((result) => result.status === "rejected")) {
         throw new Error("store requests failed");
       }
       rawPipes = detailResults.flatMap((result) =>
         result.status === "fulfilled" && result.value ? [result.value] : [],
       );
-    } catch {
+    } catch (error) {
+      if (isAbortError(error) || signal?.aborted) throw abortError(signal);
       // Fall through to the broader reviewed Store list below. A missing
       // recommended Pipe should not make onboarding a dead end.
     }
@@ -334,7 +373,9 @@ async function loadStoreCandidates(
   let candidates = selectOnboardingPipeCandidates(goal, goalCategory, rawPipes);
   if (candidates.length === 0) {
     try {
-      const response = await localFetch("/pipes/store?sort=popular");
+      const response = await localFetch("/pipes/store?sort=popular", {
+        signal,
+      });
       if (!response.ok) throw new Error("store request failed");
       const body = await jsonBody(response);
       const popularPipes = Array.isArray(body.data)
@@ -353,7 +394,8 @@ async function loadStoreCandidates(
         [...bySlug.values()],
         preferredSlugs,
       );
-    } catch {
+    } catch (error) {
+      if (isAbortError(error) || signal?.aborted) throw abortError(signal);
       throw new OnboardingLiveViewSetupError(
         "store_unavailable",
         "planning",
@@ -374,25 +416,25 @@ async function loadStoreCandidates(
 async function ensurePipeReady(
   slug: string,
   presetId: string | null,
+  signal?: AbortSignal,
 ): Promise<{ name: string; installed: boolean }> {
-  const enable = async (name: string) => {
-    const response = await localFetch(
-      `/pipes/${encodeURIComponent(name)}/enable`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: true }),
-      },
-    );
-    const body = await jsonBody(response);
-    return { ok: response.ok && !body.error, body };
-  };
-
-  const existing = await enable(slug);
-  if (existing.ok) return { name: slug, installed: false };
+  throwIfAborted(signal);
+  const existingResponse = await localFetch(
+    `/pipes/${encodeURIComponent(slug)}`,
+    { signal },
+  );
+  const existingBody = await jsonBody(existingResponse);
+  if (
+    existingResponse.ok &&
+    typeof existingBody.data === "object" &&
+    existingBody.data !== null
+  ) {
+    return { name: slug, installed: false };
+  }
 
   const detailResponse = await localFetch(
     `/pipes/store/${encodeURIComponent(slug)}`,
+    { signal },
   );
   const detailBody = await jsonBody(detailResponse);
   const detail =
@@ -422,7 +464,8 @@ async function ensurePipeReady(
   const installResponse = await localFetch("/pipes/store/install", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ slug }),
+    body: JSON.stringify({ slug, enabled: false }),
+    signal,
   });
   const installBody = await jsonBody(installResponse);
   if (!installResponse.ok || installBody.error) {
@@ -438,25 +481,42 @@ async function ensurePipeReady(
     typeof installBody.name === "string" && installBody.name.trim()
       ? installBody.name.trim()
       : slug;
+
+  // Keep a first-run helper from silently becoming a permanent background
+  // schedule. The install request makes this atomic on current engines; this
+  // idempotent write also protects app/engine version skew during upgrades.
+  const disableResponse = await localFetch(
+    `/pipes/${encodeURIComponent(installedName)}/enable`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+      signal,
+    },
+  );
+  const disableBody = await jsonBody(disableResponse);
+  if (!disableResponse.ok || disableBody.error) {
+    throw new OnboardingLiveViewSetupError(
+      "pipe_enable_failed",
+      "installing",
+      `Could not keep automatic updates off for ${installedName}.`,
+      slug,
+    );
+  }
+  throwIfAborted(signal);
+
   if (presetId) {
     try {
       await localFetch(`/pipes/${encodeURIComponent(installedName)}/config`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ preset: presetId }),
+        signal,
       });
-    } catch {
+    } catch (error) {
+      if (isAbortError(error) || signal?.aborted) throw abortError(signal);
       // A Pipe can still inherit the default preset if this best-effort write fails.
     }
-  }
-  const enabled = await enable(installedName);
-  if (!enabled.ok) {
-    throw new OnboardingLiveViewSetupError(
-      "pipe_enable_failed",
-      "installing",
-      `Could not start ${installedName}.`,
-      slug,
-    );
   }
   return { name: installedName, installed: true };
 }
@@ -611,7 +671,11 @@ async function saveFirstDashboard(
   return saved.data;
 }
 
-async function refreshDashboard(view: BrainViewDefinition): Promise<number> {
+async function refreshDashboard(
+  view: BrainViewDefinition,
+  signal?: AbortSignal,
+  onStarted?: (pipeName: string) => void,
+): Promise<number> {
   const pipeNames = Array.from(
     new Set(
       view.slots
@@ -622,6 +686,7 @@ async function refreshDashboard(view: BrainViewDefinition): Promise<number> {
   let started = 0;
   await Promise.all(
     pipeNames.map(async (pipeName) => {
+      throwIfAborted(signal);
       const targetIds = view.slots
         .filter((slot) => slot.binding?.pipeName === pipeName)
         .map((slot) => `live-view:${view.id}:${slot.id}`);
@@ -642,6 +707,7 @@ async function refreshDashboard(view: BrainViewDefinition): Promise<number> {
                   "Build this first dashboard from source-backed Screenpipe data. Call structured_output get_targets first and submit every listed target that has enough evidence. Never invent a positive result when evidence is missing.",
               },
             }),
+            signal,
           },
         );
         const body = await jsonBody(response);
@@ -650,13 +716,16 @@ async function refreshDashboard(view: BrainViewDefinition): Promise<number> {
           (!body.error || String(body.error).includes("already running"))
         ) {
           started += 1;
+          if (body.success === true) onStarted?.(pipeName);
         }
-      } catch {
+      } catch (error) {
+        if (isAbortError(error) || signal?.aborted) throw abortError(signal);
         // Count successful starts below. A single Pipe failure should not hide
         // the dashboard if another Pipe can begin filling it.
       }
     }),
   );
+  throwIfAborted(signal);
   return started;
 }
 
@@ -667,6 +736,7 @@ export async function createOnboardingLiveView(options: {
   preparedView?: BrainViewDefinition;
   preset: AIPreset;
   userToken: string | null;
+  signal?: AbortSignal;
   onProgress?: (progress: OnboardingLiveViewProgress) => void;
 }): Promise<OnboardingLiveViewResult> {
   const report = (progress: OnboardingLiveViewProgress) => {
@@ -678,8 +748,11 @@ export async function createOnboardingLiveView(options: {
   };
 
   const dashboardId = options.dashboardId ?? FIRST_DASHBOARD_ID;
+  const startedPipeNames = new Set<string>();
+  const installedPipeNames = new Set<string>();
   report({ stage: "planning" });
   try {
+    throwIfAborted(options.signal);
     const preparedView =
       options.preparedView ??
       (await prepareOnboardingLiveViewShell({
@@ -687,11 +760,13 @@ export async function createOnboardingLiveView(options: {
         goal: options.goal,
         goalCategory: options.goalCategory,
       }));
+    throwIfAborted(options.signal);
     report({ stage: "planning", dashboardReady: true });
-    await waitForServer();
+    await waitForServer(20_000, options.signal);
     const candidates = await loadStoreCandidates(
       options.goal,
       options.goalCategory,
+      options.signal,
     );
 
     let generated: GeneratedLiveView;
@@ -706,8 +781,12 @@ export async function createOnboardingLiveView(options: {
         maxSelectedPipes: MAX_SELECTED_PIPES,
         requirePipeBinding: true,
         currentView: null,
+        signal: options.signal,
       });
     } catch (error) {
+      if (isAbortError(error) || options.signal?.aborted) {
+        throw abortError(options.signal);
+      }
       throw new OnboardingLiveViewSetupError(
         "ai_plan_failed",
         "planning",
@@ -740,9 +819,11 @@ export async function createOnboardingLiveView(options: {
       blockCount: generated.blocks.length,
       timeRange: generated.timeRange,
     });
+    throwIfAborted(options.signal);
 
     const readyPipeNames = new Map<string, string>();
     for (const [index, pipeSlug] of pipeSlugs.entries()) {
+      throwIfAborted(options.signal);
       report({
         stage: "installing",
         dashboardReady: true,
@@ -750,7 +831,12 @@ export async function createOnboardingLiveView(options: {
         pipeIndex: index,
         pipeCount: pipeSlugs.length,
       });
-      const ready = await ensurePipeReady(pipeSlug, options.preset.id || null);
+      const ready = await ensurePipeReady(
+        pipeSlug,
+        options.preset.id || null,
+        options.signal,
+      );
+      if (ready.installed) installedPipeNames.add(ready.name);
       readyPipeNames.set(pipeSlug, ready.name);
       report({
         stage: "pipe_ready",
@@ -762,6 +848,7 @@ export async function createOnboardingLiveView(options: {
       });
     }
 
+    throwIfAborted(options.signal);
     report({
       stage: "saving",
       dashboardReady: true,
@@ -774,12 +861,17 @@ export async function createOnboardingLiveView(options: {
       preparedView,
     );
 
+    throwIfAborted(options.signal);
     report({
       stage: "refreshing",
       dashboardReady: true,
       pipeCount: pipeSlugs.length,
     });
-    const refreshStartedCount = await refreshDashboard(view);
+    const refreshStartedCount = await refreshDashboard(
+      view,
+      options.signal,
+      (pipeName) => startedPipeNames.add(pipeName),
+    );
     if (refreshStartedCount === 0) {
       throw new OnboardingLiveViewSetupError(
         "refresh_failed",
@@ -806,6 +898,16 @@ export async function createOnboardingLiveView(options: {
       refreshStartedCount,
     };
   } catch (error) {
+    if (isAbortError(error) || options.signal?.aborted) {
+      await Promise.allSettled(
+        [...new Set([...startedPipeNames, ...installedPipeNames])].map(
+          (pipeName) =>
+            localFetch(`/pipes/${encodeURIComponent(pipeName)}/stop`, {
+              method: "POST",
+            }),
+        ),
+      );
+    }
     markOnboardingLiveViewSetupNeedsRetry(
       dashboardId,
       error instanceof Error

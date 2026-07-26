@@ -233,17 +233,17 @@ describe("createOnboardingLiveView", () => {
             },
           });
         }
+        if (url === "/pipes/meeting-intel" && init?.method !== "POST") {
+          return response({ error: "not installed" });
+        }
         if (url === "/pipes/meeting-intel/enable") {
-          const priorInstall = mocks.localFetch.mock.calls.some(
-            ([calledUrl]) => calledUrl === "/pipes/store/install",
-          );
-          return priorInstall
-            ? response({ success: true })
-            : response({ error: "not installed" });
+          expect(JSON.parse(String(init?.body))).toEqual({ enabled: false });
+          return response({ success: true });
         }
         if (url === "/pipes/store/install") {
           expect(JSON.parse(String(init?.body))).toEqual({
             slug: "meeting-intel",
+            enabled: false,
           });
           return response({ name: "meeting-intel" });
         }
@@ -316,6 +316,13 @@ describe("createOnboardingLiveView", () => {
         ],
       }),
     );
+    expect(mocks.localFetch).toHaveBeenCalledWith(
+      "/pipes/meeting-intel/enable",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ enabled: false }),
+      }),
+    );
     expect(result).toEqual(
       expect.objectContaining({
         pipeSlugs: ["meeting-intel"],
@@ -333,6 +340,83 @@ describe("createOnboardingLiveView", () => {
         guideStep: "dashboard",
       }),
     );
+  });
+
+  it("stops before installing Pipes when setup is cancelled", async () => {
+    const controller = new AbortController();
+    mocks.generateLiveViewWithPi.mockImplementationOnce(async (options) => {
+      expect(options.signal).toBe(controller.signal);
+      controller.abort();
+      return {
+        title: "Meeting follow-through",
+        timeRange: "today",
+        note: "A focused meeting view.",
+        blocks: [
+          {
+            title: "Open actions",
+            intent: "List source-backed open actions from meetings today.",
+            component: "list.v1",
+            width: 6,
+            pipeName: "meeting-intel",
+          },
+        ],
+      };
+    });
+
+    await expect(
+      createOnboardingLiveView({
+        goal: "help me follow through after meetings",
+        goalCategory: "meeting_follow_through",
+        preset: {
+          id: "default",
+          provider: "screenpipe-cloud",
+          url: "",
+          model: "auto",
+          apiKey: null,
+          defaultPreset: true,
+          maxContextChars: 100_000,
+          prompt: "",
+        },
+        userToken: "user-token",
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(
+      mocks.localFetch.mock.calls.some(
+        ([url]) => url === "/pipes/store/install",
+      ),
+    ).toBe(false);
+  });
+
+  it("stops a newly installed helper Pipe when setup is cancelled", async () => {
+    const controller = new AbortController();
+
+    await expect(
+      createOnboardingLiveView({
+        goal: "help me follow through after meetings",
+        goalCategory: "meeting_follow_through",
+        preset: {
+          id: "default",
+          provider: "screenpipe-cloud",
+          url: "",
+          model: "auto",
+          apiKey: null,
+          defaultPreset: true,
+          maxContextChars: 100_000,
+          prompt: "",
+        },
+        userToken: "user-token",
+        signal: controller.signal,
+        onProgress: ({ stage }) => {
+          if (stage === "refreshing") controller.abort();
+        },
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(mocks.localFetch).toHaveBeenCalledWith("/pipes/meeting-intel/stop", {
+      method: "POST",
+    });
   });
 
   it("keeps a recoverable dashboard when AI planning fails", async () => {
@@ -441,8 +525,16 @@ describe("createOnboardingLiveView", () => {
             ],
           });
         }
-        if (url === "/pipes/portable-meeting-notes/enable") {
-          return response({ success: true });
+        if (url === "/pipes/portable-meeting-notes") {
+          return response({
+            data: {
+              config: {
+                name: "portable-meeting-notes",
+                enabled: false,
+                schedule: "manual",
+              },
+            },
+          });
         }
         if (url === "/pipes/portable-meeting-notes/run") {
           return response({ success: true });
@@ -487,6 +579,11 @@ describe("createOnboardingLiveView", () => {
       }),
     );
     expect(result.pipeSlugs).toEqual(["portable-meeting-notes"]);
+    expect(
+      mocks.localFetch.mock.calls.some(([url]) =>
+        String(url).endsWith("/enable"),
+      ),
+    ).toBe(false);
   });
 
   it("keeps setup recoverable when no connected Pipe can start", async () => {
@@ -503,8 +600,16 @@ describe("createOnboardingLiveView", () => {
           },
         });
       }
-      if (url === "/pipes/meeting-intel/enable") {
-        return response({ success: true });
+      if (url === "/pipes/meeting-intel") {
+        return response({
+          data: {
+            config: {
+              name: "meeting-intel",
+              enabled: true,
+              schedule: "every 1h",
+            },
+          },
+        });
       }
       if (url === "/pipes/meeting-intel/run") {
         return response({ error: "runtime unavailable" }, false, 503);

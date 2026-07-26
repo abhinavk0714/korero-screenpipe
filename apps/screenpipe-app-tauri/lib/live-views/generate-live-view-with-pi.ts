@@ -78,7 +78,18 @@ type GenerateLiveViewOptions = {
     timeRange: BrainViewTimeRange;
     blocks: GeneratedLiveViewBlock[];
   } | null;
+  signal?: AbortSignal;
 };
+
+function abortError(signal?: AbortSignal): Error {
+  return signal?.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Live View setup was stopped.", "AbortError");
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortError(signal);
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -328,8 +339,10 @@ function textFromAgentEnd(envelope: AgentEventEnvelope): string {
 async function rawGeneration(
   options: GenerateLiveViewOptions,
 ): Promise<string> {
+  throwIfAborted(options.signal);
   const sessionId = `${INTERNAL_TITLE_PREFIX}live-view-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   await mountAgentEventBus();
+  throwIfAborted(options.signal);
   const home = await homeDir();
   const projectDir = await join(home, ".screenpipe", PROJECT_DIR);
 
@@ -342,6 +355,9 @@ async function rawGeneration(
     resolveResponse = resolve;
     rejectResponse = reject;
   });
+  // An abort can arrive while a Tauri start/prompt command is still pending.
+  // Mark the eventual response rejection as observed until control reaches it.
+  void response.catch(() => undefined);
 
   const settle = (value: string) => {
     if (settled) return;
@@ -349,12 +365,15 @@ async function rawGeneration(
     if (timeoutId) clearTimeout(timeoutId);
     resolveResponse(value);
   };
-  const fail = (message: string) => {
+  const fail = (error: Error) => {
     if (settled) return;
     settled = true;
     if (timeoutId) clearTimeout(timeoutId);
-    rejectResponse(new Error(message));
+    rejectResponse(error);
   };
+  const handleAbort = () => fail(abortError(options.signal));
+  options.signal?.addEventListener("abort", handleAbort, { once: true });
+  throwIfAborted(options.signal);
 
   const handler = (envelope: AgentEventEnvelope) => {
     const event = envelope.event;
@@ -369,7 +388,7 @@ async function rawGeneration(
     if (event.type === "agent_end") {
       settle(accumulated || textFromAgentEnd(envelope));
     } else if (event.type === "error") {
-      fail("AI failed to generate the Live View");
+      fail(new Error("AI failed to generate the Live View"));
     }
   };
 
@@ -381,6 +400,7 @@ async function rawGeneration(
       options.userToken,
       providerConfig(options.preset),
     );
+    throwIfAborted(options.signal);
     if (started.status !== "ok" || !started.data.running) {
       throw new Error(
         started.status === "error" ? started.error : "AI did not start",
@@ -392,15 +412,17 @@ async function rawGeneration(
       null,
       null,
     );
+    throwIfAborted(options.signal);
     if (prompted.status !== "ok") throw new Error(prompted.error);
 
     timeoutId = setTimeout(
-      () => fail("AI generation timed out"),
+      () => fail(new Error("AI generation timed out")),
       GENERATION_TIMEOUT_MS,
     );
     return await response;
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
+    options.signal?.removeEventListener("abort", handleAbort);
     unregister();
     void commands.piStop(sessionId);
   }
@@ -411,7 +433,9 @@ export async function generateLiveViewWithPi(
 ): Promise<GeneratedLiveView> {
   if (!options.prompt.trim()) throw new Error("Describe what you want to see");
   if (!options.preset.model?.trim()) throw new Error("Select an AI model");
+  throwIfAborted(options.signal);
   const raw = await rawGeneration(options);
+  throwIfAborted(options.signal);
   const generated = parseGeneratedLiveView(
     raw,
     options.pipes.map((pipe) => pipe.name),

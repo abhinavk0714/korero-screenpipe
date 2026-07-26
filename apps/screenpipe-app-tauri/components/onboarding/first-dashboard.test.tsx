@@ -197,8 +197,10 @@ describe("FirstDashboard", () => {
 
   it("offers a safe escape when dashboard creation stalls", async () => {
     vi.useFakeTimers();
+    let setupSignal: AbortSignal | undefined;
     mocks.createOnboardingLiveView.mockImplementation(
-      async ({ onProgress }) => {
+      async ({ onProgress, signal }) => {
+        setupSignal = signal;
         onProgress?.({ stage: "planning" });
         return new Promise(() => {});
       },
@@ -231,8 +233,9 @@ describe("FirstDashboard", () => {
     });
     expect(mocks.markSetupNeedsRetry).toHaveBeenCalledWith(
       expect.stringMatching(/^first-dashboard-/),
-      "Setup was paused before it finished.",
+      "Setup was stopped before it finished.",
     );
+    expect(setupSignal?.aborted).toBe(true);
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_first_dashboard_build_bypassed",
       expect.objectContaining({
@@ -240,6 +243,33 @@ describe("FirstDashboard", () => {
         stalled_stage: "planning",
       }),
     );
+  });
+
+  it("explains that first-value setup does not start a new recurring schedule", async () => {
+    mocks.createOnboardingLiveView.mockImplementation(
+      async ({ onProgress }) => {
+        onProgress?.({ stage: "planning" });
+        onProgress?.({
+          stage: "plan_ready",
+          pipeSlugs: ["chronos-time-tracker"],
+          pipeCount: 1,
+        });
+        return new Promise(() => {});
+      },
+    );
+    render(<FirstDashboard />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /understand how I work/i }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /build my first Live View/i }),
+    );
+
+    expect(
+      await screen.findByText(/new recurring schedules stay off/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/chronos time tracker/i)).toBeInTheDocument();
   });
 
   it("accepts a custom outcome without sending its text to PostHog", async () => {

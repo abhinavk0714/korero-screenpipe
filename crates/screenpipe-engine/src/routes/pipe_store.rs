@@ -55,6 +55,27 @@ pub struct StoreSearchQuery {
 #[derive(Deserialize)]
 pub struct StoreInstallRequest {
     pub slug: String,
+    /// Optional install-time state. Onboarding uses `false` so a first-value
+    /// refresh cannot silently opt the user into a recurring background job.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct StoreUpdateRequest {
+    pub slug: String,
+}
+
+fn apply_install_enabled_override(
+    source_md: &str,
+    enabled: Option<bool>,
+) -> anyhow::Result<String> {
+    let Some(enabled) = enabled else {
+        return Ok(source_md.to_string());
+    };
+    let (mut config, body) = screenpipe_core::pipes::parse_frontmatter(source_md)?;
+    config.enabled = enabled;
+    screenpipe_core::pipes::serialize_pipe(&config, &body)
 }
 
 #[derive(Deserialize)]
@@ -236,6 +257,14 @@ pub async fn pipe_store_install(
             }
         }
     };
+    let source_md = match apply_install_enabled_override(&source_md, body.enabled) {
+        Ok(source) => source,
+        Err(e) => {
+            return Json(json!({
+                "error": format!("failed to apply install settings: {}", e)
+            }))
+        }
+    };
 
     // Extract version from registry response
     let version = detail
@@ -271,7 +300,7 @@ pub async fn pipe_store_install(
 /// Update an installed pipe to the latest version from the registry.
 pub async fn pipe_store_update(
     State(pm): State<SharedPipeManager>,
-    Json(body): Json<StoreInstallRequest>,
+    Json(body): Json<StoreUpdateRequest>,
 ) -> Json<Value> {
     let base = api_base_url();
     let client = &*REGISTRY_CLIENT;
@@ -524,5 +553,31 @@ pub async fn pipe_store_review(
             Err(e) => Json(json!({ "error": format!("failed to parse registry response: {}", e) })),
         },
         Err(e) => Json(json!({ "error": format!("failed to reach registry: {}", e) })),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_install_enabled_override;
+    use screenpipe_core::pipes::parse_frontmatter;
+
+    #[test]
+    fn install_enabled_override_is_explicit_and_preserves_schedule() {
+        let source = "---\nschedule: every 30m\nenabled: true\n---\ntrack time";
+        let updated = apply_install_enabled_override(source, Some(false)).unwrap();
+        let (config, body) = parse_frontmatter(&updated).unwrap();
+
+        assert!(!config.enabled);
+        assert_eq!(config.schedule, "every 30m");
+        assert_eq!(body.trim(), "track time");
+    }
+
+    #[test]
+    fn install_without_override_preserves_publisher_default() {
+        let source = "---\nschedule: manual\nenabled: true\n---\nbody";
+        let updated = apply_install_enabled_override(source, None).unwrap();
+        let (config, _) = parse_frontmatter(&updated).unwrap();
+
+        assert!(config.enabled);
     }
 }
