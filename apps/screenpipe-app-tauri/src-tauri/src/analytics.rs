@@ -315,17 +315,29 @@ impl AnalyticsManager {
         }
     }
 
-    /// Read feature configuration from the store file on disk.
-    /// Returns empty JSON object if store doesn't exist or can't be parsed.
+    /// Read feature configuration from the live settings store.
+    /// Returns empty JSON object if the settings can't be read.
     fn read_feature_config(&self) -> serde_json::Value {
-        let store_path = self.screenpipe_dir_path.join("store.bin");
-        let data = match std::fs::read_to_string(&store_path) {
-            Ok(contents) => contents,
-            Err(_) => return json!({}),
-        };
-        let store: serde_json::Value = match serde_json::from_str(&data) {
-            Ok(v) => v,
-            Err(_) => return json!({}),
+        // Prefer the in-memory store cache: it reflects settings changed
+        // during the session, and it keeps working when store.bin is
+        // SPSTORE1-encrypted (opt-in store encryption) — a raw file read
+        // parses as garbage there and silently dropped every `setting_*`
+        // property from analytics.
+        let store = match crate::store::cached_settings_json() {
+            Some(settings) => json!({ "settings": settings }),
+            None => {
+                // Fallback for the unlikely pre-cache window: plain-JSON
+                // store.bin on disk (encrypted files simply fail to parse).
+                let store_path = self.screenpipe_dir_path.join("store.bin");
+                let data = match std::fs::read_to_string(&store_path) {
+                    Ok(contents) => contents,
+                    Err(_) => return json!({}),
+                };
+                match serde_json::from_str(&data) {
+                    Ok(v) => v,
+                    Err(_) => return json!({}),
+                }
+            }
         };
 
         // Extract settings object — store has top-level keys like "settings", "onboarding"
@@ -490,6 +502,19 @@ pub fn start_analytics(
     screenpipe_dir_path: PathBuf,
     analytics_enabled: bool,
 ) -> Result<Arc<AnalyticsManager>, Box<dyn std::error::Error>> {
+    // PostHog rejects captures whose distinct_id is blank with 400 "event
+    // submitted without a distinct_id", so a blank id means zero telemetry for
+    // the whole session. The store repair in
+    // `SettingsStore::sanitize_legacy_fields` mints and persists a stable id,
+    // but if a blank one still slips through (store failed to load mid-repair),
+    // fall back to an ephemeral per-boot id rather than going dark.
+    let unique_id = if unique_id.trim().is_empty() {
+        warn!("analytics: blank distinct_id at startup — using ephemeral per-boot id");
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        unique_id
+    };
+
     let is_debug = std::env::var("TAURI_ENV_DEBUG").unwrap_or("false".to_string()) == "true";
 
     // Skip analytics in debug mode, when debug assertions are enabled, or in

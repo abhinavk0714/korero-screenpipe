@@ -772,6 +772,18 @@ pub fn get_store(
     Ok(store)
 }
 
+/// Current `settings` JSON from the in-memory store cache, without touching
+/// disk. Returns `None` before the first `get_store` call of the process.
+///
+/// Callers that only need to *read* settings (e.g. analytics feature-config
+/// snapshots) should prefer this over re-parsing `store.bin` themselves: the
+/// on-disk file may be SPSTORE1-encrypted (opt-in store encryption), and the
+/// cache also reflects settings changed by the frontend during the session.
+pub fn cached_settings_json() -> Option<Value> {
+    let guard = STORE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    guard.as_ref().and_then(|store| store.get("settings"))
+}
+
 /// Invalidate the cached store so the next `get_store` call rebuilds it.
 /// Called when a "resource id … is invalid" error is detected.
 pub fn invalidate_store_cache() {
@@ -1463,6 +1475,27 @@ impl SettingsStore {
                 obj.insert(
                     "restartNotificationsDefaultedOff".to_string(),
                     Value::Bool(true),
+                );
+            }
+
+            // A missing or blank analyticsId makes PostHog reject every event
+            // from the Rust side with 400 "event submitted without a
+            // distinct_id" — the whole install goes dark in analytics. The
+            // UUID-minting default in `SettingsStore::default()` only covers
+            // brand-new installs; stores written before the field existed (or
+            // by an old frontend whose default was "") deserialize to "" via
+            // `RecordingSettings::default()` and stayed broken forever. Mint
+            // once here; the `sanitized != raw` persist in `get()` makes it
+            // stick so the id stays stable across boots.
+            let analytics_id_blank = obj
+                .get("analyticsId")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true);
+            if analytics_id_blank {
+                obj.insert(
+                    "analyticsId".to_string(),
+                    Value::String(uuid::Uuid::new_v4().to_string()),
                 );
             }
 
@@ -3017,6 +3050,38 @@ mod tests {
         assert_eq!(
             presets[0].get("provider").unwrap().as_str().unwrap(),
             "custom"
+        );
+    }
+
+    #[test]
+    fn sanitize_mints_analytics_id_when_missing() {
+        let sanitized = SettingsStore::sanitize_legacy_fields(json!({}));
+        let id = sanitized.get("analyticsId").unwrap().as_str().unwrap();
+        assert!(
+            uuid::Uuid::parse_str(id).is_ok(),
+            "expected a uuid, got {id:?}"
+        );
+    }
+
+    #[test]
+    fn sanitize_mints_analytics_id_when_blank() {
+        for blank in [json!(""), json!("   "), json!(null), json!(42)] {
+            let sanitized = SettingsStore::sanitize_legacy_fields(json!({ "analyticsId": blank }));
+            let id = sanitized.get("analyticsId").unwrap().as_str().unwrap();
+            assert!(
+                uuid::Uuid::parse_str(id).is_ok(),
+                "expected a minted uuid for {blank:?}, got {id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_preserves_existing_analytics_id() {
+        let sanitized =
+            SettingsStore::sanitize_legacy_fields(json!({ "analyticsId": "existing-machine-id" }));
+        assert_eq!(
+            sanitized.get("analyticsId").unwrap().as_str().unwrap(),
+            "existing-machine-id"
         );
     }
 
