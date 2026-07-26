@@ -1550,12 +1550,31 @@ impl DatabaseManager {
     /// multi-GB database. On failure we log loudly with the exact recovery
     /// command so the user can self-heal via the existing `screenpipe db
     /// recover` path (which backs up the original before rebuilding).
+    ///
+    /// Throttled: quick_check reads every page — on a 1.7GB install it kept
+    /// disk I/O saturated for ~90s inside the boot burst (migrations,
+    /// disk-usage scan, pipe bootstrap) and event captures timed out with
+    /// "frame dropped; likely a stuck DB write". A clean result is stamped
+    /// next to the DB and the scan is skipped while the stamp is fresh; a
+    /// corrupt result is never stamped, so a bad DB is re-flagged every boot.
     pub(crate) fn spawn_startup_integrity_check(&self, database_path: Arc<str>) {
         let pool = self.pool.clone();
         tokio::spawn(async move {
+            let stamp_path = integrity_stamp_path(&database_path);
+            if let Some(ref stamp) = stamp_path {
+                let stamp_contents = std::fs::read_to_string(stamp).ok();
+                if !integrity_check_due(stamp_contents.as_deref(), unix_now_secs()) {
+                    debug!(
+                        "startup integrity check: last clean scan is recent, skipping ({})",
+                        stamp.display()
+                    );
+                    return;
+                }
+            }
             // Let boot settle so the scan doesn't compete with migrations
-            // and the first capture writes for I/O.
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            // and the first capture writes for I/O. The old 10s delay landed
+            // squarely in the boot burst; 5 minutes clears it.
+            tokio::time::sleep(STARTUP_INTEGRITY_DELAY).await;
             // quick_check(1) stops after the first error — we only need a
             // yes/no signal here, not the full corruption inventory.
             match sqlx::query_scalar::<_, String>("PRAGMA quick_check(1)")
@@ -1564,6 +1583,11 @@ impl DatabaseManager {
             {
                 Ok(result) if result == "ok" => {
                     debug!("startup integrity check: ok");
+                    if let Some(ref stamp) = stamp_path {
+                        if let Err(e) = std::fs::write(stamp, unix_now_secs().to_string()) {
+                            debug!("startup integrity check: could not write stamp: {}", e);
+                        }
+                    }
                 }
                 Ok(detail) => {
                     error!(
@@ -1650,6 +1674,110 @@ impl DatabaseManager {
             .execute(&mut *conn)
             .await;
         result
+    }
+}
+
+/// Delay before the startup `quick_check` scan. The old 10s landed squarely
+/// in the boot burst (migrations, disk-usage scan, pipe bootstrap, model
+/// loads); competing with those for disk I/O is what turned a background
+/// probe into dropped capture frames.
+const STARTUP_INTEGRITY_DELAY: Duration = Duration::from_secs(300);
+
+/// Minimum interval between clean startup integrity scans. Daily is plenty
+/// for a proactive corruption probe — real corruption still surfaces
+/// immediately through worker query errors, and a corrupt result is never
+/// stamped so it re-runs every boot until recovered.
+const INTEGRITY_CHECK_MIN_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Sidecar file that records the unix time of the last clean `quick_check`.
+/// `None` for non-file databases (`:memory:`, URIs) — those always scan.
+fn integrity_stamp_path(database_path: &str) -> Option<std::path::PathBuf> {
+    if database_path.is_empty()
+        || database_path.starts_with(':')
+        || database_path.contains("mode=memory")
+    {
+        return None;
+    }
+    if !std::path::Path::new(database_path).exists() {
+        return None;
+    }
+    Some(std::path::PathBuf::from(format!(
+        "{database_path}.integrity-stamp"
+    )))
+}
+
+/// Is the startup integrity scan due, given the stamp file contents (unix
+/// seconds of the last clean scan)? Missing/garbage stamps and clocks that
+/// moved backwards fail open — the scan runs.
+fn integrity_check_due(stamp_contents: Option<&str>, now_secs: u64) -> bool {
+    let Some(last) = stamp_contents.and_then(|s| s.trim().parse::<u64>().ok()) else {
+        return true;
+    };
+    if last > now_secs {
+        return true;
+    }
+    now_secs - last >= INTEGRITY_CHECK_MIN_INTERVAL.as_secs()
+}
+
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+#[cfg(test)]
+mod integrity_check_tests {
+    use super::*;
+
+    #[test]
+    fn due_when_no_stamp() {
+        assert!(integrity_check_due(None, 1_000_000));
+    }
+
+    #[test]
+    fn due_when_stamp_is_garbage() {
+        assert!(integrity_check_due(Some("not-a-number"), 1_000_000));
+        assert!(integrity_check_due(Some(""), 1_000_000));
+    }
+
+    #[test]
+    fn not_due_right_after_clean_scan() {
+        let now = 1_000_000;
+        assert!(!integrity_check_due(Some("999000"), now));
+        // whitespace-tolerant (fs::write + editors may add a newline)
+        assert!(!integrity_check_due(Some("999000\n"), now));
+    }
+
+    #[test]
+    fn due_once_interval_elapsed() {
+        let now = 1_000_000 + INTEGRITY_CHECK_MIN_INTERVAL.as_secs();
+        assert!(integrity_check_due(Some("1000000"), now));
+        assert!(!integrity_check_due(Some("1000001"), now));
+    }
+
+    #[test]
+    fn due_when_clock_moved_backwards() {
+        // A far-future stamp must not suppress the scan indefinitely.
+        assert!(integrity_check_due(Some("2000000"), 1_000_000));
+    }
+
+    #[test]
+    fn stamp_path_only_for_real_files() {
+        assert_eq!(integrity_stamp_path(":memory:"), None);
+        assert_eq!(integrity_stamp_path(""), None);
+        assert_eq!(integrity_stamp_path("file::memory:?mode=memory"), None);
+        assert_eq!(
+            integrity_stamp_path("/definitely/not/a/real/db.sqlite"),
+            None
+        );
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db = dir.path().join("db.sqlite");
+        std::fs::write(&db, b"x").unwrap();
+        let db_str = db.to_string_lossy().into_owned();
+        let stamp = integrity_stamp_path(&db_str).expect("stamp path for real file");
+        assert_eq!(stamp.to_string_lossy(), format!("{db_str}.integrity-stamp"));
     }
 }
 
