@@ -4,6 +4,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { localFetch } from "@/lib/api";
+import { fetchWithStartupRetry } from "./fetch-with-startup-retry";
 
 export interface AutocompleteItem {
   name: string;
@@ -92,13 +93,15 @@ export function useSqlAutocomplete(type: "app" | "window" | "url") {
             LIMIT 100
           `;
         }
-        const response = await localFetch("/raw_sql", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ query }),
-        });
+        const response = await fetchWithStartupRetry(() =>
+          localFetch("/raw_sql", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ query }),
+          }),
+        );
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -145,8 +148,8 @@ export function useTagAutocomplete() {
         setItems(TAG_CACHE.data);
         return;
       }
-      const response = await localFetch(
-        `/tags/autocomplete?limit=${TAG_AUTOCOMPLETE_LIMIT}`
+      const response = await fetchWithStartupRetry(() =>
+        localFetch(`/tags/autocomplete?limit=${TAG_AUTOCOMPLETE_LIMIT}`)
       );
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -260,11 +263,13 @@ export function useAppWindowTree() {
         ORDER BY a.app_total DESC, w.count DESC
         LIMIT 1000
       `;
-      const response = await localFetch("/raw_sql", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query }),
-      });
+      const response = await fetchWithStartupRetry(() =>
+        localFetch("/raw_sql", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query }),
+        }),
+      );
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
