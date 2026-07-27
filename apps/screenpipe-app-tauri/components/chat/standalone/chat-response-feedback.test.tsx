@@ -79,6 +79,7 @@ describe("ChatResponseFeedback", () => {
       response_position: "initial",
       rating: "positive",
       action: "submitted",
+      value_observation_state: "confirmed_useful",
       has_tool_use: true,
       has_sources: true,
       was_steered: true,
@@ -205,6 +206,7 @@ describe("ChatResponseFeedback", () => {
       entry_card: "day_recap",
       response_position: "initial",
       action: "copy",
+      value_observation_state: "confirmed_useful",
       has_tool_use: true,
       has_sources: true,
     });

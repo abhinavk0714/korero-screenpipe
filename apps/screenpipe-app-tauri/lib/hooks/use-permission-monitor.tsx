@@ -9,6 +9,7 @@ import { usePathname } from "next/navigation";
 import { listen } from "@tauri-apps/api/event";
 import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
+import { permissionRestoredProperties } from "@/lib/rescue-telemetry";
 
 interface PermissionLostPayload {
   screen_recording: boolean;
@@ -23,6 +24,10 @@ interface PermissionLostPayload {
 
 interface PermissionNeededPayload {
   kind: "screen_recording" | "microphone" | "accessibility" | "keychain";
+}
+
+interface PermissionRestoredPayload {
+  kind: string;
 }
 
 /**
@@ -75,6 +80,16 @@ export function usePermissionMonitor() {
       }, 300000);
     });
 
+    const unlistenRestored = listen<PermissionRestoredPayload>(
+      "permission-restored",
+      (event) => {
+        posthog.capture(
+          "permission_restored",
+          permissionRestoredProperties(event.payload.kind),
+        );
+      },
+    );
+
     // Listen for deferred restart requests from the cooldown logic in recording.rs.
     // When a restart is blocked by cooldown, the backend schedules a deferred check
     // and emits this event if the server is still dead after cooldown expires.
@@ -109,6 +124,7 @@ export function usePermissionMonitor() {
 
     return () => {
       unlisten.then((fn) => fn());
+      unlistenRestored.then((fn) => fn());
       unlistenRestart.then((fn) => fn());
       unlistenNeeded.then((fn) => fn());
       if (cooldownRef.current) {

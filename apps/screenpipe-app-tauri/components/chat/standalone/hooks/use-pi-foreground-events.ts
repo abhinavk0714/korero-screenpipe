@@ -767,6 +767,10 @@ export function usePiForegroundEvents({
                 model: getActivePreset()?.model,
                 has_tool_use: blocksSnapshot.some((b) => b.type === "tool"),
                 response_length: streamedText?.length ?? 0,
+                // Completion proves delivery, not usefulness. Later explicit
+                // feedback/copy events may upgrade this result to confirmed
+                // useful or poor; silence must remain unverified.
+                value_observation_state: "not_verified",
                 ...telemetryContext,
               };
               setTimeout(() => {
@@ -908,6 +912,7 @@ export function usePiForegroundEvents({
             provider: getActivePreset()?.provider,
             model: getActivePreset()?.model,
             error_type: errorCategory,
+            value_observation_state: "result_failed",
             ...chatTelemetryContextForResponse(
               messagesRef.current,
               piMessageIdRef.current ?? "",

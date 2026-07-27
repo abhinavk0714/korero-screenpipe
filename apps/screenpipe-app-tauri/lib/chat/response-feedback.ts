@@ -14,6 +14,11 @@ export type ChatResponseFeedbackRating = "positive" | "negative";
 export type ChatResponseFeedbackAction = "submitted" | "changed";
 export type ChatResponseValueAction = "copy";
 export type HomeCardPresentation = "hero" | "secondary" | "quick_action";
+export type ValueObservationState =
+  | "not_verified"
+  | "confirmed_useful"
+  | "confirmed_poor"
+  | "result_failed";
 
 export type ChatTelemetryContext = {
   entry_source: ChatEntrySource;
@@ -123,6 +128,8 @@ export function chatResponseFeedbackProperties(
     ...context,
     rating,
     action,
+    value_observation_state:
+      rating === "positive" ? "confirmed_useful" : "confirmed_poor",
     has_tool_use: message.contentBlocks?.some((block) => block.type === "tool") ?? false,
     has_sources: (message.sourceCitations?.length ?? 0) > 0,
     was_steered: message.steeredResponse === true,
@@ -140,6 +147,7 @@ export function chatResponseValueActionProperties(
     surface: "chat_message" as const,
     ...context,
     action,
+    value_observation_state: "confirmed_useful" as const,
     has_tool_use: message.contentBlocks?.some((block) => block.type === "tool") ?? false,
     has_sources: (message.sourceCitations?.length ?? 0) > 0,
   };
