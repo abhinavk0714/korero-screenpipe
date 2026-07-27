@@ -59,14 +59,14 @@ export interface ConnectionSetupSuggestion {
 }
 
 const HOME_CARD_SLUGS_BY_GOAL: Record<UserGoalCategory, string[]> = {
-  default: ["automate-my-work", "day-recap", "time-breakdown", "missed-todos"],
+  default: ["day-recap", "time-breakdown", "automate-my-work", "missed-todos"],
   process_automation: [
     "automate-my-work",
     "day-recap",
     "missed-todos",
     "time-breakdown",
   ],
-  work_memory: ["day-recap", "missed-todos", "time-breakdown", "automate-my-work"],
+  work_memory: ["day-recap", "time-breakdown", "missed-todos", "automate-my-work"],
   meeting_follow_through: [
     "missed-todos",
     "day-recap",

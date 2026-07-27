@@ -47,6 +47,43 @@ describe("SummaryCards", () => {
     });
   });
 
+  it("puts the daily recap and time breakdown first for new users", () => {
+    render(
+      <SummaryCards
+        onSendMessage={vi.fn()}
+        customTemplates={[]}
+        onSaveCustomTemplate={vi.fn()}
+        onUpdateCustomTemplate={vi.fn()}
+        onDeleteCustomTemplate={vi.fn()}
+        userGoalCategory="work_memory"
+      />,
+    );
+
+    const cards = screen.getAllByTestId(/^summary-card-/);
+    expect(cards.slice(0, 4).map((card) => card.dataset.testid)).toEqual([
+      "summary-card-day-recap",
+      "summary-card-time-breakdown",
+      "summary-card-missed-todos",
+      "summary-card-automate-my-work",
+    ]);
+    expect(captureMock).toHaveBeenCalledWith("home_card_impression", {
+      schema_version: 1,
+      surface: "chat_home",
+      layout_version: "home_v2",
+      card: "day_recap",
+      position: 1,
+      presentation: "hero",
+    });
+    expect(captureMock).toHaveBeenCalledWith("home_card_impression", {
+      schema_version: 1,
+      surface: "chat_home",
+      layout_version: "home_v2",
+      card: "other_builtin",
+      position: 2,
+      presentation: "secondary",
+    });
+  });
+
   it("reorders an open Home view when the General Settings goal changes", () => {
     const props = {
       onSendMessage: vi.fn(),
@@ -131,8 +168,8 @@ describe("SummaryCards", () => {
       surface: "chat_home",
       layout_version: "home_v2",
       card: "automate_my_work",
-      position: 1,
-      presentation: "hero",
+      position: 3,
+      presentation: "quick_action",
     });
     expect(screen.getByRole("button", { name: /automate my work/i }).closest(".ph-no-capture"))
       .not.toBeNull();
