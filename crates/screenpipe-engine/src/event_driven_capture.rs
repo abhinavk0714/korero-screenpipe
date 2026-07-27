@@ -2543,11 +2543,20 @@ async fn do_capture(
             crate::ui_recorder::record_tree_walk(crate::ui_recorder::TreeWalkOutcome::Error);
         }
         // Skipped: user filter / incognito — not a walk attempt, don't count.
+        // OCR-preferred providers also skip the tree intentionally and continue
+        // through the screenshot path below.
         TreeWalkResult::Skipped(_) => {}
     }
 
     let tree_snapshot = match tree_walk_result {
         TreeWalkResult::Found(snap) => Some(snap),
+        TreeWalkResult::Skipped(reason) if reason.uses_ocr_fallback() => {
+            debug!(
+                "tree walk skipped ({}); continuing with screenshot OCR on monitor {}",
+                reason, params.monitor_id
+            );
+            None
+        }
         TreeWalkResult::Skipped(reason) => {
             debug!(
                 "skipping capture: window filtered ({}) on monitor {}",

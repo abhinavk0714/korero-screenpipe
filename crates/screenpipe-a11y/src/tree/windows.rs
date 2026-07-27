@@ -273,6 +273,20 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             return Ok(TreeWalkResult::Skipped(SkipReason::NotInIncludeList));
         }
 
+        // Excel's cached full-subtree provider can block the foreground UI for
+        // several seconds while a worksheet filter menu is opening. That cache
+        // call is synchronous and cannot be interrupted by the walk deadline.
+        // Preserve the frame through the explicit OCR fallback instead.
+        if crate::platform::windows_uia::prefers_ocr_over_uia_tree(&app_name) {
+            debug!(
+                app = %app_name,
+                pid,
+                title = %window_name,
+                "a11y: skipped full tree — provider prefers OCR"
+            );
+            return Ok(TreeWalkResult::Skipped(SkipReason::OcrPreferred));
+        }
+
         debug!(app = %app_name, pid, title = %window_name, "a11y: capturing window tree");
 
         // Use adaptive budget overrides when set
