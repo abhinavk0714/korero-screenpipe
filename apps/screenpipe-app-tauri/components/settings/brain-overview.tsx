@@ -40,6 +40,7 @@ import {
 import { LiveViewCard as OverviewCard } from "@/components/settings/live-view-card";
 import { LiveViewCreateDashboardDialog } from "@/components/settings/live-view-create-dashboard-dialog";
 import { LiveViewDashboardSwitcher } from "@/components/settings/live-view-dashboard-switcher";
+import { LiveViewShareDialog } from "@/components/settings/live-view-share-dialog";
 import { LiveViewLayoutEditor } from "@/components/settings/live-view-layout-editor";
 import { LiveViewOnboardingActivation } from "@/components/settings/live-view-onboarding-activation";
 import { LiveViewOnboardingGuide } from "@/components/settings/live-view-onboarding-guide";
@@ -195,8 +196,7 @@ function liveViewAnalyticsProperties(
     time_range: targetView.timeRange,
     has_result: resultSlots.length > 0,
     all_bound_blocks_have_results:
-      boundSlots.length > 0 &&
-      boundSlots.every((slot) => slot.value !== null),
+      boundSlots.length > 0 && boundSlots.every((slot) => slot.value !== null),
     reviewed_block_count:
       positiveFeedbackBlockCount + negativeFeedbackBlockCount,
     positive_feedback_block_count: positiveFeedbackBlockCount,
@@ -422,6 +422,7 @@ export function BrainOverview({
   const [templateKits, setTemplateKits] = useState<BrainViewTemplateKit[]>([]);
   const [templateGalleryOpen, setTemplateGalleryOpen] = useState(false);
   const [createDashboardOpen, setCreateDashboardOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [undoView, setUndoView] = useState<ViewDefinition | null>(null);
   const [undoRevision, setUndoRevision] = useState<number | null>(null);
   const [previewDestination, setPreviewDestination] =
@@ -735,8 +736,7 @@ export function BrainOverview({
       ...liveViewAnalyticsProperties(view, views.length),
       entry_method,
       is_onboarding: Boolean(onboardingActivation),
-      onboarding_goal_category:
-        onboardingActivation?.goalCategory ?? "unknown",
+      onboarding_goal_category: onboardingActivation?.goalCategory ?? "unknown",
     });
   }, [onboardingActivation, view, views.length]);
 
@@ -748,10 +748,7 @@ export function BrainOverview({
     const captureVisibleResult = () => {
       if (document.visibilityState === "hidden") return;
       const previous = lastViewedResultRef.current;
-      if (
-        previous?.viewId === view.id &&
-        previous.signature === signature
-      ) {
+      if (previous?.viewId === view.id && previous.signature === signature) {
         return;
       }
       const entryMethod = !previous
@@ -835,9 +832,7 @@ export function BrainOverview({
         trigger,
         requested_block_count: boundSlots.length,
         requested_pipe_count: pipeNames.length,
-        is_onboarding: Boolean(
-          getOnboardingLiveViewActivation(targetView.id),
-        ),
+        is_onboarding: Boolean(getOnboardingLiveViewActivation(targetView.id)),
       };
       posthog.capture("live_view_refresh_requested", analyticsProperties);
       if (pipeNames.length === 0) {
@@ -1162,6 +1157,7 @@ export function BrainOverview({
     setUndoRevision(null);
     setReplaceConfirmationOpen(false);
     setCreateDashboardOpen(false);
+    setShareOpen(false);
   };
 
   const selectDashboard = (id: string) => {
@@ -1774,11 +1770,7 @@ export function BrainOverview({
         template_id: kit.id,
         refresh_requested: true,
       });
-      void refreshConnectedPipes(
-        installedView,
-        undefined,
-        "template_applied",
-      );
+      void refreshConnectedPipes(installedView, undefined, "template_applied");
     } catch (installError) {
       posthog.capture("live_view_dashboard_save_failed", {
         analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
@@ -2458,6 +2450,7 @@ export function BrainOverview({
             onCreate={beginCreate}
             onRename={renameDashboard}
             onDuplicate={duplicateDashboard}
+            onShare={() => setShareOpen(true)}
             onDelete={deleteDashboard}
           />
           <LiveViewCreateDashboardDialog
@@ -2470,6 +2463,12 @@ export function BrainOverview({
               generate(prompt, "dashboard", preset, "new-dashboard")
             }
             onCreateBlank={beginManualCreate}
+          />
+          <LiveViewShareDialog
+            open={shareOpen}
+            onOpenChange={setShareOpen}
+            view={view}
+            userToken={settings.user?.token ?? null}
           />
           <p className="mt-2 text-xs text-muted-foreground">
             {onboardingColdStart
@@ -2750,11 +2749,7 @@ export function BrainOverview({
                 recordCardFeedback(slot, rating, correction)
               }
               onRegenerate={() =>
-                void refreshConnectedPipes(
-                  view,
-                  [slot],
-                  "card_regenerated",
-                )
+                void refreshConnectedPipes(view, [slot], "card_regenerated")
               }
               onAiEdit={(prompt) => editSlotWithAi(slot, prompt)}
             />

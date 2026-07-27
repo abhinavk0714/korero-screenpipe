@@ -4,7 +4,14 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { Copy, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  Copy,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  Share2,
+  Trash2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -45,6 +52,7 @@ export function LiveViewDashboardSwitcher({
   onCreate,
   onRename,
   onDuplicate,
+  onShare,
   onDelete,
 }: {
   views: BrainViewDefinition[];
@@ -55,6 +63,7 @@ export function LiveViewDashboardSwitcher({
   onCreate: () => void;
   onRename: (title: string) => void | Promise<void>;
   onDuplicate: () => void | Promise<void>;
+  onShare: () => void;
   onDelete: () => void | Promise<void>;
 }) {
   const [renameOpen, setRenameOpen] = useState(false);
@@ -130,6 +139,9 @@ export function LiveViewDashboardSwitcher({
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => void onDuplicate()}>
                 <Copy className="mr-2 h-3.5 w-3.5" /> duplicate
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={onShare}>
+                <Share2 className="mr-2 h-3.5 w-3.5" /> share snapshot
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem

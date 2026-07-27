@@ -39,6 +39,7 @@ describe("LiveViewDashboardSwitcher", () => {
     const onCreate = vi.fn();
     const onRename = vi.fn();
     const onDuplicate = vi.fn();
+    const onShare = vi.fn();
     const onDelete = vi.fn();
     render(
       <LiveViewDashboardSwitcher
@@ -49,6 +50,7 @@ describe("LiveViewDashboardSwitcher", () => {
         onCreate={onCreate}
         onRename={onRename}
         onDuplicate={onDuplicate}
+        onShare={onShare}
         onDelete={onDelete}
       />,
     );
@@ -82,6 +84,14 @@ describe("LiveViewDashboardSwitcher", () => {
     });
     fireEvent.click(await screen.findByText("duplicate"));
     expect(onDuplicate).toHaveBeenCalledTimes(1);
+
+    fireEvent.pointerDown(screen.getByTestId("overview-dashboard-menu"), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    fireEvent.click(await screen.findByText("share snapshot"));
+    expect(onShare).toHaveBeenCalledTimes(1);
 
     fireEvent.pointerDown(screen.getByTestId("overview-dashboard-menu"), {
       button: 0,
