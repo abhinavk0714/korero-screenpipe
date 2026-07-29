@@ -584,7 +584,8 @@ These apps are common on Windows but have **never been tested** with the event-d
 | **Productivity** | | | |
 | Notion | ? | unknown | Electron |
 | Obsidian | ? | unknown | Electron |
-| Word / Excel / PowerPoint | ? | unknown | native Win32, historically good UIA |
+| Excel | OCR-NEEDED | full-tree UIA stalls filter menus | bypass full subtree and preserve visible content through OCR |
+| Word / PowerPoint | ? | unknown | native Win32, historically good UIA |
 | Outlook | ? | unknown | mixed native/web |
 | OneNote | ? | unknown | UWP, should have good UIA |
 | **Media / Creative** | | | |
@@ -608,6 +609,12 @@ These apps are common on Windows but have **never been tested** with the event-d
 4. Edge / Firefox — browser is primary use
 5. Notion / Obsidian — knowledge workers
 6. Office apps — enterprise users
+
+**Excel responsiveness regression:** With recording active and Enhanced AI both on
+and off, open a worksheet with column filters and repeatedly open different filter
+menus. Each menu must appear without a multi-second stall. Logs should show
+`provider prefers OCR`, and a search for visible worksheet text should return OCR-backed
+frames rather than a cached full-tree UIA capture.
 
 **How to verify an app:**
 ```bash

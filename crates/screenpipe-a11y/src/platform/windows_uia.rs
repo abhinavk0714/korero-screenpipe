@@ -1098,11 +1098,25 @@ fn refresh_focused_element(
 /// with a different provider and is unaffected.
 const FRAGILE_UIA_TREE_PROVIDERS: &[&str] = &["outlook.exe"];
 
+/// Process names whose full cached UIA subtree is too disruptive to materialize.
+///
+/// Excel's virtualized worksheet/filter provider can service a
+/// `TreeScope_Subtree` cache request on Excel's UI thread for several seconds.
+/// The cached request is one synchronous COM call, so the normal mid-walk deadline
+/// cannot interrupt it. The paired-capture path uses OCR for these apps instead.
+const OCR_PREFERRED_UIA_TREE_PROVIDERS: &[&str] = &["excel.exe"];
+
 /// Returns true if `app_name` is a process whose UIA provider can crash when we capture
 /// its full accessibility tree. See [`FRAGILE_UIA_TREE_PROVIDERS`].
 pub(crate) fn is_fragile_uia_tree_provider(app_name: &str) -> bool {
     let lower = app_name.to_ascii_lowercase();
     FRAGILE_UIA_TREE_PROVIDERS.iter().any(|p| lower == *p)
+}
+
+/// Returns true when full-subtree UIA capture should be replaced by screenshot OCR.
+pub(crate) fn prefers_ocr_over_uia_tree(app_name: &str) -> bool {
+    let lower = app_name.to_ascii_lowercase();
+    OCR_PREFERRED_UIA_TREE_PROVIDERS.iter().any(|p| lower == *p)
 }
 
 /// Capture a window tree and send it through the channel if it changed.
@@ -1138,6 +1152,14 @@ fn capture_and_send(
     if is_fragile_uia_tree_provider(&app_name) {
         trace!(
             "Skipping a11y tree capture for fragile UIA provider '{}' (crash-prone)",
+            app_name
+        );
+        return;
+    }
+
+    if prefers_ocr_over_uia_tree(&app_name) {
+        trace!(
+            "Skipping full a11y tree capture for '{}' (OCR-preferred provider)",
             app_name
         );
         return;
@@ -1349,6 +1371,19 @@ mod tests {
         assert!(!is_fragile_uia_tree_provider("chrome.exe"));
         assert!(!is_fragile_uia_tree_provider("notepad.exe"));
         assert!(!is_fragile_uia_tree_provider(""));
+    }
+
+    #[test]
+    fn test_ocr_preferred_uia_provider_detection() {
+        assert!(prefers_ocr_over_uia_tree("EXCEL.EXE"));
+        assert!(prefers_ocr_over_uia_tree("excel.exe"));
+        assert!(prefers_ocr_over_uia_tree("Excel.exe"));
+
+        assert!(!prefers_ocr_over_uia_tree("excel"));
+        assert!(!prefers_ocr_over_uia_tree("excel-helper.exe"));
+        assert!(!prefers_ocr_over_uia_tree("powerpnt.exe"));
+        assert!(!prefers_ocr_over_uia_tree("winword.exe"));
+        assert!(!prefers_ocr_over_uia_tree(""));
     }
 
     #[test]

@@ -655,6 +655,17 @@ pub enum SkipReason {
     NotInIncludeList,
     /// Focused browser tab's URL matched a user-configured ignored URL.
     BlockedUrl,
+    /// The app's full accessibility provider is known to block its foreground UI.
+    /// Continue the frame capture with OCR instead of dropping the frame.
+    OcrPreferred,
+}
+
+impl SkipReason {
+    /// Whether a skipped tree walk should continue through the screenshot OCR path.
+    /// Privacy and user-filter skips must never fall back to pixels.
+    pub fn uses_ocr_fallback(&self) -> bool {
+        matches!(self, Self::OcrPreferred)
+    }
 }
 
 impl std::fmt::Display for SkipReason {
@@ -665,6 +676,9 @@ impl std::fmt::Display for SkipReason {
             SkipReason::UserIgnored => write!(f, "user-configured ignored window"),
             SkipReason::NotInIncludeList => write!(f, "not in included windows list"),
             SkipReason::BlockedUrl => write!(f, "user-configured ignored URL"),
+            SkipReason::OcrPreferred => {
+                write!(f, "accessibility provider bypassed in favor of OCR")
+            }
         }
     }
 }
@@ -1311,5 +1325,15 @@ mod tests {
         );
         let json = serde_json::to_string(&node).expect("serialize");
         assert!(!json.contains("\"lines\""));
+    }
+
+    #[test]
+    fn only_ocr_preferred_skip_allows_pixel_fallback() {
+        assert!(SkipReason::OcrPreferred.uses_ocr_fallback());
+        assert!(!SkipReason::Incognito.uses_ocr_fallback());
+        assert!(!SkipReason::ExcludedApp.uses_ocr_fallback());
+        assert!(!SkipReason::UserIgnored.uses_ocr_fallback());
+        assert!(!SkipReason::NotInIncludeList.uses_ocr_fallback());
+        assert!(!SkipReason::BlockedUrl.uses_ocr_fallback());
     }
 }
