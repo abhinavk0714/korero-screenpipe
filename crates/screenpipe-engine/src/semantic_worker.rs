@@ -153,7 +153,6 @@ async fn process_semantic_job(
     if candidate_parser_ids.is_empty() {
         emit_sampled_semantic_telemetry(
             job.frame_id,
-            &app,
             &candidate_parser_ids,
             None,
             "no_candidate",
@@ -169,14 +168,7 @@ async fn process_semantic_job(
     // copies before parsing and database work.
     drop(nodes);
     if adapted.tree.is_empty() {
-        emit_sampled_semantic_telemetry(
-            job.frame_id,
-            &app,
-            &candidate_parser_ids,
-            None,
-            "empty",
-            0,
-        );
+        emit_sampled_semantic_telemetry(job.frame_id, &candidate_parser_ids, None, "empty", 0);
         return Ok(());
     }
 
@@ -235,7 +227,6 @@ async fn process_semantic_job(
                 .await?;
             emit_sampled_semantic_telemetry(
                 job.frame_id,
-                &app,
                 &candidate_parser_ids,
                 Some(parser_id),
                 "handled",
@@ -257,7 +248,6 @@ async fn process_semantic_job(
         }
         ValidatedParseOutcome::Empty => emit_sampled_semantic_telemetry(
             job.frame_id,
-            &app,
             &candidate_parser_ids,
             result.selected_parser_id.as_deref(),
             "empty",
@@ -265,7 +255,6 @@ async fn process_semantic_job(
         ),
         ValidatedParseOutcome::NotHandled => emit_sampled_semantic_telemetry(
             job.frame_id,
-            &app,
             &candidate_parser_ids,
             None,
             "not_handled",
@@ -280,7 +269,6 @@ async fn process_semantic_job(
 /// analytics task, so semantic processing never awaits telemetry.
 fn emit_sampled_semantic_telemetry(
     frame_id: i64,
-    app: &AppIdentity,
     candidate_parser_ids: &[String],
     selected_parser_id: Option<&str>,
     outcome: &'static str,
@@ -293,7 +281,6 @@ fn emit_sampled_semantic_telemetry(
     crate::analytics::capture_event_nonblocking(
         "semantic_parser_sample",
         semantic_telemetry_properties(
-            app,
             candidate_parser_ids,
             selected_parser_id,
             outcome,
@@ -307,30 +294,17 @@ fn should_sample_semantic_telemetry(frame_id: i64) -> bool {
 }
 
 fn semantic_telemetry_properties(
-    app: &AppIdentity,
     candidate_parser_ids: &[String],
     selected_parser_id: Option<&str>,
     outcome: &'static str,
     parse_duration_us: u64,
 ) -> Value {
-    let app_identifier = semantic_telemetry_app_identifier(app);
     json!({
-        "semantic_app_identifier": app_identifier,
         "semantic_candidate_parser_ids": candidate_parser_ids,
         "semantic_selected_parser_id": selected_parser_id,
         "semantic_outcome": outcome,
         "semantic_parse_duration_us": parse_duration_us,
     })
-}
-
-fn semantic_telemetry_app_identifier(app: &AppIdentity) -> &str {
-    if let Some(app_id) = app.app_id.as_deref() {
-        return app_id;
-    }
-    if let Some(executable) = app.executable.as_deref() {
-        return executable.rsplit(['/', '\\']).next().unwrap_or(executable);
-    }
-    &app.display_name
 }
 
 fn captured_semantic_nodes(
@@ -564,16 +538,7 @@ mod tests {
 
     #[test]
     fn semantic_telemetry_properties_exclude_capture_content() {
-        let app = AppIdentity {
-            platform: Platform::Macos,
-            app_id: Some("com.tinyspeck.slackmacgap".into()),
-            executable: Some("Slack".into()),
-            display_name: "Slack".into(),
-            version: Some("4.39.95".into()),
-            browser_url: Some("https://private.example.com/thread/123".into()),
-        };
         let properties = semantic_telemetry_properties(
-            &app,
             &[
                 "app.macos.slack.content_list".into(),
                 "family.conversation".into(),
@@ -583,25 +548,17 @@ mod tests {
             73,
         );
 
-        assert_eq!(
-            properties["semantic_app_identifier"],
-            "com.tinyspeck.slackmacgap"
-        );
         assert_eq!(properties["semantic_outcome"], "handled");
         assert_eq!(properties["semantic_parse_duration_us"], 73);
+        assert_eq!(properties.as_object().map(|object| object.len()), Some(4));
         let serialized = properties.to_string();
-        assert!(!serialized.contains("private.example.com"));
+        assert!(!serialized.contains("app_identifier"));
+        assert!(!serialized.contains("display_name"));
+        assert!(!serialized.contains("executable"));
         assert!(!serialized.contains("browser_url"));
         assert!(!serialized.contains("window_name"));
         assert!(!serialized.contains("frame_id"));
         assert!(!serialized.contains("text_content"));
-
-        let executable_only = AppIdentity {
-            app_id: None,
-            executable: Some("/Users/private-user/Applications/Slack".into()),
-            ..app
-        };
-        assert_eq!(semantic_telemetry_app_identifier(&executable_only), "Slack");
     }
 
     #[tokio::test]
