@@ -11,7 +11,10 @@ import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-export const WEBDRIVER_PORT = 4445;
+// Isolate concurrent local E2E worktrees without changing the established default.
+export const WEBDRIVER_PORT = Number(
+  process.env.SCREENPIPE_E2E_WEBDRIVER_PORT ?? '4445',
+);
 /** Focus/server port — single-instance check posts here; must be free for E2E.
  *  Defaults to a non-default port so the e2e instance can coexist with a
  *  developer's running production screenpipe app (which holds 11435). The

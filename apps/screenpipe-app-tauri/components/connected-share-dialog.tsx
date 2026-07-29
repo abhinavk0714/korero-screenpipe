@@ -4,7 +4,17 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, Copy, ExternalLink, Loader2, Send } from "lucide-react";
+import {
+  AlertCircle,
+  Check,
+  Copy,
+  ExternalLink,
+  Loader2,
+  MessageSquareText,
+  RefreshCw,
+  Send,
+  Sparkles,
+} from "lucide-react";
 import posthog from "posthog-js";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { Button } from "@/components/ui/button";
@@ -29,14 +39,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import { localFetch } from "@/lib/api";
 import {
-  directShareConnections,
+  buildConnectedShareChatPrompt,
   renderConnectedShareArtifact,
+  shareConnectionAvailability,
   type ConnectedShareArtifact,
-  type DirectShareConnections,
+  type ShareConnectionAvailability,
 } from "@/lib/connected-share";
+import { showChatWithPrefill } from "@/lib/chat-utils";
 import { commands } from "@/lib/utils/tauri";
 
-type Destination = "slack" | "linear" | "copy";
+type Destination = "slack" | "linear" | "copy" | "chat-linear" | "chat-notion";
 
 type SlackInstance = {
   instance: string | null;
@@ -63,9 +75,9 @@ type Receipt = {
 
 const SELF_SLACK_TARGET = "__self__";
 const DEFAULT_SLACK_INSTANCE = "__default__";
-const EMPTY_CONNECTIONS: DirectShareConnections = {
-  slack: false,
-  linear: false,
+const EMPTY_AVAILABILITY: ShareConnectionAvailability = {
+  direct: { slack: false, linear: false },
+  chat: { linear: false, notion: false },
 };
 
 function responseError(body: unknown, fallback: string): string {
@@ -122,17 +134,26 @@ export function ConnectedShareDialog({
   const [selectedSectionIds, setSelectedSectionIds] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [destination, setDestination] = useState<Destination>("copy");
-  const [connections, setConnections] = useState(EMPTY_CONNECTIONS);
+  const [availability, setAvailability] = useState(EMPTY_AVAILABILITY);
   const [connectionsLoading, setConnectionsLoading] = useState(false);
+  const [connectionsError, setConnectionsError] = useState<string | null>(null);
+  const [connectionsRefresh, setConnectionsRefresh] = useState(0);
   const [sending, setSending] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [slackInstances, setSlackInstances] = useState<SlackInstance[]>([]);
   const [slackInstance, setSlackInstance] = useState(DEFAULT_SLACK_INSTANCE);
   const [slackChannels, setSlackChannels] = useState<SlackChannel[]>([]);
   const [slackChannelsLoading, setSlackChannelsLoading] = useState(false);
+  const [slackChannelsError, setSlackChannelsError] = useState<string | null>(
+    null,
+  );
+  const [slackRefresh, setSlackRefresh] = useState(0);
   const [slackTarget, setSlackTarget] = useState(SELF_SLACK_TARGET);
   const [linearTeams, setLinearTeams] = useState<LinearTeam[]>([]);
   const [linearTeamsLoading, setLinearTeamsLoading] = useState(false);
+  const [linearTeamsError, setLinearTeamsError] = useState<string | null>(null);
+  const [linearRefresh, setLinearRefresh] = useState(0);
   const [linearTeamId, setLinearTeamId] = useState("");
   const [linearTitle, setLinearTitle] = useState(artifact.title);
 
@@ -141,6 +162,7 @@ export function ConnectedShareDialog({
       setSelectedSectionIds(ids);
       setMessage(renderConnectedShareArtifact(artifact, ids));
       setReceipt(null);
+      setActionError(null);
     },
     [artifact],
   );
@@ -150,34 +172,69 @@ export function ConnectedShareDialog({
     resetPreview(allSectionIds);
     setLinearTitle(artifact.title);
     setDestination("copy");
-    setConnections(EMPTY_CONNECTIONS);
-    setConnectionsLoading(true);
+    setAvailability(EMPTY_AVAILABILITY);
+    setConnectionsError(null);
     setReceipt(null);
+    setActionError(null);
     setSlackInstances([]);
     setSlackInstance(DEFAULT_SLACK_INSTANCE);
     setSlackChannels([]);
+    setSlackChannelsError(null);
     setSlackTarget(SELF_SLACK_TARGET);
     setLinearTeams([]);
+    setLinearTeamsError(null);
     setLinearTeamId("");
     posthog.capture("connected_share_opened", {
       surface: artifact.surface,
       section_count: artifact.sections.length,
     });
+  }, [
+    allSectionIds,
+    artifact.sections.length,
+    artifact.surface,
+    artifact.title,
+    open,
+    resetPreview,
+  ]);
 
+  useEffect(() => {
+    if (!open) return;
     let cancelled = false;
+    setConnectionsLoading(true);
+    setConnectionsError(null);
     void localFetch("/connections")
       .then(async (response) => {
         const body = await response.json();
+        if (!response.ok) {
+          throw new Error(
+            responseError(body, "Couldn't check connected apps."),
+          );
+        }
         const entries = Array.isArray(body?.data) ? body.data : [];
-        const ready = directShareConnections(entries);
+        const ready = shareConnectionAvailability(entries);
         if (cancelled) return;
-        setConnections(ready);
+        setAvailability(ready);
         setDestination(
-          ready.slack ? "slack" : ready.linear ? "linear" : "copy",
+          ready.direct.slack
+            ? "slack"
+            : ready.direct.linear
+              ? "linear"
+              : ready.chat.linear
+                ? "chat-linear"
+                : ready.chat.notion
+                  ? "chat-notion"
+                  : "copy",
         );
       })
-      .catch(() => {
-        if (!cancelled) setConnections(EMPTY_CONNECTIONS);
+      .catch((error) => {
+        if (cancelled) return;
+        setAvailability(EMPTY_AVAILABILITY);
+        setDestination("copy");
+        setConnectionsError(
+          error instanceof Error
+            ? error.message
+            : "Couldn't check connected apps.",
+        );
       })
       .finally(() => {
         if (!cancelled) setConnectionsLoading(false);
@@ -185,16 +242,10 @@ export function ConnectedShareDialog({
     return () => {
       cancelled = true;
     };
-  }, [
-    allSectionIds,
-    artifact.sections.length,
-    artifact.surface,
-    open,
-    resetPreview,
-  ]);
+  }, [connectionsRefresh, open]);
 
   useEffect(() => {
-    if (!open || !connections.slack) return;
+    if (!open || !availability.direct.slack) return;
     let cancelled = false;
     void localFetch("/connections/slack/instances")
       .then(async (response) => {
@@ -219,12 +270,13 @@ export function ConnectedShareDialog({
     return () => {
       cancelled = true;
     };
-  }, [connections.slack, open]);
+  }, [availability.direct.slack, open]);
 
   useEffect(() => {
-    if (!open || !connections.slack || destination !== "slack") return;
+    if (!open || !availability.direct.slack || destination !== "slack") return;
     let cancelled = false;
     setSlackChannelsLoading(true);
+    setSlackChannelsError(null);
     setSlackTarget(SELF_SLACK_TARGET);
     const instanceQuery =
       slackInstance !== DEFAULT_SLACK_INSTANCE
@@ -235,7 +287,11 @@ export function ConnectedShareDialog({
     )
       .then(async (response) => {
         const body = await response.json();
-        if (!response.ok || body?.ok === false) return [];
+        if (!response.ok || body?.ok === false) {
+          throw new Error(
+            responseError(body, "Slack channels aren't available."),
+          );
+        }
         return (Array.isArray(body?.channels) ? body.channels : [])
           .filter(
             (channel: any) =>
@@ -251,8 +307,14 @@ export function ConnectedShareDialog({
       .then((channels) => {
         if (!cancelled) setSlackChannels(channels);
       })
-      .catch(() => {
-        if (!cancelled) setSlackChannels([]);
+      .catch((error) => {
+        if (cancelled) return;
+        setSlackChannels([]);
+        setSlackChannelsError(
+          error instanceof Error
+            ? error.message
+            : "Slack channels aren't available.",
+        );
       })
       .finally(() => {
         if (!cancelled) setSlackChannelsLoading(false);
@@ -260,12 +322,20 @@ export function ConnectedShareDialog({
     return () => {
       cancelled = true;
     };
-  }, [connections.slack, destination, open, slackInstance]);
+  }, [
+    availability.direct.slack,
+    destination,
+    open,
+    slackInstance,
+    slackRefresh,
+  ]);
 
   useEffect(() => {
-    if (!open || !connections.linear || destination !== "linear") return;
+    if (!open || !availability.direct.linear || destination !== "linear")
+      return;
     let cancelled = false;
     setLinearTeamsLoading(true);
+    setLinearTeamsError(null);
     void localFetch("/connections/linear/proxy/graphql", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -285,8 +355,15 @@ export function ConnectedShareDialog({
         setLinearTeams(teams);
         setLinearTeamId(teams[0]?.id ?? "");
       })
-      .catch(() => {
-        if (!cancelled) setLinearTeams([]);
+      .catch((error) => {
+        if (cancelled) return;
+        setLinearTeams([]);
+        setLinearTeamId("");
+        setLinearTeamsError(
+          error instanceof Error
+            ? error.message
+            : "Couldn't load Linear teams.",
+        );
       })
       .finally(() => {
         if (!cancelled) setLinearTeamsLoading(false);
@@ -294,7 +371,7 @@ export function ConnectedShareDialog({
     return () => {
       cancelled = true;
     };
-  }, [connections.linear, destination, open]);
+  }, [availability.direct.linear, destination, linearRefresh, open]);
 
   const setSectionChecked = (id: string, checked: boolean) => {
     const next = checked
@@ -312,7 +389,32 @@ export function ConnectedShareDialog({
       const team = linearTeams.find((item) => item.id === linearTeamId);
       return team ? `create issue in ${team.key}` : "choose a Linear team";
     }
+    if (value === "chat-linear") return "prepare Linear in Chat";
+    if (value === "chat-notion") return "prepare Notion in Chat";
     return "copy snapshot";
+  };
+
+  const selectDestination = (next: Destination) => {
+    setDestination(next);
+    setReceipt(null);
+    setActionError(null);
+  };
+
+  const openConnection = (connectionId: "slack" | "linear" | "notion") => {
+    posthog.capture("connected_share_connection_requested", {
+      surface: artifact.surface,
+      connection: connectionId,
+    });
+    onOpenChange(false);
+    window.dispatchEvent(
+      new CustomEvent("open-settings", {
+        detail: {
+          section: "connections",
+          connectionId,
+          ...(connectionId === "slack" ? { scopeVariant: "send" } : {}),
+        },
+      }),
+    );
   };
 
   const copy = async () => {
@@ -386,10 +488,33 @@ export function ConnectedShareDialog({
     });
   };
 
+  const prepareInChat = async (provider: "linear" | "notion") => {
+    await showChatWithPrefill({
+      context: JSON.stringify({
+        kind: "screenpipe_share_context",
+        source: artifact.surface,
+        title: artifact.title,
+        snapshot: message,
+      }),
+      prompt: buildConnectedShareChatPrompt(provider),
+      displayLabel: `Share “${artifact.title}” to ${provider === "linear" ? "Linear" : "Notion"}`,
+      autoSend: false,
+      source: `connected-share-${artifact.surface}`,
+      useHomeChat: true,
+    });
+    posthog.capture("connected_share_chat_prepared", {
+      surface: artifact.surface,
+      destination: provider,
+      section_count: selectedSectionIds.length,
+    });
+    onOpenChange(false);
+  };
+
   const submit = async () => {
     if (!message.trim() || sending) return;
     setSending(true);
     setReceipt(null);
+    setActionError(null);
     posthog.capture("connected_share_confirmed", {
       surface: artifact.surface,
       destination,
@@ -399,7 +524,9 @@ export function ConnectedShareDialog({
       if (destination === "copy") await copy();
       if (destination === "slack") await sendToSlack();
       if (destination === "linear") await sendToLinear();
-      if (destination !== "copy") {
+      if (destination === "chat-linear") await prepareInChat("linear");
+      if (destination === "chat-notion") await prepareInChat("notion");
+      if (destination === "slack" || destination === "linear") {
         posthog.capture("connected_share_completed", {
           surface: artifact.surface,
           destination,
@@ -416,9 +543,12 @@ export function ConnectedShareDialog({
         destination,
         error_type: error instanceof Error ? error.name : "unknown",
       });
+      const message =
+        error instanceof Error ? error.message : "The action did not complete.";
+      setActionError(message);
       toast({
-        title: "couldn't send snapshot",
-        description: error instanceof Error ? error.message : String(error),
+        title: "couldn't complete sharing",
+        description: message,
         variant: "destructive",
       });
     } finally {
@@ -430,72 +560,247 @@ export function ConnectedShareDialog({
     message.trim().length > 0 &&
     message.length <= 39_000 &&
     selectedSectionIds.length > 0 &&
+    !receipt &&
     (destination !== "linear" || Boolean(linearTeamId && linearTitle.trim()));
+
+  const noConnectedShareApps =
+    !availability.direct.slack &&
+    !availability.direct.linear &&
+    !availability.chat.linear &&
+    !availability.chat.notion;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl gap-5 rounded-none">
+      <DialogContent
+        className="max-h-[calc(100vh-2rem)] max-w-2xl gap-5 overflow-y-auto rounded-none"
+        data-testid="connected-share-dialog"
+      >
         <DialogHeader>
           <DialogTitle>send a snapshot</DialogTitle>
           <DialogDescription>
-            Choose an exact destination, review what leaves Screenpipe, then
-            send.
+            Choose exactly where this frozen copy goes and review every word.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-2 sm:grid-cols-3" aria-label="destination">
-          {connections.slack && (
-            <button
-              type="button"
-              className={`flex items-center gap-2 border px-3 py-2 text-left text-sm ${destination === "slack" ? "border-foreground bg-muted" : "border-border"}`}
-              onClick={() => {
-                setDestination("slack");
-                setReceipt(null);
-              }}
-            >
-              <SlackMark /> Slack
-            </button>
-          )}
-          {connections.linear && (
-            <button
-              type="button"
-              className={`flex items-center gap-2 border px-3 py-2 text-left text-sm ${destination === "linear" ? "border-foreground bg-muted" : "border-border"}`}
-              onClick={() => {
-                setDestination("linear");
-                setReceipt(null);
-              }}
-            >
-              <img src="/images/linear.svg" alt="" className="h-4 w-4" /> Linear
-            </button>
-          )}
-          <button
-            type="button"
-            className={`flex items-center gap-2 border px-3 py-2 text-left text-sm ${destination === "copy" ? "border-foreground bg-muted" : "border-border"}`}
-            onClick={() => {
-              setDestination("copy");
-              setReceipt(null);
-            }}
-          >
-            <Copy className="h-4 w-4" /> clipboard
-          </button>
+        <div
+          className="flex items-start gap-2 border border-border bg-muted/30 px-3 py-2 text-xs"
+          data-testid="connected-share-safety"
+        >
+          <MessageSquareText className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <p>
+            <span className="font-medium">Review first.</span> Opening this
+            screen does not run AI or send anything. Only the final button below
+            performs the named action.
+          </p>
         </div>
 
-        {!connectionsLoading && !connections.slack && !connections.linear && (
-          <div className="flex items-center justify-between gap-3 border border-border px-3 py-2 text-xs text-muted-foreground">
-            <span>
-              Connect Slack or a direct Linear API key to send without copying.
-            </span>
+        {connectionsLoading && (
+          <p
+            className="flex items-center gap-1.5 text-xs text-muted-foreground"
+            role="status"
+          >
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> checking connected
+            apps
+          </p>
+        )}
+
+        {connectionsError && (
+          <div
+            className="flex items-start justify-between gap-3 border border-destructive/60 px-3 py-2 text-xs"
+            role="alert"
+            data-testid="connected-share-connections-error"
+          >
+            <div className="flex items-start gap-2">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
+              <div>
+                <p className="font-medium">
+                  connected apps could not be checked
+                </p>
+                <p className="mt-0.5 text-muted-foreground">
+                  {connectionsError} Clipboard still works.
+                </p>
+              </div>
+            </div>
             <Button
               type="button"
-              variant="outline"
+              variant="ghost"
               size="sm"
-              className="h-8 rounded-none"
-              onClick={() => {
-                window.location.href = "/?section=connections";
-              }}
+              className="h-7 rounded-none px-2"
+              onClick={() => setConnectionsRefresh((value) => value + 1)}
             >
-              connections
+              <RefreshCw className="mr-1 h-3 w-3" /> retry
             </Button>
+          </div>
+        )}
+
+        {!connectionsLoading && !connectionsError && (
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium">direct</p>
+                <span className="text-[10px] text-muted-foreground">no AI</span>
+              </div>
+              <div
+                className="grid gap-2 sm:grid-cols-3"
+                aria-label="direct destination"
+              >
+                {availability.direct.slack && (
+                  <button
+                    type="button"
+                    data-testid="connected-share-destination-slack"
+                    className={`flex items-center gap-2 border px-3 py-2 text-left text-sm ${destination === "slack" ? "border-foreground bg-muted" : "border-border"}`}
+                    onClick={() => selectDestination("slack")}
+                  >
+                    <SlackMark /> Slack
+                  </button>
+                )}
+                {availability.direct.linear && (
+                  <button
+                    type="button"
+                    data-testid="connected-share-destination-linear"
+                    className={`flex items-center gap-2 border px-3 py-2 text-left text-sm ${destination === "linear" ? "border-foreground bg-muted" : "border-border"}`}
+                    onClick={() => selectDestination("linear")}
+                  >
+                    <img src="/images/linear.svg" alt="" className="h-4 w-4" />
+                    Linear
+                  </button>
+                )}
+                <button
+                  type="button"
+                  data-testid="connected-share-destination-copy"
+                  className={`flex items-center gap-2 border px-3 py-2 text-left text-sm ${destination === "copy" ? "border-foreground bg-muted" : "border-border"}`}
+                  onClick={() => selectDestination("copy")}
+                >
+                  <Copy className="h-4 w-4" /> clipboard
+                </button>
+              </div>
+            </div>
+
+            {(availability.chat.linear || availability.chat.notion) && (
+              <div
+                className="space-y-1.5"
+                data-testid="connected-share-chat-destinations"
+              >
+                <div className="flex items-center justify-between">
+                  <p className="flex items-center gap-1 text-xs font-medium">
+                    <Sparkles className="h-3 w-3" /> with Chat
+                  </p>
+                  <span className="text-[10px] text-muted-foreground">
+                    AI-assisted
+                  </span>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {availability.chat.linear && (
+                    <button
+                      type="button"
+                      data-testid="connected-share-destination-chat-linear"
+                      className={`flex items-center justify-between border px-3 py-2 text-left text-sm ${destination === "chat-linear" ? "border-foreground bg-muted" : "border-border"}`}
+                      onClick={() => selectDestination("chat-linear")}
+                    >
+                      <span className="flex items-center gap-2">
+                        <img
+                          src="/images/linear.svg"
+                          alt=""
+                          className="h-4 w-4"
+                        />
+                        Linear
+                      </span>
+                      <span className="text-[10px] text-muted-foreground">
+                        prepare prompt
+                      </span>
+                    </button>
+                  )}
+                  {availability.chat.notion && (
+                    <button
+                      type="button"
+                      data-testid="connected-share-destination-chat-notion"
+                      className={`flex items-center justify-between border px-3 py-2 text-left text-sm ${destination === "chat-notion" ? "border-foreground bg-muted" : "border-border"}`}
+                      onClick={() => selectDestination("chat-notion")}
+                    >
+                      <span className="flex items-center gap-2">
+                        <img
+                          src="/images/notion.svg"
+                          alt=""
+                          className="h-4 w-4 dark:invert"
+                        />
+                        Notion
+                      </span>
+                      <span className="text-[10px] text-muted-foreground">
+                        prepare prompt
+                      </span>
+                    </button>
+                  )}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  “Prepare” opens an editable Chat prompt. AI still does not run
+                  until you submit it, and Chat must ask before creating
+                  anything.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!connectionsLoading && !connectionsError && noConnectedShareApps && (
+          <div
+            className="space-y-3 border border-border p-3"
+            data-testid="connected-share-empty"
+          >
+            <div>
+              <p className="text-xs font-medium">add a sharing destination</p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                Nothing is connected for sharing yet. Clipboard works now, or
+                connect an app for the next snapshot.
+              </p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {[
+                {
+                  id: "slack" as const,
+                  name: "Slack",
+                  icon: <SlackMark />,
+                  detail: "send directly · no AI",
+                },
+                {
+                  id: "linear" as const,
+                  name: "Linear",
+                  icon: (
+                    <img src="/images/linear.svg" alt="" className="h-4 w-4" />
+                  ),
+                  detail: "review with Chat",
+                },
+                {
+                  id: "notion" as const,
+                  name: "Notion",
+                  icon: (
+                    <img
+                      src="/images/notion.svg"
+                      alt=""
+                      className="h-4 w-4 dark:invert"
+                    />
+                  ),
+                  detail: "review with Chat",
+                },
+              ].map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  data-testid={`connected-share-connect-${item.id}`}
+                  className="border border-border p-2 text-left hover:bg-muted"
+                  onClick={() => openConnection(item.id)}
+                >
+                  <span className="flex items-center gap-2 text-xs font-medium">
+                    {item.icon} {item.name}
+                  </span>
+                  <span className="mt-1 block text-[10px] text-muted-foreground">
+                    {item.detail}
+                  </span>
+                  <span className="mt-2 block text-[10px] underline">
+                    connect
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -506,7 +811,14 @@ export function ConnectedShareDialog({
                 <label className="text-xs text-muted-foreground">
                   workspace
                 </label>
-                <Select value={slackInstance} onValueChange={setSlackInstance}>
+                <Select
+                  value={slackInstance}
+                  onValueChange={(value) => {
+                    setSlackInstance(value);
+                    setReceipt(null);
+                    setActionError(null);
+                  }}
+                >
                   <SelectTrigger className="h-9 rounded-none text-xs">
                     <SelectValue />
                   </SelectTrigger>
@@ -527,7 +839,14 @@ export function ConnectedShareDialog({
               <label className="text-xs text-muted-foreground">
                 destination
               </label>
-              <Select value={slackTarget} onValueChange={setSlackTarget}>
+              <Select
+                value={slackTarget}
+                onValueChange={(value) => {
+                  setSlackTarget(value);
+                  setReceipt(null);
+                  setActionError(null);
+                }}
+              >
                 <SelectTrigger className="h-9 rounded-none text-xs">
                   <SelectValue />
                 </SelectTrigger>
@@ -548,6 +867,25 @@ export function ConnectedShareDialog({
                   <Loader2 className="h-3 w-3 animate-spin" /> loading channels
                 </p>
               )}
+              {slackChannelsError && (
+                <div
+                  className="flex items-start justify-between gap-2 text-[10px] text-muted-foreground"
+                  role="status"
+                  data-testid="connected-share-slack-channels-error"
+                >
+                  <span>
+                    {slackChannelsError} You can still send to your own Slack
+                    messages.
+                  </span>
+                  <button
+                    type="button"
+                    className="shrink-0 underline"
+                    onClick={() => setSlackRefresh((value) => value + 1)}
+                  >
+                    retry
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -556,7 +894,14 @@ export function ConnectedShareDialog({
           <div className="grid gap-3 sm:grid-cols-[12rem_1fr]">
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">team</label>
-              <Select value={linearTeamId} onValueChange={setLinearTeamId}>
+              <Select
+                value={linearTeamId}
+                onValueChange={(value) => {
+                  setLinearTeamId(value);
+                  setReceipt(null);
+                  setActionError(null);
+                }}
+              >
                 <SelectTrigger className="h-9 rounded-none text-xs">
                   <SelectValue
                     placeholder={
@@ -572,6 +917,22 @@ export function ConnectedShareDialog({
                   ))}
                 </SelectContent>
               </Select>
+              {linearTeamsError && (
+                <div
+                  className="flex items-start justify-between gap-2 text-[10px] text-destructive"
+                  role="alert"
+                  data-testid="connected-share-linear-teams-error"
+                >
+                  <span>{linearTeamsError}</span>
+                  <button
+                    type="button"
+                    className="shrink-0 underline"
+                    onClick={() => setLinearRefresh((value) => value + 1)}
+                  >
+                    retry
+                  </button>
+                </div>
+              )}
             </div>
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">
@@ -580,7 +941,11 @@ export function ConnectedShareDialog({
               <Input
                 value={linearTitle}
                 maxLength={250}
-                onChange={(event) => setLinearTitle(event.target.value)}
+                onChange={(event) => {
+                  setLinearTitle(event.target.value);
+                  setReceipt(null);
+                  setActionError(null);
+                }}
                 className="h-9 rounded-none text-xs"
               />
             </div>
@@ -589,7 +954,7 @@ export function ConnectedShareDialog({
 
         {artifact.sections.length > 1 && (
           <div className="space-y-2">
-            <p className="text-xs font-medium">include Blocks</p>
+            <p className="text-xs font-medium">include blocks</p>
             <div className="grid gap-2 sm:grid-cols-2">
               {artifact.sections.map((section) => (
                 <label
@@ -609,15 +974,26 @@ export function ConnectedShareDialog({
           </div>
         )}
 
+        {artifact.sections.length === 0 && (
+          <div className="border border-border px-3 py-2 text-xs" role="status">
+            This snapshot has no shareable blocks yet. Close this review, let
+            the Live View finish loading, then try again.
+          </div>
+        )}
+
         <div className="space-y-1.5">
           <div className="flex items-center justify-between gap-3">
             <label
               htmlFor="connected-share-preview"
               className="text-xs font-medium"
             >
-              what will be sent
+              {destination.startsWith("chat-")
+                ? "snapshot Chat will review"
+                : "what will be sent"}
             </label>
-            <span className="text-[10px] tabular-nums text-muted-foreground">
+            <span
+              className={`text-[10px] tabular-nums ${message.length > 39_000 ? "text-destructive" : "text-muted-foreground"}`}
+            >
               {message.length.toLocaleString()} / 39,000
             </span>
           </div>
@@ -628,18 +1004,48 @@ export function ConnectedShareDialog({
             onChange={(event) => {
               setMessage(event.target.value);
               setReceipt(null);
+              setActionError(null);
             }}
             className="min-h-56 rounded-none font-mono text-xs"
           />
+          {selectedSectionIds.length === 0 && artifact.sections.length > 0 && (
+            <p className="text-[11px] text-destructive" role="alert">
+              Choose at least one block to share.
+            </p>
+          )}
+          {message.length > 39_000 && (
+            <p className="text-[11px] text-destructive" role="alert">
+              This snapshot is too long. Remove some text or blocks before
+              sharing.
+            </p>
+          )}
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             {artifact.privacyNote}
           </p>
         </div>
 
+        {actionError && (
+          <div
+            className="flex items-start gap-2 border border-destructive/60 px-3 py-2 text-xs"
+            role="alert"
+            data-testid="connected-share-action-error"
+          >
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
+            <div>
+              <p className="font-medium">the action did not complete</p>
+              <p className="mt-0.5 text-muted-foreground">{actionError}</p>
+              <p className="mt-1 text-muted-foreground">
+                No success was recorded. Review the destination and try again.
+              </p>
+            </div>
+          </div>
+        )}
+
         {receipt && (
           <div
             className="flex items-start justify-between gap-3 border border-foreground px-3 py-2 text-xs"
             role="status"
+            data-testid="connected-share-receipt"
           >
             <div className="flex items-start gap-2">
               <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -673,11 +1079,14 @@ export function ConnectedShareDialog({
           <Button
             type="button"
             className="rounded-none"
+            data-testid="connected-share-confirm"
             disabled={!canSubmit || sending}
             onClick={() => void submit()}
           >
             {sending ? (
               <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : destination.startsWith("chat-") ? (
+              <Sparkles className="mr-1.5 h-3.5 w-3.5" />
             ) : (
               <Send className="mr-1.5 h-3.5 w-3.5" />
             )}

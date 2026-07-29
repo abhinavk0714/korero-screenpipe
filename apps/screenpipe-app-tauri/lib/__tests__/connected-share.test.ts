@@ -4,10 +4,12 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  buildConnectedShareChatPrompt,
   createLiveViewShareArtifact,
   createMeetingShareArtifact,
   directShareConnections,
   renderConnectedShareArtifact,
+  shareConnectionAvailability,
 } from "@/lib/connected-share";
 import type { BrainViewDefinition } from "@/lib/utils/tauri";
 
@@ -88,5 +90,26 @@ describe("connected share artifacts", () => {
         { id: "linear", connected: true, mcp: true },
       ]),
     ).toEqual({ slack: true, linear: false });
+  });
+
+  it("separates deterministic sends from AI-assisted MCP connections", () => {
+    expect(
+      shareConnectionAvailability([
+        { id: "slack", connected: true },
+        { id: "linear", connected: true, mcp: true },
+        { id: "notion", connected: true, mcp: true },
+      ]),
+    ).toEqual({
+      direct: { slack: true, linear: false },
+      chat: { linear: true, notion: true },
+    });
+  });
+
+  it("builds a draft-only Chat handoff with an explicit confirmation boundary", () => {
+    const prompt = buildConnectedShareChatPrompt("notion");
+
+    expect(prompt).toContain("Do not create or send anything yet");
+    expect(prompt).toContain("ask me to confirm the parent page or database");
+    expect(prompt).toContain("snapshot attached as context");
   });
 });
