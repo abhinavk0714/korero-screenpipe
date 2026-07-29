@@ -13,11 +13,17 @@ import React, {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  Check,
+  Clock3,
   Loader2,
+  Pencil,
   RotateCcw,
+  Send,
   Sparkles,
   ThumbsDown,
   ThumbsUp,
+  Undo2,
+  X,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -45,6 +51,15 @@ const COMPONENT_LABELS: Record<BrainViewComponent, string> = {
   "timeline.v1": "Timeline",
   "markdown.v1": "Text",
 };
+
+export type LiveViewItemActionRequest = {
+  itemId: string;
+  action: "resolve" | "snooze" | "correct" | "dismiss" | "reopen";
+  snoozedUntil?: string;
+  correction?: string;
+};
+
+export type LiveViewListItem = Record<string, JsonValue>;
 
 function timeAgo(iso: string): string {
   const elapsed = Date.now() - new Date(iso).getTime();
@@ -195,14 +210,329 @@ function LiveViewListItemText({
   );
 }
 
+function itemActionNames(item: LiveViewListItem): Set<string> {
+  return new Set(
+    Array.isArray(item.actions)
+      ? item.actions.filter(
+          (action): action is string => typeof action === "string",
+        )
+      : [],
+  );
+}
+
+function activeDisposition(
+  state: BrainViewSlot["itemActions"]["items"][number] | undefined,
+): "active" | "resolved" | "snoozed" | "dismissed" {
+  if (!state || state.disposition !== "snoozed" || !state.snoozedUntil) {
+    return state?.disposition ?? "active";
+  }
+  return Date.parse(state.snoozedUntil) > Date.now() ? "snoozed" : "active";
+}
+
+function snoozeOptions(now = new Date()) {
+  const hour = new Date(now.getTime() + 60 * 60 * 1000);
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(9, 0, 0, 0);
+  const nextWeek = new Date(now);
+  nextWeek.setDate(nextWeek.getDate() + 7);
+  nextWeek.setHours(9, 0, 0, 0);
+  return [
+    { label: "1 hour", value: hour.toISOString() },
+    { label: "tomorrow", value: tomorrow.toISOString() },
+    { label: "next week", value: nextWeek.toISOString() },
+  ];
+}
+
+function readableDate(value: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function InteractiveListItem({
+  item,
+  state,
+  onAction,
+  onHandoff,
+}: {
+  item: LiveViewListItem;
+  state?: BrainViewSlot["itemActions"]["items"][number];
+  onAction?: (request: LiveViewItemActionRequest) => Promise<boolean>;
+  onHandoff?: (item: LiveViewListItem) => void;
+}) {
+  const itemId = stringValue(item.id);
+  const title = stringValue(item.title);
+  const actions = itemActionNames(item);
+  const disposition = activeDisposition(state);
+  const handled = disposition !== "active";
+  const [saving, setSaving] = useState<
+    LiveViewItemActionRequest["action"] | null
+  >(null);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [correction, setCorrection] = useState(state?.correction ?? "");
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
+
+  useEffect(() => {
+    setCorrection(state?.correction ?? "");
+  }, [state?.correction]);
+
+  const act = async (request: Omit<LiveViewItemActionRequest, "itemId">) => {
+    if (!onAction) return false;
+    setSaving(request.action);
+    try {
+      return await onAction({ itemId, ...request });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  if (handled) {
+    const stateLabel =
+      disposition === "resolved"
+        ? stringValue(item.resolveLabel) || "resolved"
+        : disposition === "snoozed" && state?.snoozedUntil
+          ? `snoozed until ${readableDate(state.snoozedUntil)}`
+          : "dismissed";
+    return (
+      <div
+        data-testid={`live-view-item-${itemId}`}
+        data-item-state={disposition}
+        className="flex items-center gap-3 py-2 text-muted-foreground"
+      >
+        <Check className="h-3.5 w-3.5 shrink-0" />
+        <p className="min-w-0 flex-1 truncate text-xs line-through decoration-border">
+          {title}
+        </p>
+        <span className="hidden text-[10px] uppercase tracking-wide sm:inline">
+          {stateLabel}
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          data-testid={`live-view-item-${itemId}-reopen`}
+          aria-label={`reopen ${title}`}
+          className="h-7 w-7 rounded-none"
+          disabled={!onAction || saving !== null}
+          onClick={() => void act({ action: "reopen" })}
+        >
+          {saving === "reopen" ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Undo2 className="h-3 w-3" />
+          )}
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-testid={`live-view-item-${itemId}`}
+      data-item-state="active"
+      className="group/item flex items-start gap-2 py-3"
+    >
+      {actions.has("resolve") && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          data-testid={`live-view-item-${itemId}-resolve`}
+          aria-label={`${stringValue(item.resolveLabel) || "resolve"} ${title}`}
+          className="mt-0.5 h-6 w-6 shrink-0 rounded-none border border-border hover:border-foreground"
+          disabled={!onAction || saving !== null}
+          onClick={() => void act({ action: "resolve" })}
+        >
+          {saving === "resolve" ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Check className="h-3 w-3 opacity-0 group-hover/item:opacity-100" />
+          )}
+        </Button>
+      )}
+      <div className="min-w-0 flex-1">
+        <LiveViewListItemText
+          title={title}
+          subtitle={
+            typeof item.subtitle === "string" ? item.subtitle : undefined
+          }
+        />
+        {(typeof item.dueAt === "string" ||
+          typeof item.source === "string") && (
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[10px] text-muted-foreground">
+            {typeof item.dueAt === "string" && (
+              <span>due {readableDate(item.dueAt)}</span>
+            )}
+            {typeof item.source === "string" && <span>from {item.source}</span>}
+          </div>
+        )}
+        {state?.correction && (
+          <p className="mt-1 border-l border-foreground pl-2 text-[10px] text-muted-foreground">
+            correction: {state.correction}
+          </p>
+        )}
+      </div>
+      {typeof item.status === "string" && (
+        <span className="mt-0.5 hidden shrink-0 border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground sm:inline">
+          {item.status}
+        </span>
+      )}
+      <div className="flex shrink-0 items-center opacity-100 transition-opacity sm:opacity-0 sm:group-hover/item:opacity-100 sm:group-focus-within/item:opacity-100">
+        {actions.has("snooze") && (
+          <Popover open={snoozeOpen} onOpenChange={setSnoozeOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                data-testid={`live-view-item-${itemId}-snooze`}
+                aria-label={`snooze ${title}`}
+                className="h-7 w-7 rounded-none"
+                disabled={!onAction || saving !== null}
+              >
+                <Clock3 className="h-3 w-3" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-40 rounded-none p-1">
+              <p className="px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                remind me
+              </p>
+              {snoozeOptions().map((option) => (
+                <Button
+                  key={option.label}
+                  type="button"
+                  variant="ghost"
+                  data-testid={`live-view-item-${itemId}-snooze-${option.label.replaceAll(" ", "-")}`}
+                  className="h-8 w-full justify-start rounded-none px-2 text-xs"
+                  onClick={() => {
+                    void act({
+                      action: "snooze",
+                      snoozedUntil: option.value,
+                    }).then((saved) => saved && setSnoozeOpen(false));
+                  }}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </PopoverContent>
+          </Popover>
+        )}
+        {actions.has("correct") && (
+          <Popover open={correctionOpen} onOpenChange={setCorrectionOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                data-testid={`live-view-item-${itemId}-correct`}
+                aria-label={`correct ${title}`}
+                className="h-7 w-7 rounded-none"
+                disabled={!onAction || saving !== null}
+              >
+                <Pencil className="h-3 w-3" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-72 rounded-none p-3">
+              <form
+                className="space-y-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const value = correction.trim();
+                  if (!value) return;
+                  void act({ action: "correct", correction: value }).then(
+                    (saved) => saved && setCorrectionOpen(false),
+                  );
+                }}
+              >
+                <div>
+                  <p className="text-xs font-medium">Correct this item</p>
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">
+                    The Pipe keeps this correction on later updates.
+                  </p>
+                </div>
+                <Input
+                  autoFocus
+                  data-testid={`live-view-item-${itemId}-correction-input`}
+                  value={correction}
+                  onChange={(event) => setCorrection(event.target.value)}
+                  placeholder="e.g. Sam owns this, due Friday"
+                  className="h-8 rounded-none text-xs"
+                  maxLength={500}
+                />
+                <div className="flex justify-end">
+                  <Button
+                    type="submit"
+                    size="sm"
+                    data-testid={`live-view-item-${itemId}-correction-save`}
+                    className="h-7 rounded-none text-xs"
+                    disabled={!correction.trim() || saving !== null}
+                  >
+                    {saving === "correct" && (
+                      <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                    )}
+                    save correction
+                  </Button>
+                </div>
+              </form>
+            </PopoverContent>
+          </Popover>
+        )}
+        {actions.has("handoff") && onHandoff && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            data-testid={`live-view-item-${itemId}-handoff`}
+            aria-label={`send ${title} to another app`}
+            title="send to another app"
+            className="h-7 w-7 rounded-none"
+            disabled={saving !== null}
+            onClick={() => onHandoff(item)}
+          >
+            <Send className="h-3 w-3" />
+          </Button>
+        )}
+        {actions.has("dismiss") && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            data-testid={`live-view-item-${itemId}-dismiss`}
+            aria-label={`dismiss ${title}`}
+            className="h-7 w-7 rounded-none"
+            disabled={!onAction || saving !== null}
+            onClick={() => void act({ action: "dismiss" })}
+          >
+            {saving === "dismiss" ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <X className="h-3 w-3" />
+            )}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function LiveViewCardBody({
   slot,
   preview = false,
   refreshing = false,
+  onItemAction,
+  onItemHandoff,
 }: {
   slot: BrainViewSlot;
   preview?: boolean;
   refreshing?: boolean;
+  onItemAction?: (request: LiveViewItemActionRequest) => Promise<boolean>;
+  onItemHandoff?: (item: LiveViewListItem) => void;
 }) {
   const rawPayload = slot.value?.payload;
   const payload = isRecord(rawPayload) ? rawPayload : null;
@@ -252,6 +582,72 @@ function LiveViewCardBody({
     ? payload.items.filter(isRecord)
     : [];
   if (slot.component === "list.v1") {
+    const itemStates = new Map(
+      (slot.itemActions?.items ?? []).map((state) => [state.itemId, state]),
+    );
+    const interactive = items.some(
+      (item) => typeof item.id === "string" && Array.isArray(item.actions),
+    );
+    if (interactive) {
+      const activeItems = items.filter((item) => {
+        const itemId = stringValue(item.id);
+        return activeDisposition(itemStates.get(itemId)) === "active";
+      });
+      const handledItems = items.filter((item) => {
+        const itemId = stringValue(item.id);
+        return activeDisposition(itemStates.get(itemId)) !== "active";
+      });
+      return (
+        <div className="border-y border-border">
+          <div className="divide-y divide-border">
+            {activeItems.map((item, index) => {
+              const itemId = stringValue(item.id);
+              return (
+                <InteractiveListItem
+                  key={itemId || `${stringValue(item.title)}-${index}`}
+                  item={item}
+                  state={itemStates.get(itemId)}
+                  onAction={onItemAction}
+                  onHandoff={onItemHandoff}
+                />
+              );
+            })}
+          </div>
+          {activeItems.length === 0 && (
+            <div
+              data-testid={`live-view-list-${slot.id}-clear`}
+              className="flex min-h-20 items-center justify-center px-4 text-center text-xs text-muted-foreground"
+            >
+              nothing needs attention
+            </div>
+          )}
+          {handledItems.length > 0 && (
+            <details className="border-t border-border">
+              <summary
+                data-testid={`live-view-list-${slot.id}-handled-toggle`}
+                className="cursor-pointer px-1 py-2 font-mono text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
+              >
+                {handledItems.length} handled · show
+              </summary>
+              <div className="divide-y divide-border border-t border-border">
+                {handledItems.map((item, index) => {
+                  const itemId = stringValue(item.id);
+                  return (
+                    <InteractiveListItem
+                      key={itemId || `${stringValue(item.title)}-${index}`}
+                      item={item}
+                      state={itemStates.get(itemId)}
+                      onAction={onItemAction}
+                      onHandoff={onItemHandoff}
+                    />
+                  );
+                })}
+              </div>
+            </details>
+          )}
+        </div>
+      );
+    }
     return (
       <div className="divide-y divide-border border-y border-border">
         {items.map((item, index) => (
@@ -479,6 +875,8 @@ export function LiveViewCard({
   onFeedback,
   onRegenerate,
   onAiEdit,
+  onItemAction,
+  onItemHandoff,
 }: {
   slot: BrainViewSlot;
   timeRange?: BrainViewTimeRange;
@@ -493,6 +891,8 @@ export function LiveViewCard({
   ) => Promise<boolean>;
   onRegenerate?: () => void;
   onAiEdit?: (prompt: string) => Promise<boolean>;
+  onItemAction?: (request: LiveViewItemActionRequest) => Promise<boolean>;
+  onItemHandoff?: (item: LiveViewListItem) => void;
 }) {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
@@ -735,6 +1135,8 @@ export function LiveViewCard({
           slot={slot}
           preview={preview}
           refreshing={refreshing}
+          onItemAction={onItemAction}
+          onItemHandoff={onItemHandoff}
         />
       </div>
       <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-2 text-[10px] text-muted-foreground">

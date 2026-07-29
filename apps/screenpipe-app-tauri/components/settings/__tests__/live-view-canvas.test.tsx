@@ -33,6 +33,7 @@ const view: BrainViewDefinition = {
       intent: "Show focused work time",
       binding: { pipeName: "daily-summary" },
       feedback: { upCount: 0, downCount: 0, current: null },
+      itemActions: { items: [] },
       value: {
         payload: { value: 4.5, unit: "hours", delta: "+45m" },
         evidence: [
@@ -59,6 +60,7 @@ const view: BrainViewDefinition = {
       intent: "Show today's meetings",
       binding: { pipeName: "daily-summary" },
       feedback: { upCount: 0, downCount: 0, current: null },
+      itemActions: { items: [] },
       value: {
         payload: { items: [{ title: "Canvas review", status: "done" }] },
         evidence: [],

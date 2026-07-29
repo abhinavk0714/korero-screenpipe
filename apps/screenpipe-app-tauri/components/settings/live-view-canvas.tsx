@@ -41,7 +41,11 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { LiveViewCard } from "@/components/settings/live-view-card";
+import {
+  LiveViewCard,
+  type LiveViewItemActionRequest,
+  type LiveViewListItem,
+} from "@/components/settings/live-view-card";
 import { Button } from "@/components/ui/button";
 import {
   CANVAS_GRID,
@@ -92,6 +96,8 @@ type LiveViewFlowNodeData = CanvasNodeActions & {
   ) => Promise<boolean>;
   onRegenerate: () => void;
   onAiEdit: (prompt: string) => Promise<boolean>;
+  onItemAction: (request: LiveViewItemActionRequest) => Promise<boolean>;
+  onItemHandoff: (item: LiveViewListItem) => void;
 };
 
 type NoteFlowNodeData = CanvasNodeActions & {
@@ -260,6 +266,8 @@ function LiveViewBlockNode({ id, data }: NodeProps<LiveViewFlowNode>) {
           onFeedback={data.onFeedback}
           onRegenerate={data.onRegenerate}
           onAiEdit={data.onAiEdit}
+          onItemAction={data.onItemAction}
+          onItemHandoff={data.onItemHandoff}
         />
       </div>
     </article>
@@ -343,6 +351,8 @@ export function LiveViewCanvas({
   onFeedback,
   onRegenerate,
   onAiEdit,
+  onItemAction,
+  onItemHandoff,
 }: {
   document: BrainViewCanvasDocument;
   slots: BrainViewSlot[];
@@ -357,6 +367,11 @@ export function LiveViewCanvas({
   ) => Promise<boolean>;
   onRegenerate: (slot: BrainViewSlot) => void;
   onAiEdit: (slot: BrainViewSlot, prompt: string) => Promise<boolean>;
+  onItemAction: (
+    slot: BrainViewSlot,
+    request: LiveViewItemActionRequest,
+  ) => Promise<boolean>;
+  onItemHandoff: (slot: BrainViewSlot, item: LiveViewListItem) => void;
 }) {
   const [tool, setTool] = useState<CanvasTool>("select");
   const [selection, setSelection] = useState<string[]>([]);
@@ -582,6 +597,8 @@ export function LiveViewCanvas({
               onFeedback(slot, rating, correction),
             onRegenerate: () => onRegenerate(slot),
             onAiEdit: (prompt) => onAiEdit(slot, prompt),
+            onItemAction: (request) => onItemAction(slot, request),
+            onItemHandoff: (item) => onItemHandoff(slot, item),
           },
         },
       ];
@@ -639,6 +656,8 @@ export function LiveViewCanvas({
     document.notes,
     onAiEdit,
     onFeedback,
+    onItemAction,
+    onItemHandoff,
     onRegenerate,
     refreshingSlotIds,
     selection,

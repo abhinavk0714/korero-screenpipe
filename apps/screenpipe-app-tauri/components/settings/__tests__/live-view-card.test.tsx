@@ -27,6 +27,7 @@ const listSlot: BrainViewSlot = {
   intent: "Show the review process",
   binding: { pipeName: "workflow-discovery" },
   feedback: { upCount: 0, downCount: 0, current: null },
+  itemActions: { items: [] },
   value: {
     payload: {
       items: [
@@ -43,6 +44,31 @@ const listSlot: BrainViewSlot = {
     artifactOutputId: 42,
     artifactVersion: 1,
     updatedAt: "2026-07-25T20:00:00Z",
+  },
+};
+
+const interactiveSlot: BrainViewSlot = {
+  ...listSlot,
+  id: "commitments",
+  title: "Needs attention",
+  binding: { pipeName: "commitments" },
+  value: {
+    ...listSlot.value!,
+    sourcePipe: "commitments",
+    payload: {
+      items: [
+        {
+          id: "customer-recap",
+          title: "Send the customer recap",
+          subtitle: "Promised after the discovery call",
+          status: "due",
+          dueAt: "2026-07-30T16:00:00Z",
+          source: "Zoom · Benjamin",
+          resolveLabel: "done",
+          actions: ["resolve", "snooze", "correct", "dismiss", "handoff"],
+        },
+      ],
+    },
   },
 };
 
@@ -131,5 +157,110 @@ describe("LiveViewCard list overflow", () => {
     await waitFor(() => {
       expect(screen.queryByRole("tooltip")).toBeNull();
     });
+  });
+});
+
+describe("LiveViewCard interactive lists", () => {
+  it("keeps list.v1 generic while exposing declared item actions", async () => {
+    const onItemAction = vi.fn().mockResolvedValue(true);
+    const onItemHandoff = vi.fn();
+    render(
+      <LiveViewCard
+        slot={interactiveSlot}
+        onItemAction={onItemAction}
+        onItemHandoff={onItemHandoff}
+      />,
+    );
+
+    expect(screen.getByText("Send the customer recap")).toBeTruthy();
+    expect(screen.getByText("from Zoom · Benjamin")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "done Send the customer recap" }),
+    );
+    await waitFor(() =>
+      expect(onItemAction).toHaveBeenCalledWith({
+        itemId: "customer-recap",
+        action: "resolve",
+      }),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "send Send the customer recap to another app",
+      }),
+    );
+    expect(onItemHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "customer-recap" }),
+    );
+  });
+
+  it("collects a correction and offers bounded snooze choices", async () => {
+    const onItemAction = vi.fn().mockResolvedValue(true);
+    render(<LiveViewCard slot={interactiveSlot} onItemAction={onItemAction} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "correct Send the customer recap" }),
+    );
+    const correction = await screen.findByTestId(
+      "live-view-item-customer-recap-correction-input",
+    );
+    fireEvent.change(correction, { target: { value: "Sam owns this" } });
+    fireEvent.click(screen.getByRole("button", { name: "save correction" }));
+    await waitFor(() =>
+      expect(onItemAction).toHaveBeenCalledWith({
+        itemId: "customer-recap",
+        action: "correct",
+        correction: "Sam owns this",
+      }),
+    );
+
+    const snooze = screen.getByRole("button", {
+      name: "snooze Send the customer recap",
+    });
+    await waitFor(() => expect(snooze.getAttribute("disabled")).toBeNull());
+    fireEvent.click(snooze);
+    fireEvent.click(await screen.findByRole("button", { name: "tomorrow" }));
+    await waitFor(() =>
+      expect(onItemAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          itemId: "customer-recap",
+          action: "snooze",
+          snoozedUntil: expect.any(String),
+        }),
+      ),
+    );
+  });
+
+  it("moves handled items into a reversible receipt", async () => {
+    const onItemAction = vi.fn().mockResolvedValue(true);
+    const handledSlot: BrainViewSlot = {
+      ...interactiveSlot,
+      itemActions: {
+        items: [
+          {
+            itemId: "customer-recap",
+            disposition: "resolved",
+            snoozedUntil: null,
+            correction: "Sam owns this",
+            updatedAt: "2026-07-29T20:00:00Z",
+          },
+        ],
+      },
+    };
+    render(<LiveViewCard slot={handledSlot} onItemAction={onItemAction} />);
+
+    expect(screen.getByText("nothing needs attention")).toBeTruthy();
+    fireEvent.click(screen.getByText("1 handled · show"));
+    const handled = screen.getByTestId("live-view-item-customer-recap");
+    expect(handled.getAttribute("data-item-state")).toBe("resolved");
+    fireEvent.click(
+      screen.getByRole("button", { name: "reopen Send the customer recap" }),
+    );
+    await waitFor(() =>
+      expect(onItemAction).toHaveBeenCalledWith({
+        itemId: "customer-recap",
+        action: "reopen",
+      }),
+    );
   });
 });
