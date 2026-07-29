@@ -832,12 +832,20 @@ fn focus_filter_needs_tree(ignored_urls: &[String]) -> bool {
 }
 
 fn skip_verdict(reason: SkipReason) -> (bool, Option<String>) {
+    if reason.uses_ocr_fallback() {
+        // This is a capture-strategy hint, not a privacy verdict. In particular,
+        // Excel bypasses its blocking UIA provider in favor of screenshot OCR;
+        // the SDK's MP4 recorder must remain unpaused while that window is focused.
+        return (false, None);
+    }
+
     let tag = match reason {
         SkipReason::Incognito => "incognito",
         SkipReason::ExcludedApp => "excluded_app",
         SkipReason::UserIgnored => "ignored_window",
         SkipReason::NotInIncludeList => "included_window_mismatch",
         SkipReason::BlockedUrl => "blocked_url",
+        SkipReason::OcrPreferred => unreachable!("handled above"),
     };
     (true, Some(tag.to_string()))
 }
@@ -1632,5 +1640,18 @@ mod tests {
     #[test]
     fn url_filters_require_tree_metadata() {
         assert!(focus_filter_needs_tree(&["bank.example".to_string()]));
+    }
+
+    #[test]
+    fn ocr_preferred_does_not_pause_sdk_recording() {
+        assert_eq!(skip_verdict(SkipReason::OcrPreferred), (false, None));
+    }
+
+    #[test]
+    fn privacy_skip_still_pauses_sdk_recording() {
+        assert_eq!(
+            skip_verdict(SkipReason::Incognito),
+            (true, Some("incognito".to_string()))
+        );
     }
 }
