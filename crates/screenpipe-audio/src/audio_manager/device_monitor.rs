@@ -256,6 +256,8 @@ fn is_permanent_device_start_error(err: &anyhow::Error) -> bool {
     msg.contains("not found")
         || msg.contains("no default input device detected")
         || msg.contains("no display audio device found")
+        || msg.contains("no supported input configurations found")
+        || msg.contains("no supported output configurations found")
 }
 
 fn should_log_recovery_attempt(attempts: u32) -> bool {
@@ -1307,10 +1309,6 @@ pub async fn start_device_monitor(
                                             // negotiation. Skip this tick entirely,
                                             // no log, no reset, no retry storm.
                                         } else {
-                                            warn!(
-                                                "[DEVICE_RECOVERY] no input device running (attempt {}), starting default: {}",
-                                                input_recovery_backoff.attempts, device_name
-                                            );
                                             match audio_manager.start_device(&default_input).await {
                                                 Ok(()) => {
                                                     failed_devices.remove(&device_name);
@@ -1322,14 +1320,21 @@ pub async fn start_device_monitor(
                                                     );
                                                 }
                                                 Err(e) => {
-                                                    input_recovery_backoff.record_failure(false);
-                                                    warn!(
-                                                        "[DEVICE_RECOVERY] failed to start input device {} (attempt {}, next retry in {}s): {}",
-                                                        device_name,
-                                                        input_recovery_backoff.attempts,
-                                                        input_recovery_backoff.next_delay_secs(),
-                                                        e
-                                                    );
+                                                    let permanent =
+                                                        is_permanent_device_start_error(&e);
+                                                    input_recovery_backoff
+                                                        .record_failure(permanent);
+                                                    let attempts = input_recovery_backoff.attempts;
+                                                    if should_log_recovery_attempt(attempts) {
+                                                        warn!(
+                                                            "[DEVICE_RECOVERY] failed to start input device {} (attempt {}, {}, next retry in {}s): {}",
+                                                            device_name,
+                                                            attempts,
+                                                            if permanent { "permanent" } else { "transient" },
+                                                            input_recovery_backoff.next_delay_secs(),
+                                                            e
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }
@@ -1412,10 +1417,6 @@ pub async fn start_device_monitor(
                                         {
                                             // leave backoff untouched
                                         } else {
-                                            info!(
-                                                "[DEVICE_RECOVERY] no output device running (attempt {}), starting default: {}",
-                                                output_recovery_backoff.attempts, device_name
-                                            );
                                             match audio_manager.start_device(&default_output).await
                                             {
                                                 Ok(()) => {
@@ -1428,12 +1429,21 @@ pub async fn start_device_monitor(
                                                     );
                                                 }
                                                 Err(e) => {
-                                                    output_recovery_backoff.record_failure(false);
-                                                    warn!(
-                                                        "[DEVICE_RECOVERY] failed to start output device {} (attempt {}, next retry in {}s): {}",
-                                                        device_name, output_recovery_backoff.attempts,
-                                                        output_recovery_backoff.next_delay_secs(), e
-                                                    );
+                                                    let permanent =
+                                                        is_permanent_device_start_error(&e);
+                                                    output_recovery_backoff
+                                                        .record_failure(permanent);
+                                                    let attempts = output_recovery_backoff.attempts;
+                                                    if should_log_recovery_attempt(attempts) {
+                                                        warn!(
+                                                            "[DEVICE_RECOVERY] failed to start output device {} (attempt {}, {}, next retry in {}s): {}",
+                                                            device_name,
+                                                            attempts,
+                                                            if permanent { "permanent" } else { "transient" },
+                                                            output_recovery_backoff.next_delay_secs(),
+                                                            e
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }
@@ -2647,6 +2657,12 @@ mod tests {
         )));
         assert!(is_permanent_device_start_error(&anyhow::anyhow!(
             "no display audio device found"
+        )));
+        assert!(is_permanent_device_start_error(&anyhow::anyhow!(
+            "No supported input configurations found for LG HDR QHD (Intel(R) Display Audio)"
+        )));
+        assert!(is_permanent_device_start_error(&anyhow::anyhow!(
+            "No supported output configurations found"
         )));
         assert!(!is_permanent_device_start_error(&anyhow::anyhow!(
             "callback never fired"
