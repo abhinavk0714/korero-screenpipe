@@ -2930,6 +2930,26 @@ impl PipeManager {
             .unwrap_or_default()
     }
 
+    /// Whether runs can be correlated with persisted execution rows.
+    pub fn has_execution_store(&self) -> bool {
+        self.store.is_some()
+    }
+
+    /// Get one exact execution row for a pipe.
+    pub async fn get_execution(
+        &self,
+        name: &str,
+        execution_id: i64,
+    ) -> Result<Option<PipeExecution>> {
+        let before_id = execution_id
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("execution id is out of range"))?;
+        let mut executions = self.get_executions(name, 1, Some(before_id)).await?;
+        Ok(executions
+            .pop()
+            .filter(|execution| execution.id == execution_id))
+    }
+
     /// Get execution history from the DB store.
     pub async fn get_executions(
         &self,
@@ -3061,6 +3081,7 @@ impl PipeManager {
     pub async fn start_pipe_background(&self, name: &str) -> Result<()> {
         self.start_pipe_background_with_trigger_and_context(name, "manual", None)
             .await
+            .map(|_| ())
     }
 
     /// Start one manual run with request-scoped context. Unlike the manager's
@@ -3073,6 +3094,7 @@ impl PipeManager {
     ) -> Result<()> {
         self.start_pipe_background_with_trigger_and_context(name, "manual", run_context)
             .await
+            .map(|_| ())
     }
 
     /// Start a pipe in the background with an explicit, low-cardinality trigger type.
@@ -3083,6 +3105,7 @@ impl PipeManager {
     ) -> Result<()> {
         self.start_pipe_background_with_trigger_and_context(name, trigger, None)
             .await
+            .map(|_| ())
     }
 
     /// Start a Pipe with both low-cardinality telemetry and execution-scoped
@@ -3093,7 +3116,7 @@ impl PipeManager {
         name: &str,
         trigger: &str,
         run_context: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<Option<i64>> {
         let (config, body, _raw) = {
             let pipes = self.pipes.lock().await;
             match pipes.get(name).cloned() {
@@ -3225,8 +3248,9 @@ impl PipeManager {
                     Some(id)
                 }
                 Err(e) => {
-                    warn!("failed to create execution row: {}", e);
-                    None
+                    remove_pid_file(&self.pipes_dir, name);
+                    self.running.lock().await.remove(name);
+                    return Err(anyhow!("failed to create execution row: {}", e));
                 }
             }
         } else {
@@ -3595,7 +3619,7 @@ impl PipeManager {
             }
         });
 
-        Ok(())
+        Ok(exec_id)
     }
 
     /// Run a pipe once with an explicit trigger type.
