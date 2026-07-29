@@ -1329,8 +1329,9 @@ function ThinkingBlock({ text, isThinking, durationMs, defaultExpanded = false }
   return (
     <div className="rounded-lg border border-border/30 bg-muted/20 text-xs overflow-hidden max-w-full">
       <button
+        type="button"
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-muted/40 transition-colors text-left"
+        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-muted/40 transition-colors text-left"
       >
         <div className={cn("h-2 w-2 rounded-full", isThinking ? "bg-foreground/60 animate-pulse" : "bg-foreground/30")} />
         <span className="font-mono text-muted-foreground">
@@ -1339,7 +1340,7 @@ function ThinkingBlock({ text, isThinking, durationMs, defaultExpanded = false }
         <span className="ml-auto text-muted-foreground">{expanded ? "▾" : "▸"}</span>
       </button>
       {expanded && text.trim() && (
-        <div className="px-3 py-2 border-t border-border/30">
+        <div className="px-3 py-1.5 border-t border-border/30">
           <div className="pl-3 border-l-2 border-border/40 text-muted-foreground font-mono whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto text-[11px] leading-relaxed">
             {text}
           </div>
@@ -1883,7 +1884,7 @@ function MessageContent({
     // content to see.
     const hasText = grouped.some((g) => g.type === "text");
     return (
-      <div className="space-y-2 min-w-0 w-full overflow-hidden">
+      <div className="space-y-1.5 min-w-0 w-full overflow-hidden">
         {displayGroups.map((group) => {
           if (group.type === "text") {
             return (
