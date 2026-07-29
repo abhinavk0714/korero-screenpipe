@@ -2277,6 +2277,30 @@ pub async fn pi_start_inner(
             // streaming. This caused "Agent is already processing" when a second
             // prompt was sent while the first was still running.
             if let Some(ref qs) = queue_state_for_reader {
+                if event_type.as_deref() == Some("response") {
+                    if let Some(request_id) = parsed
+                        .as_ref()
+                        .and_then(|event| event.get("id"))
+                        .and_then(|id| id.as_str())
+                    {
+                        let error = parsed
+                            .as_ref()
+                            .filter(|event| {
+                                event.get("success").and_then(|success| success.as_bool())
+                                    == Some(false)
+                            })
+                            .and_then(|event| event.get("error"))
+                            .and_then(|error| error.as_str())
+                            .unwrap_or("Pi rejected the prompt before it started")
+                            .to_string();
+                        let rejected = parsed
+                            .as_ref()
+                            .and_then(|event| event.get("success"))
+                            .and_then(|success| success.as_bool())
+                            == Some(false);
+                        qs.signal_rpc_response(request_id, rejected.then_some(error));
+                    }
+                }
                 match event_type.as_deref() {
                     Some("agent_start") => {
                         // A prompt has begun streaming. Suppress the
@@ -2350,11 +2374,11 @@ pub async fn pi_start_inner(
                         qs.signal_done_if_idle();
                     }
                     Some("response") => {
-                        // Only meaningful for new_session/abort — those don't
-                        // fire agent_start/agent_end. Suppress while a prompt
-                        // or tool is mid-turn so the queue never advances on
-                        // an ACK while the assistant is still working.
                         if !qs.has_active_turn_work() {
+                            // Successful response ACKs are only completion
+                            // signals for new_session/abort, which don't emit
+                            // agent_start/agent_end. Suppress prompt ACKs while
+                            // the assistant is still working.
                             // Note: this runs on a std::thread (not tokio),
                             // so use std::thread::spawn + std::thread::sleep.
                             let qs = qs.clone();
@@ -2598,6 +2622,31 @@ fn build_prompt_command(
     Ok(cmd)
 }
 
+async fn await_prompt_start(
+    state: &PiState,
+    session_id: &str,
+    rx: oneshot::Receiver<Result<(), String>>,
+) -> Result<(), String> {
+    let result = rx
+        .await
+        .map_err(|_| "Pi command queue dropped".to_string())?;
+
+    if let Err(error) = &result {
+        if error == crate::pi_command_queue::PROMPT_START_TIMEOUT_ERROR {
+            warn!(
+                "Pi prompt produced no stdout; stopping stuck session {}",
+                session_id
+            );
+            let mut pool = state.0.lock().await;
+            if let Some(manager) = pool.sessions.get_mut(session_id) {
+                manager.stop();
+            }
+        }
+    }
+
+    result
+}
+
 async fn open_secret_store_for_connection_context() -> Option<screenpipe_secrets::SecretStore> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
     let db_path = data_dir.join("db.sqlite");
@@ -2700,8 +2749,7 @@ pub async fn pi_prompt(
             false,
         )
         .await?;
-    rx.await
-        .map_err(|_| "Pi command queue dropped".to_string())??;
+    await_prompt_start(state.inner(), &sid, rx).await?;
     Ok(queue_id)
 }
 
@@ -2734,7 +2782,7 @@ pub async fn pi_queue_prompt(
     let preview = display_preview.unwrap_or_else(|| message.clone());
     let message = attach_foreground_connections_context(&app, &sid, message).await;
     let cmd = build_prompt_command(message, images)?;
-    let (queue_id, _rx) = queue
+    let (queue_id, rx) = queue
         .send_prompt(
             cmd,
             crate::pi_command_queue::WaitMode::Prompt,
@@ -2742,6 +2790,16 @@ pub async fn pi_queue_prompt(
             true,
         )
         .await?;
+    let state_for_watchdog = state.inner().clone();
+    let sid_for_watchdog = sid.clone();
+    tokio::spawn(async move {
+        if let Err(error) = await_prompt_start(&state_for_watchdog, &sid_for_watchdog, rx).await {
+            warn!(
+                "queued Pi prompt failed before it started for session {}: {}",
+                sid_for_watchdog, error
+            );
+        }
+    });
     Ok(queue_id)
 }
 
@@ -4361,7 +4419,13 @@ error: InstallFailed extracting tarball"#;
             Command::new(&pi_path)
         };
         cmd.args([
-            "--mode", "rpc", "--approve", "--provider", provider, "--model", model,
+            "--mode",
+            "rpc",
+            "--approve",
+            "--provider",
+            provider,
+            "--model",
+            model,
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
