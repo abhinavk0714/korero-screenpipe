@@ -21,6 +21,7 @@ import {
   Mic2,
   Play,
   RefreshCw,
+  Send,
   Sparkles,
   Square,
   Trash2,
@@ -104,6 +105,8 @@ import {
 import { listenTyped, TAURI_EVENTS } from "@/lib/events/tauri-events";
 import { writeBrowserLogNow } from "@/lib/logging/browser-log";
 import { copyMeetingToClipboard } from "./copy-meeting";
+import { ConnectedShareDialog } from "@/components/connected-share-dialog";
+import { createMeetingShareArtifact } from "@/lib/connected-share";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
@@ -180,6 +183,7 @@ export function NoteView({
   const [exporting, setExporting] = useState(false);
   const [copying, setCopying] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [resumingCapture, setResumingCapture] = useState(false);
   const [savingBeforeStop, setSavingBeforeStop] = useState(false);
   const [meetingCtx, setMeetingCtx] = useState<MeetingContext | null>(null);
@@ -199,6 +203,16 @@ export function NoteView({
   const [isDraggingImage, setIsDraggingImage] = useState(false);
   const canSummarizeMeeting =
     !isLive && !stopping && !savingBeforeStop && Boolean(meeting.meeting_end);
+  const shareArtifact = useMemo(
+    () =>
+      createMeetingShareArtifact({
+        ...meeting,
+        title: title || null,
+        attendees: attendees || null,
+        note: note || null,
+      }),
+    [attendees, meeting, note, title],
+  );
 
   // Drag-and-drop images straight into the note. Tauri delivers OS file drops
   // at the webview level (they never surface as DOM drop events), and the event
@@ -1040,6 +1054,11 @@ export function NoteView({
 
   return (
     <div ref={rootRef} className="relative flex h-full flex-col bg-background">
+      <ConnectedShareDialog
+        open={shareOpen}
+        onOpenChange={setShareOpen}
+        artifact={shareArtifact}
+      />
       {isDraggingImage && (
         <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-background/60">
           <div className="border border-foreground bg-foreground px-12 py-10 text-background">
@@ -1068,6 +1087,15 @@ export function NoteView({
             <ArrowLeft className="h-3.5 w-3.5" />
           </Button>
           <div className="flex items-center gap-1 border border-border bg-background p-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShareOpen(true)}
+              title="send meeting notes"
+              className="h-8 rounded-none px-2 text-xs"
+            >
+              <Send className="mr-1.5 h-3.5 w-3.5" /> send
+            </Button>
             <Button
               variant="ghost"
               size="sm"

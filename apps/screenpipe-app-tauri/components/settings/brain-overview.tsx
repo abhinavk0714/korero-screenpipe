@@ -21,6 +21,7 @@ import {
   Loader2,
   Network,
   RefreshCw,
+  Send,
   SlidersHorizontal,
   Undo2,
   X,
@@ -43,6 +44,7 @@ import { LiveViewDashboardSwitcher } from "@/components/settings/live-view-dashb
 import { LiveViewLayoutEditor } from "@/components/settings/live-view-layout-editor";
 import { LiveViewOnboardingActivation } from "@/components/settings/live-view-onboarding-activation";
 import { LiveViewOnboardingGuide } from "@/components/settings/live-view-onboarding-guide";
+import { ConnectedShareDialog } from "@/components/connected-share-dialog";
 import {
   getTemplatePipeReadiness,
   LiveViewTemplateGallery,
@@ -62,6 +64,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { useToast } from "@/components/ui/use-toast";
 import { localFetch } from "@/lib/api";
+import { createLiveViewShareArtifact } from "@/lib/connected-share";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import {
   readActiveAiPresetId,
@@ -423,6 +426,7 @@ export function BrainOverview({
   const [templateKits, setTemplateKits] = useState<BrainViewTemplateKit[]>([]);
   const [templateGalleryOpen, setTemplateGalleryOpen] = useState(false);
   const [createDashboardOpen, setCreateDashboardOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [undoView, setUndoView] = useState<ViewDefinition | null>(null);
   const [undoRevision, setUndoRevision] = useState<number | null>(null);
   const [previewDestination, setPreviewDestination] =
@@ -445,6 +449,10 @@ export function BrainOverview({
   const canvasServerRevisionsRef = useRef(new Map<string, number>());
   const pendingCanvasSavesRef = useRef(
     new Map<string, BrainViewCanvasDocument>(),
+  );
+  const shareArtifact = useMemo(
+    () => (view ? createLiveViewShareArtifact(view) : null),
+    [view],
   );
   const canvasSavePumpRef = useRef<Promise<void> | null>(null);
   const refreshOnboardingActivation = useCallback(
@@ -2494,6 +2502,11 @@ Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_liv
   const onboardingColdStart = showOnboardingActivation && !onboardingHasResult;
   return (
     <div className="min-h-0 flex-1 overflow-y-auto pb-8 pr-4 [scrollbar-gutter:stable]">
+      <ConnectedShareDialog
+        open={shareOpen}
+        onOpenChange={setShareOpen}
+        artifact={shareArtifact!}
+      />
       <div
         data-onboarding-guide-target="dashboard"
         className="mb-5 grid gap-4 border-b border-border pb-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end"
@@ -2637,6 +2650,18 @@ Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_liv
                 }`}
               />
               <span aria-hidden="true">refresh data</span>
+            </Button>
+          )}
+          {!onboardingColdStart && slots.some((slot) => slot.value) && (
+            <Button
+              data-testid="overview-send"
+              variant="outline"
+              size="sm"
+              className="h-9 flex-1 rounded-none px-3 sm:flex-none"
+              disabled={dashboardBusy}
+              onClick={() => setShareOpen(true)}
+            >
+              <Send className="mr-1.5 h-3.5 w-3.5" /> send
             </Button>
           )}
           {!onboardingColdStart && (
