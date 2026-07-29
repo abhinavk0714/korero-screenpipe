@@ -1105,8 +1105,9 @@ export function NoteView({
               size="sm"
               onClick={handleCopy}
               disabled={copying}
-              title="copy meeting + transcript to clipboard"
-              className="h-8 w-8 p-0 rounded-none"
+              title="copy meeting and transcript to share"
+              aria-label="copy meeting and transcript to share"
+              className="h-8 gap-1.5 px-2 rounded-none"
             >
               {copying ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1115,6 +1116,9 @@ export function NoteView({
               ) : (
                 <Copy className="h-3.5 w-3.5" />
               )}
+              <span className="text-xs">
+                {copying ? "copying" : copied ? "copied" : "copy to share"}
+              </span>
             </Button>
             {!isLive && (
               <>
