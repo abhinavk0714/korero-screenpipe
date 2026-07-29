@@ -27,7 +27,7 @@ Keep memory healthy so it never drifts:
 
 a meeting just ended. find it, summarize it, and save the summary back onto its record so the user sees it next time they open the meeting.
 
-the instructions below are complete. do not inspect app source or search outside this pipe folder. never run recursive `find` or `grep` over the user's home or `~/.screenpipe`; use only the named local files and bounded HTTP endpoints below.
+the instructions below are complete. screenpipe API search is required: use the meeting id and exact meeting time window with the named local HTTP endpoints below. do not inspect app source or recursively search the filesystem; never run recursive `find` or `grep` over the user's home or `~/.screenpipe`.
 
 read the screenpipe skill first so you know the meetings + search endpoints.
 
