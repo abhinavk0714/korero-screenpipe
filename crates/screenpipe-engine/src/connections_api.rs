@@ -929,7 +929,8 @@ async fn gmail_token(
 
 /// GET /connections/gmail/instances — list all connected Gmail accounts.
 async fn gmail_list_instances(State(state): State<ConnectionsState>) -> (StatusCode, Json<Value>) {
-    let instances = oauth_store::list_oauth_instances(state.secret_store.as_deref(), "gmail").await;
+    let instances =
+        oauth_store::list_connected_oauth_instances(state.secret_store.as_deref(), "gmail").await;
     let mut accounts = Vec::new();
     for inst in instances {
         let email =
