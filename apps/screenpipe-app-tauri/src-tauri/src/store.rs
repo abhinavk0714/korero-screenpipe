@@ -956,6 +956,11 @@ pub struct SettingsStore {
     /// Consumer collection is allowed only while this matches the current user.
     #[serde(rename = "remoteLogCollectionUserId", default)]
     pub remote_log_collection_user_id: Option<String>,
+    /// Explicit opt-in to attach recent locally-filtered app logs to Sentry
+    /// error and fatal events. Independent from analytics and remote support
+    /// log consent, and disabled unless the user turns it on.
+    #[serde(rename = "includeLogsInCrashReports", default)]
+    pub include_logs_in_crash_reports: bool,
     /// Timeline overlay mode: "fullscreen" (floating panel above everything) or
     /// "window" (normal resizable window with title bar).
     #[serde(rename = "overlayMode", default = "default_overlay_mode")]
@@ -1420,6 +1425,7 @@ Rules:
             enhanced_ai: false,
             remote_log_collection_enabled: false,
             remote_log_collection_user_id: None,
+            include_logs_in_crash_reports: false,
             #[cfg(target_os = "macos")]
             overlay_mode: "fullscreen".to_string(),
             #[cfg(not(target_os = "macos"))]
@@ -2195,6 +2201,24 @@ mod tests {
             settings.remote_log_collection_user_id.as_deref(),
             Some("user_123")
         );
+    }
+
+    #[test]
+    fn crash_report_log_attachments_default_to_disabled() {
+        assert!(!SettingsStore::default().include_logs_in_crash_reports);
+
+        let missing: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": []
+        }))
+        .unwrap();
+        assert!(!missing.include_logs_in_crash_reports);
+
+        let opted_in: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": [],
+            "includeLogsInCrashReports": true
+        }))
+        .unwrap();
+        assert!(opted_in.include_logs_in_crash_reports);
     }
 
     #[test]

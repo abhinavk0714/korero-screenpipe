@@ -5,10 +5,11 @@
 import { describe, expect, it } from "vitest";
 import { createDefaultSettingsObject } from "@/lib/hooks/use-settings";
 
-describe("default settings: remote support logs", () => {
-  it("defaults remote log collection to disabled", () => {
+describe("default settings: diagnostic logs", () => {
+  it("defaults every consumer log-sharing path to disabled", () => {
     const settings = createDefaultSettingsObject();
     expect(settings.remoteLogCollectionEnabled).toBe(false);
     expect(settings.remoteLogCollectionUserId).toBeNull();
+    expect(settings.includeLogsInCrashReports).toBe(false);
   });
 });

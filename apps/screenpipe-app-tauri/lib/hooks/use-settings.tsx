@@ -673,6 +673,7 @@ let DEFAULT_SETTINGS: Settings = {
 			analyticsEnabled: true,
 			remoteLogCollectionEnabled: false,
 			remoteLogCollectionUserId: null,
+			includeLogsInCrashReports: false,
 			audioChunkDuration: 30,
 			useChineseMirror: false,
 			languages: [],

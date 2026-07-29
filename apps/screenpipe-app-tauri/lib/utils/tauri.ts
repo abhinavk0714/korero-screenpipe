@@ -2241,6 +2241,13 @@ async setOnboardingStep(step: string) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Apply the privacy setting immediately. Persistence is handled by the
+ * frontend settings store; this command updates the running Sentry transport.
+ */
+async setSentryLogAttachmentEnabled(enabled: boolean) : Promise<void> {
+    await TAURI_INVOKE("set_sentry_log_attachment_enabled", { enabled });
+},
+/**
  * Enable or disable sync.
  */
 async setSyncEnabled(enabled: boolean) : Promise<Result<null, string>> {
@@ -2926,6 +2933,16 @@ endTime: string;
  */
 recordMode: string }
 export type SchedulerStatus = { running: boolean; last_sync: string | null; last_error: string | null }
+/**
+ * Which AI projection to build from the existing screen/accessibility stream.
+ *
+ * `Memory` preserves the original semantic-parser behavior. `ComputerUse` is
+ * shown to users as automation: it keeps capture action-oriented and skips the
+ * semantic parser worker. `Both` is shown as memory + automation and derives
+ * both views from the same captured tree; it never starts a second screen
+ * recorder or stores a duplicate raw accessibility tree.
+ */
+export type SemanticContextMode = "memory" | "computerUse" | "both"
 export type SettingsStore =
 /**
  * All recording/capture config lives here. Flattened so the JSON shape
@@ -3075,14 +3092,17 @@ disableVision: boolean;
  */
 disableScreenshots?: boolean;
 /**
- * Enable experimental normalized semantic context parsing. Off by default.
+ * Build normalized semantic context from captured accessibility trees.
+ * Experimental and opt-in. False preserves the historical capture path
+ * without starting a parser worker or writing semantic tables.
  */
 enableSemanticContext?: boolean;
 /**
- * AI projection derived from the shared accessibility capture. `computerUse`
- * skips semantic parser storage; `both` reuses the same captured tree.
+ * Select the AI view derived from the single captured accessibility tree.
+ * Missing values default to memory so existing opt-in users retain the
+ * exact behavior they selected before this setting existed.
  */
-semanticContextMode?: "memory" | "computerUse" | "both";
+semanticContextMode?: SemanticContextMode;
 /**
  * Disable the timeline / rewind feature. When true, the engine skips
  * timeline-only work: warming the hot frame cache from the DB at startup
@@ -3506,6 +3526,12 @@ remoteLogCollectionEnabled?: boolean;
  * Consumer collection is allowed only while this matches the current user.
  */
 remoteLogCollectionUserId?: string | null;
+/**
+ * Explicit opt-in to attach recent locally-filtered app logs to Sentry
+ * error and fatal events. Independent from analytics and remote support
+ * log consent, and disabled unless the user turns it on.
+ */
+includeLogsInCrashReports?: boolean;
 /**
  * Timeline overlay mode: "fullscreen" (floating panel above everything) or
  * "window" (normal resizable window with title bar).

@@ -87,6 +87,7 @@ mod recording;
 mod remote_support_logs;
 mod remote_sync_commands;
 mod secrets;
+mod sentry_log_attachment;
 mod server;
 mod server_core;
 #[cfg(target_os = "macos")]
@@ -446,6 +447,10 @@ async fn main() {
         .unwrap_or(false)
         || screenpipe_engine::analytics::telemetry_disabled_by_env();
     let _posthog_disabled = telemetry_disabled;
+    let sentry_log_attachment_state =
+        sentry_log_attachment::SentryLogAttachmentState::new(
+            store_bool("includeLogsInCrashReports").unwrap_or(false),
+        );
 
     let app_version = env!("CARGO_PKG_VERSION");
     let sentry_guard = if !telemetry_disabled {
@@ -455,6 +460,7 @@ async fn main() {
                 release: Some(format!("screenpipe-app@{}", app_version).into()),
                 send_default_pii: false,
                 server_name: Some("screenpipe-app".into()),
+                transport: Some(sentry_log_attachment_state.transport_factory()),
                 before_send: Some(std::sync::Arc::new(|mut event| {
                     // Self-expiring Sentry reports. Each build stamps the
                     // unix epoch seconds of its build time (see build.rs) and
@@ -887,6 +893,7 @@ async fn main() {
         .manage(pi_state)
         .manage(suggestions_state)
         .manage(sync_scheduler)
+        .manage(sentry_log_attachment_state.clone())
         .invoke_handler(tauri_helper::tauri_collect_commands!())
         .setup(move |app| {
             //deep link register_all
@@ -1249,6 +1256,7 @@ async fn main() {
                         map.insert("platform".into(), serde_json::json!(store.platform));
                         map.insert("embedded_llm_enabled".into(), serde_json::json!(store.embedded_llm.enabled));
                         map.insert("embedded_llm_model".into(), serde_json::json!(store.embedded_llm.model));
+                        map.insert("include_logs_in_crash_reports".into(), serde_json::json!(store.include_logs_in_crash_reports));
                         // Only send counts for privacy-sensitive lists (not actual values)
                         map.insert("audio_device_count".into(), serde_json::json!(store.recording.audio_devices.len()));
                         map.insert("ignored_windows_count".into(), serde_json::json!(store.recording.ignored_windows.len()));
@@ -2025,6 +2033,16 @@ async fn main() {
             // Enterprise builds compile this as a no-op because their managed
             // license-authenticated collector above is mandatory.
             remote_support_logs::spawn(&app_handle);
+
+            // When the user explicitly opts in, keep a small locally-filtered
+            // log snapshot ready for Sentry error/fatal envelopes. The transport
+            // never attaches it to routine analytics or non-error events.
+            if !telemetry_disabled {
+                sentry_log_attachment::spawn(
+                    &app_handle,
+                    sentry_log_attachment_state.clone(),
+                );
+            }
 
             // Disable removed Storage cloud backends if old settings enabled them.
             let app_handle_clone = app_handle.clone();

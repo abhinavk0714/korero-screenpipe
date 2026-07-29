@@ -18,6 +18,10 @@ export const searchIndex: SettingsField[] = [
     label: "Remote support logs",
     keywords: ["support", "diagnostic", "troubleshooting", "remote", "logs"],
   },
+  {
+    label: "Include logs in crash reports",
+    keywords: ["sentry", "error", "diagnostic", "automatic", "logs"],
+  },
   { label: "Telemetry" },
 ];
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
@@ -55,6 +59,7 @@ import { ApplyRestartBar } from "./apply-restart-bar";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
 import { ScheduleSettings } from "./schedule-settings";
 import { RemoteSupportLogsCard } from "./remote-support-logs-card";
+import { CrashReportLogsCard } from "./crash-report-logs-card";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { platform } from "@tauri-apps/plugin-os";
 import { useToast } from "@/components/ui/use-toast";
@@ -1995,6 +2000,7 @@ export function PrivacySection() {
           </CardContent>
         </Card>
         </LockedSetting>
+        <CrashReportLogsCard />
       </div>
 
       {/* Floating apply & restart bar */}

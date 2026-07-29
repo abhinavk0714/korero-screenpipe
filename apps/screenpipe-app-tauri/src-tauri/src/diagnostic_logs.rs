@@ -20,7 +20,6 @@ use std::path::Path;
 use std::time::Duration;
 
 use sysinfo::{System, SystemExt};
-#[cfg(not(feature = "enterprise-build"))]
 use tauri::AppHandle;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
@@ -30,6 +29,10 @@ const MAX_FILES: usize = 5;
 const MAX_FILE_BYTES: usize = 100 * 1024;
 const MAX_BUNDLE_BYTES: usize = 256 * 1024;
 const MAX_REDACTED_BUNDLE_BYTES: usize = 512 * 1024;
+const SENTRY_MAX_FILES: usize = 3;
+const SENTRY_MAX_FILE_BYTES: usize = 32 * 1024;
+const SENTRY_MAX_BUNDLE_BYTES: usize = 96 * 1024;
+const SENTRY_MAX_REDACTED_BUNDLE_BYTES: usize = 128 * 1024;
 const REDACTION_TIMEOUT: Duration = Duration::from_secs(75);
 
 #[derive(Clone, Debug)]
@@ -56,7 +59,32 @@ pub async fn collect_redacted(app: &AppHandle) -> Result<String, String> {
     let files = crate::log_files::get_log_files(app.clone())
         .await
         .unwrap_or_default();
-    redact_files(&owned_log_files(files)).await
+    redact_files(
+        &owned_log_files(files),
+        MAX_FILES,
+        MAX_FILE_BYTES,
+        MAX_BUNDLE_BYTES,
+        MAX_REDACTED_BUNDLE_BYTES,
+    )
+    .await
+}
+
+/// Build the smaller diagnostics attachment used for opted-in Sentry errors.
+///
+/// It shares the unattended local-only redaction boundary, but keeps the
+/// attachment small because it can accompany more than one error event.
+pub async fn collect_redacted_for_sentry(app: &AppHandle) -> Result<String, String> {
+    let files = crate::log_files::get_log_files(app.clone())
+        .await
+        .unwrap_or_default();
+    redact_files(
+        &owned_log_files(files),
+        SENTRY_MAX_FILES,
+        SENTRY_MAX_FILE_BYTES,
+        SENTRY_MAX_BUNDLE_BYTES,
+        SENTRY_MAX_REDACTED_BUNDLE_BYTES,
+    )
+    .await
 }
 
 /// Collect from explicit app-owned log directories.
@@ -66,7 +94,14 @@ pub async fn collect_redacted(app: &AppHandle) -> Result<String, String> {
 #[cfg(feature = "enterprise-build")]
 pub async fn collect_redacted_from_dirs(dirs: &[std::path::PathBuf]) -> Result<String, String> {
     let files = crate::log_files::collect_log_files(dirs).await;
-    redact_files(&owned_log_files(files)).await
+    redact_files(
+        &owned_log_files(files),
+        MAX_FILES,
+        MAX_FILE_BYTES,
+        MAX_BUNDLE_BYTES,
+        MAX_REDACTED_BUNDLE_BYTES,
+    )
+    .await
 }
 
 fn owned_log_files(files: Vec<LogFile>) -> Vec<LogFile> {
@@ -117,22 +152,28 @@ fn is_dated_rolling_log(name: &str, prefix: &str) -> bool {
             })
 }
 
-async fn redact_files(files: &[LogFile]) -> Result<String, String> {
-    let raw = build_bundle(files).await;
+async fn redact_files(
+    files: &[LogFile],
+    max_files: usize,
+    max_file_bytes: usize,
+    max_bundle_bytes: usize,
+    max_redacted_bundle_bytes: usize,
+) -> Result<String, String> {
+    let raw = build_bundle(files, max_files, max_file_bytes, max_bundle_bytes).await;
     let redacted = tokio::time::timeout(
         REDACTION_TIMEOUT,
         crate::feedback_redact::redact_diagnostics_locally(raw),
     )
     .await
     .map_err(|_| "diagnostic redaction timed out; no logs were uploaded".to_string())??;
-    Ok(bound_redacted_bundle(redacted))
+    Ok(bound_redacted_bundle(redacted, max_redacted_bundle_bytes))
 }
 
-fn bound_redacted_bundle(mut text: String) -> String {
-    if text.len() <= MAX_REDACTED_BUNDLE_BYTES {
+fn bound_redacted_bundle(mut text: String, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
         return text;
     }
-    let mut end = MAX_REDACTED_BUNDLE_BYTES;
+    let mut end = max_bytes;
     while end > 0 && !text.is_char_boundary(end) {
         end -= 1;
     }
@@ -176,29 +217,34 @@ async fn read_tail(path: &Path, limit: usize) -> Result<Vec<u8>, std::io::Error>
 
 /// Build the raw bundle. Kept separate from redaction so bounds and filesystem
 /// behavior can be tested deterministically.
-async fn build_bundle(files: &[LogFile]) -> String {
-    let mut out = String::with_capacity(MAX_BUNDLE_BYTES);
+async fn build_bundle(
+    files: &[LogFile],
+    max_files: usize,
+    max_file_bytes: usize,
+    max_bundle_bytes: usize,
+) -> String {
+    let mut out = String::with_capacity(max_bundle_bytes);
 
-    for file in files.iter().take(MAX_FILES) {
-        if out.len() >= MAX_BUNDLE_BYTES {
+    for file in files.iter().take(max_files) {
+        if out.len() >= max_bundle_bytes {
             break;
         }
 
         let path = Path::new(&file.path);
-        let bytes = match read_tail(path, MAX_FILE_BYTES).await {
+        let bytes = match read_tail(path, max_file_bytes).await {
             Ok(bytes) if !bytes.is_empty() => bytes,
             Ok(_) => continue,
             Err(_) => continue,
         };
 
         let header = format!("\n=== {} ===\n", file.name);
-        let remaining = MAX_BUNDLE_BYTES.saturating_sub(out.len());
+        let remaining = max_bundle_bytes.saturating_sub(out.len());
         if remaining <= header.len() {
             break;
         }
         out.push_str(&header);
 
-        let remaining = MAX_BUNDLE_BYTES.saturating_sub(out.len());
+        let remaining = max_bundle_bytes.saturating_sub(out.len());
         let text = String::from_utf8_lossy(&bytes);
         let mut take = std::cmp::min(text.len(), remaining);
         while take > 0 && !text.is_char_boundary(take) {
@@ -235,7 +281,13 @@ mod tests {
         contents.extend_from_slice("\ntail-secret-marker".as_bytes());
         tokio::fs::write(&path, contents).await.unwrap();
 
-        let bundle = build_bundle(&[log_file(&path, 1)]).await;
+        let bundle = build_bundle(
+            &[log_file(&path, 1)],
+            MAX_FILES,
+            MAX_FILE_BYTES,
+            MAX_BUNDLE_BYTES,
+        )
+        .await;
 
         assert!(bundle.len() <= MAX_BUNDLE_BYTES);
         assert!(bundle.contains("tail-secret-marker"));
@@ -252,7 +304,7 @@ mod tests {
             files.push(log_file(&path, i as u64));
         }
 
-        let bundle = build_bundle(&files).await;
+        let bundle = build_bundle(&files, MAX_FILES, MAX_FILE_BYTES, MAX_BUNDLE_BYTES).await;
 
         assert!(bundle.contains("body-0"));
         assert!(bundle.contains(&format!("body-{}", MAX_FILES - 1)));
@@ -264,7 +316,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let missing = dir.path().join("missing.log");
 
-        let bundle = build_bundle(&[log_file(&missing, 0)]).await;
+        let bundle = build_bundle(
+            &[log_file(&missing, 0)],
+            MAX_FILES,
+            MAX_FILE_BYTES,
+            MAX_BUNDLE_BYTES,
+        )
+        .await;
 
         assert_eq!(bundle, "[no log files found]");
     }
@@ -280,7 +338,13 @@ mod tests {
         tokio::fs::write(&target, "must-not-upload").await.unwrap();
         symlink(&target, &link).unwrap();
 
-        let bundle = build_bundle(&[log_file(&link, 0)]).await;
+        let bundle = build_bundle(
+            &[log_file(&link, 0)],
+            MAX_FILES,
+            MAX_FILE_BYTES,
+            MAX_BUNDLE_BYTES,
+        )
+        .await;
 
         assert_eq!(bundle, "[no log files found]");
         assert!(!bundle.contains("must-not-upload"));
@@ -293,7 +357,13 @@ mod tests {
         let body = format!("{}\néEND", "x".repeat(MAX_FILE_BYTES));
         tokio::fs::write(&path, body).await.unwrap();
 
-        let bundle = build_bundle(&[log_file(&path, 0)]).await;
+        let bundle = build_bundle(
+            &[log_file(&path, 0)],
+            MAX_FILES,
+            MAX_FILE_BYTES,
+            MAX_BUNDLE_BYTES,
+        )
+        .await;
 
         assert!(bundle.contains("END"));
         assert!(bundle.len() <= MAX_BUNDLE_BYTES);
@@ -319,10 +389,34 @@ mod tests {
     #[test]
     fn redacted_bundle_remains_transport_bounded_and_utf8_safe() {
         let oversized = format!("{}é", "x".repeat(MAX_REDACTED_BUNDLE_BYTES + 8));
-        let bounded = bound_redacted_bundle(oversized);
+        let bounded = bound_redacted_bundle(oversized, MAX_REDACTED_BUNDLE_BYTES);
 
         assert!(bounded.len() <= MAX_REDACTED_BUNDLE_BYTES);
         assert!(std::str::from_utf8(bounded.as_bytes()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn sentry_bundle_uses_the_smaller_attachment_limits() {
+        let dir = tempdir().unwrap();
+        let mut files = Vec::new();
+        for i in 0..(SENTRY_MAX_FILES + 1) {
+            let path = dir.path().join(format!("screenpipe.2026-07-1{i}.log"));
+            tokio::fs::write(&path, format!("marker-{i}\n{}", "x".repeat(40 * 1024)))
+                .await
+                .unwrap();
+            files.push(log_file(&path, i as u64));
+        }
+
+        let bundle = build_bundle(
+            &files,
+            SENTRY_MAX_FILES,
+            SENTRY_MAX_FILE_BYTES,
+            SENTRY_MAX_BUNDLE_BYTES,
+        )
+        .await;
+
+        assert!(bundle.len() <= SENTRY_MAX_BUNDLE_BYTES);
+        assert!(!bundle.contains("screenpipe.2026-07-13.log"));
     }
 
     #[test]
