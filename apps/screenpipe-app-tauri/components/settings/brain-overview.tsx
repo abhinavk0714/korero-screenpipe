@@ -68,6 +68,10 @@ import { useToast } from "@/components/ui/use-toast";
 import { localFetch } from "@/lib/api";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import {
+  buildLiveViewItemHandoff,
+  persistLiveViewItemAction,
+} from "@/lib/live-views/item-actions";
+import {
   readActiveAiPresetId,
   resolveActiveAiPreset,
   writeActiveAiPresetId,
@@ -1530,45 +1534,11 @@ export function BrainOverview({
   ): Promise<boolean> => {
     if (!view || !slot.value) return false;
     try {
-      const targetId = `live-view:${view.id}:${slot.id}`;
-      const response = await localFetch(
-        `/outputs/targets/${encodeURIComponent(targetId)}/items/${encodeURIComponent(request.itemId)}/actions`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            artifact_output_id: slot.value.artifactOutputId,
-            artifact_version: slot.value.artifactVersion,
-            action: request.action,
-            snoozed_until: request.snoozedUntil ?? null,
-            correction: request.correction?.trim() || null,
-          }),
-        },
-      );
-      const body = (await response.json().catch(() => ({}))) as {
-        error?: string;
-        item_actions?: {
-          items?: Array<{
-            item_id: string;
-            disposition: "active" | "resolved" | "snoozed" | "dismissed";
-            snoozed_until?: string;
-            correction?: string;
-            updated_at: string;
-          }>;
-        };
-      };
-      if (!response.ok || !body.item_actions) {
-        throw new Error(body.error || `HTTP ${response.status}`);
-      }
-      const persistedItemActions: ViewSlot["itemActions"] = {
-        items: (body.item_actions.items ?? []).map((state) => ({
-          itemId: state.item_id,
-          disposition: state.disposition,
-          snoozedUntil: state.snoozed_until ?? null,
-          correction: state.correction ?? null,
-          updatedAt: state.updated_at,
-        })),
-      };
+      const persistedItemActions = await persistLiveViewItemAction({
+        viewId: view.id,
+        slot,
+        request,
+      });
       setView((current) =>
         current
           ? {
@@ -1614,18 +1584,14 @@ export function BrainOverview({
 
   const handoffItem = async (slot: ViewSlot, item: LiveViewListItem) => {
     if (!view) return;
-    const title = typeof item.title === "string" ? item.title : "this item";
-    const details = [item.subtitle, item.dueAt, item.source]
-      .filter(
-        (value): value is string =>
-          typeof value === "string" && Boolean(value.trim()),
-      )
-      .join(" · ");
+    const handoff = buildLiveViewItemHandoff({
+      viewTitle: view.title,
+      slotTitle: slot.title,
+      item,
+    });
     try {
       await showChatWithPrefill({
-        context: `Live View “${view.title}” · ${slot.title}`,
-        prompt: `Help me send this item to one of my connected apps. First show the available relevant destinations and a concise preview. Ask me to confirm the exact destination before sending anything.\n\nItem: ${title}${details ? `\nContext: ${details}` : ""}`,
-        displayLabel: `send ${title}`,
+        ...handoff,
         autoSend: true,
         source: "live-view-item-handoff",
         useHomeChat: true,

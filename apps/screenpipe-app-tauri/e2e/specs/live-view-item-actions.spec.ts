@@ -298,7 +298,7 @@ describe("Live View reusable item actions", function () {
     await deleteViewIfPresent(ACCOUNTING_VIEW).catch(() => undefined);
   });
 
-  it("snoozes, corrects, resolves, reopens, and rehydrates the same generic list", async () => {
+  it("snoozes, corrects, resolves, removes, reopens, and rehydrates the same generic list", async () => {
     await browser.execute(() => {
       window.location.href = "/home?section=brain";
     });
@@ -308,20 +308,9 @@ describe("Live View reusable item actions", function () {
     await waitForTestId("live-view-item-customer-recap", 10_000);
     await saveScreenshot("living-commitments-01-active-inbox");
 
-    const recapRow = await waitForTestId(
-      "live-view-item-customer-recap",
-      10_000,
-    );
-    await recapRow.moveTo();
-    await browser.execute(() => {
-      document
-        .querySelector<HTMLElement>(
-          "[data-testid='live-view-item-customer-recap-snooze']",
-        )
-        ?.focus();
-    });
+    await waitForTestId("live-view-item-customer-recap", 10_000);
     await browser.pause(t(300));
-    await saveScreenshot("living-commitments-02-row-actions");
+    await saveScreenshot("living-commitments-02-visible-decisions");
 
     const snooze = await waitForTestId(
       "live-view-item-customer-recap-snooze",
@@ -374,12 +363,20 @@ describe("Live View reusable item actions", function () {
     ).click();
     await saveScreenshot("living-commitments-05-persisted-after-reload");
 
-    await (
-      await waitForTestId(
-        "live-view-item-linear-permission-fix-correct",
-        10_000,
-      )
-    ).click();
+    const notRight = await waitForTestId(
+      "live-view-item-linear-permission-fix-not-right",
+      10_000,
+    );
+    await notRight.click();
+    const correctChoice = await waitForTestId(
+      "live-view-item-linear-permission-fix-correct",
+      10_000,
+    );
+    await correctChoice.waitForDisplayed({ timeout: t(10_000) });
+    expect(await notRight.getAttribute("data-state")).toBe("open");
+    await browser.pause(t(300));
+    await saveScreenshot("living-commitments-06-not-right-choices");
+    await correctChoice.click();
     const correctionInput = await waitForTestId(
       "live-view-item-linear-permission-fix-correction-input",
       10_000,
@@ -388,7 +385,7 @@ describe("Live View reusable item actions", function () {
       "The OS prompt came from the connected Pipe, not Screenpipe capture",
     );
     await browser.pause(t(300));
-    await saveScreenshot("living-commitments-06-correction-review");
+    await saveScreenshot("living-commitments-07-correction-review");
     await (
       await waitForTestId(
         "live-view-item-linear-permission-fix-correction-save",
@@ -415,23 +412,27 @@ describe("Live View reusable item actions", function () {
       { timeout: t(10_000), timeoutMsg: "correction did not persist" },
     );
 
+    await (
+      await waitForTestId(
+        "live-view-item-linear-permission-fix-not-right",
+        10_000,
+      )
+    ).click();
+    await (
+      await waitForTestId(
+        "live-view-item-linear-permission-fix-dismiss",
+        10_000,
+      )
+    ).click();
+    await waitForItemState("linear-permission-fix", "dismissed");
+    await saveScreenshot("living-commitments-08-reversible-removal");
+
     await selectDashboard(ACCOUNTING_VIEW);
     await waitForTestId("live-view-item-ramp-8421-receipt", 10_000);
-    await saveScreenshot("living-commitments-07-accounting-exceptions");
-    const accountingRow = await waitForTestId(
-      "live-view-item-ramp-8421-receipt",
-      10_000,
-    );
-    await accountingRow.moveTo();
-    await browser.execute(() => {
-      document
-        .querySelector<HTMLElement>(
-          "[data-testid='live-view-item-ramp-8421-receipt-snooze']",
-        )
-        ?.focus();
-    });
+    await saveScreenshot("living-commitments-09-accounting-exceptions");
+    await waitForTestId("live-view-item-ramp-8421-receipt", 10_000);
     await browser.pause(t(300));
-    await saveScreenshot("living-commitments-08-accounting-actions");
+    await saveScreenshot("living-commitments-10-accounting-actions");
 
     await (
       await waitForTestId("live-view-item-ramp-8421-receipt-resolve", 10_000)
@@ -448,6 +449,6 @@ describe("Live View reusable item actions", function () {
         await waitForTestId("live-view-item-ramp-8421-receipt-reopen", 10_000)
       ).isDisplayed(),
     ).toBe(true);
-    await saveScreenshot("living-commitments-09-accounting-receipt");
+    await saveScreenshot("living-commitments-11-accounting-receipt");
   });
 });

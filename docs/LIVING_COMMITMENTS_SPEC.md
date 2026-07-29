@@ -97,6 +97,10 @@ These screenshots come from the production frontend and debug Tauri binary runni
 
 ![Active commitments inbox](./assets/pr/living-commitments/living-commitments-01-active-inbox.png)
 
+### Decisions stay visible without hovering
+
+![Visible item decisions](./assets/pr/living-commitments/living-commitments-02-visible-decisions.png)
+
 ### Snooze without deleting context
 
 ![Snooze menu](./assets/pr/living-commitments/living-commitments-03-snooze-menu.png)
@@ -109,15 +113,25 @@ These screenshots come from the production frontend and debug Tauri binary runni
 
 ![Persisted after reload](./assets/pr/living-commitments/living-commitments-05-persisted-after-reload.png)
 
+### “Not right” offers a clear, reversible choice
+
+![Not right choices](./assets/pr/living-commitments/living-commitments-06-not-right-choices.png)
+
 ### Corrections teach the next reconciliation
 
-![Correction review](./assets/pr/living-commitments/living-commitments-06-correction-review.png)
+![Correction review](./assets/pr/living-commitments/living-commitments-07-correction-review.png)
+
+### Removal stays reversible
+
+![Reversible removal](./assets/pr/living-commitments/living-commitments-08-reversible-removal.png)
 
 ### The same primitive handles accounting exceptions
 
-![Accounting exceptions](./assets/pr/living-commitments/living-commitments-07-accounting-exceptions.png)
+![Accounting exceptions](./assets/pr/living-commitments/living-commitments-09-accounting-exceptions.png)
 
-![Accounting handled receipt](./assets/pr/living-commitments/living-commitments-09-accounting-receipt.png)
+![Accounting item actions](./assets/pr/living-commitments/living-commitments-10-accounting-actions.png)
+
+![Accounting handled receipt](./assets/pr/living-commitments/living-commitments-11-accounting-receipt.png)
 
 ## Templates
 

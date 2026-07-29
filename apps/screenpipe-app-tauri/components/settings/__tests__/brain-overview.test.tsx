@@ -1965,7 +1965,7 @@ describe("BrainOverview", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "resolve Send the customer recap",
+        name: "done Send the customer recap",
       }),
     );
 
