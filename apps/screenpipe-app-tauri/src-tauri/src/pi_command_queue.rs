@@ -575,7 +575,7 @@ pub fn spawn_queue(
     spawn_queue_with_prompt_start_timeout(stdin, state, request_id_start, PROMPT_START_TIMEOUT)
 }
 
-fn spawn_queue_with_prompt_start_timeout(
+pub(crate) fn spawn_queue_with_prompt_start_timeout(
     stdin: Arc<Mutex<ChildStdin>>,
     state: Arc<PiQueueState>,
     request_id_start: u64,
