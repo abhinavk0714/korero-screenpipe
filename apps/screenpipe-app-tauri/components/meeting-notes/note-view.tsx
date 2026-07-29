@@ -38,6 +38,15 @@ import posthog from "posthog-js";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { Button } from "@/components/ui/button";
 import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -104,6 +113,15 @@ import {
 } from "./note-save-queue";
 import { listenTyped, TAURI_EVENTS } from "@/lib/events/tauri-events";
 import { writeBrowserLogNow } from "@/lib/logging/browser-log";
+import { getLanguageOptionsForTranscriptionEngine } from "@/lib/language";
+import {
+  AUTO_MEETING_LANGUAGE,
+  meetingLanguageUpdate,
+  meetingLanguageValue,
+  meetingTranscriptionLanguageEngine,
+  meetingTranscriptionModelUpdate,
+  meetingTranscriptionModelValue,
+} from "./meeting-transcription-settings";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
@@ -194,6 +212,8 @@ export function NoteView({
   const [inactivityPrompt, setInactivityPrompt] = useState(false);
   const [dismissedJoinUrl, setDismissedJoinUrl] = useState<string | null>(null);
   const { settings, updateSettings } = useSettings();
+  const [updatingTranscriptionSettings, setUpdatingTranscriptionSettings] =
+    useState(false);
   const noteEditorRef = useRef<NoteEditorHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
@@ -933,8 +953,6 @@ export function NoteView({
   };
 
   const attendeeCount = parseAttendees(attendees).length;
-  const englishOnly =
-    settings.languages.length === 1 && settings.languages[0] === "english";
   const dockDuration = isLive
     ? formatElapsed(meeting.meeting_start, nowMs)
     : formatDuration(meeting.meeting_start, meeting.meeting_end);
@@ -970,16 +988,48 @@ export function NoteView({
     meetingCtx,
   ]);
 
-  const setLanguagePreference = async (languages: string[]) => {
+  const applyMeetingTranscriptionSettings = async (
+    updates: Partial<Settings>,
+  ) => {
+    if (updatingTranscriptionSettings) return;
+    setUpdatingTranscriptionSettings(true);
     try {
-      await updateSettings({ languages });
+      await updateSettings(updates);
+
+      if (isLive) {
+        const stopped = await commands.stopCapture();
+        if (stopped.status === "error") throw new Error(stopped.error);
+
+        const started = await commands.startCapture();
+        if (started.status === "error") throw new Error(started.error);
+        await onCaptureDevicesRefresh?.();
+      }
+
+      toast({
+        title: "transcription updated",
+        description: isLive
+          ? "the meeting stayed open while audio capture reloaded"
+          : "the choice will apply to the next live meeting",
+      });
     } catch (err) {
       toast({
-        title: "couldn't update language",
+        title: "couldn't update transcription",
         description: String(err),
         variant: "destructive",
       });
+    } finally {
+      setUpdatingTranscriptionSettings(false);
     }
+  };
+
+  const setMeetingTranscriptionModel = async (engine: string) => {
+    await applyMeetingTranscriptionSettings(
+      meetingTranscriptionModelUpdate(settings, engine),
+    );
+  };
+
+  const setLanguagePreference = async (language: string) => {
+    await applyMeetingTranscriptionSettings(meetingLanguageUpdate(language));
   };
 
   const handleResumeAfterInactivity = async () => {
@@ -1278,7 +1328,8 @@ export function NoteView({
                 devices={audioStatusDevices}
                 isLive={isLive}
                 settings={settings}
-                englishOnly={englishOnly}
+                updating={updatingTranscriptionSettings}
+                onModelPreference={setMeetingTranscriptionModel}
                 onLanguagePreference={setLanguagePreference}
               />
             }
@@ -1445,14 +1496,16 @@ function AudioHealthButton({
   devices,
   isLive,
   settings,
-  englishOnly,
+  updating,
+  onModelPreference,
   onLanguagePreference,
 }: {
   devices: AudioStatusDevice[];
   isLive: boolean;
   settings: Settings;
-  englishOnly: boolean;
-  onLanguagePreference: (languages: string[]) => void | Promise<void>;
+  updating: boolean;
+  onModelPreference: (engine: string) => void | Promise<void>;
+  onLanguagePreference: (language: string) => void | Promise<void>;
 }) {
   const inputs = devices.filter((device) => device.kind === "input");
   const outputs = devices.filter((device) => device.kind === "output");
@@ -1469,6 +1522,22 @@ function AudioHealthButton({
   const outputLevel = maxAudioDeviceLevel(outputs);
   const [open, setOpen] = useState(false);
   const anyAudioActive = isLive && (inputActive || outputActive);
+  const modelValue = meetingTranscriptionModelValue(settings);
+  const languageEngine = meetingTranscriptionLanguageEngine(settings);
+  const languageOptions = getLanguageOptionsForTranscriptionEngine(
+    languageEngine,
+  );
+  const selectedLanguageValue = meetingLanguageValue(settings.languages);
+  const languageValue =
+    selectedLanguageValue === AUTO_MEETING_LANGUAGE ||
+    languageOptions.some((language) => language.code === selectedLanguageValue)
+      ? selectedLanguageValue
+      : AUTO_MEETING_LANGUAGE;
+  const isMacOS = settings.platform === "macos";
+  const hasCloudAuth = Boolean(settings.user?.token);
+  const hasDeepgramKey = Boolean(
+    settings.deepgramApiKey && settings.deepgramApiKey !== "default",
+  );
 
   const openRecordingSettings = () => {
     window.dispatchEvent(
@@ -1556,54 +1625,100 @@ function AudioHealthButton({
             level={outputLevel}
           />
 
-          <div className="mt-3 grid grid-cols-[112px_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-[11px] leading-tight">
-            <span className="text-muted-foreground">transcription engine</span>
-            <span className="truncate">
-              {liveEnabled
-                ? providerLabel(
-                    settings.meetingLiveTranscriptionProvider,
-                    settings.audioTranscriptionEngine,
-                  )
-                : "off"}
+        </div>
+
+        <div className="space-y-2 border-t border-border px-3 py-2.5">
+          <div className="grid grid-cols-[72px_minmax(0,1fr)] items-center gap-2">
+            <span className="text-xs text-muted-foreground">model</span>
+            <Select
+              value={liveEnabled ? modelValue : "disabled"}
+              onValueChange={(value) => void onModelPreference(value)}
+              disabled={updating || audioDisabled}
+            >
+              <SelectTrigger
+                className="h-8 min-w-0 px-2 text-[11px]"
+                aria-label="meeting transcription model"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    cloud
+                  </SelectLabel>
+                  <SelectItem value="screenpipe-cloud" disabled={!hasCloudAuth}>
+                    screenpipe cloud{!hasCloudAuth ? " · log in" : ""}
+                  </SelectItem>
+                  <SelectItem value="deepgram" disabled={!hasDeepgramKey}>
+                    deepgram live{!hasDeepgramKey ? " · add key" : ""}
+                  </SelectItem>
+                </SelectGroup>
+                <SelectGroup>
+                  <SelectLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    offline
+                  </SelectLabel>
+                  <SelectItem value="whisper-large-v3-turbo-quantized">
+                    whisper turbo · fast
+                  </SelectItem>
+                  <SelectItem value="whisper-large-v3-turbo">
+                    whisper turbo
+                  </SelectItem>
+                  <SelectItem value="whisper-tiny-quantized">
+                    whisper tiny · fast
+                  </SelectItem>
+                  <SelectItem value="whisper-tiny">whisper tiny</SelectItem>
+                  {!isMacOS && (
+                    <SelectItem value="qwen3-asr">qwen3-asr</SelectItem>
+                  )}
+                  <SelectItem value="parakeet">
+                    parakeet{isMacOS ? " · experimental" : ""}
+                  </SelectItem>
+                </SelectGroup>
+                <SelectGroup>
+                  <SelectLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    other
+                  </SelectLabel>
+                  <SelectItem value="openai-compatible">
+                    openai compatible
+                  </SelectItem>
+                  <SelectItem value="disabled">off</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-[72px_minmax(0,1fr)] items-center gap-2">
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Languages className="h-3.5 w-3.5 shrink-0" />
+              language
             </span>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between gap-3 border-t border-border px-3 py-2.5">
-          <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-            <Languages className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">language</span>
-          </div>
-          <div className="inline-flex shrink-0 border border-border">
-            <button
-              type="button"
-              onClick={() => void onLanguagePreference(["english"])}
-              className={cn(
-                "flex h-8 min-w-16 items-center justify-center gap-1.5 px-2 text-[11px] transition-colors hover:bg-muted",
-                englishOnly
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground",
-              )}
+            <Select
+              value={languageValue}
+              onValueChange={(value) => void onLanguagePreference(value)}
+              disabled={updating || audioDisabled || !liveEnabled}
             >
-              <span>english</span>
-              {englishOnly && <Check className="h-3 w-3" />}
-            </button>
-            <button
-              type="button"
-              onClick={() => void onLanguagePreference([])}
-              className={cn(
-                "flex h-8 min-w-14 items-center justify-center gap-1.5 border-l border-border px-2 text-[11px] transition-colors hover:bg-muted",
-                !englishOnly
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground",
-              )}
-            >
-              <span>auto</span>
-              {!englishOnly && <Check className="h-3 w-3" />}
-            </button>
+              <SelectTrigger
+                className="h-8 min-w-0 px-2 text-[11px]"
+                aria-label="meeting transcription language"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={AUTO_MEETING_LANGUAGE}>auto-detect</SelectItem>
+                {languageOptions.map((language) => (
+                  <SelectItem key={language.code} value={language.code}>
+                    {language.name.toLowerCase()}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
+          {updating && (
+            <div className="flex items-center justify-end gap-1.5 text-[10px] text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              reloading transcription
+            </div>
+          )}
         </div>
-
       </PopoverContent>
     </Popover>
   );
@@ -2028,38 +2143,4 @@ function audioDeviceLabel({
   }
   if (selectedDevices.length > 0) return selectedDevices.join(", ");
   return useSystemDefault ? fallback : "none selected";
-}
-
-function providerLabel(
-  provider: Settings["meetingLiveTranscriptionProvider"],
-  selectedEngine: string,
-) {
-  switch (provider) {
-    case "selected-engine":
-      return transcriptionEngineLabel(selectedEngine);
-    case "deepgram-live":
-      return "deepgram live";
-    case "screenpipe-cloud":
-    default:
-      return "screenpipe cloud";
-  }
-}
-
-function transcriptionEngineLabel(engine: string) {
-  switch (engine) {
-    case "screenpipe-cloud":
-      return "screenpipe cloud";
-    case "deepgram":
-      return "deepgram";
-    case "whisper-large-v3-turbo":
-      return "whisper turbo";
-    case "whisper-large-v3-turbo-quantized":
-      return "whisper turbo fast";
-    case "openai-compatible":
-      return "openai compatible";
-    case "disabled":
-      return "off";
-    default:
-      return engine.replace(/-/g, " ");
-  }
 }
