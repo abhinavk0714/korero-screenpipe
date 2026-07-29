@@ -146,7 +146,7 @@ impl From<CliTranscriptionMode> for TranscriptionMode {
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
-pub enum CliSemanticContext {
+pub enum CliAppContext {
     /// Disable structured app context
     Off,
     /// Build compact context for search, summaries, and pipes
@@ -157,7 +157,7 @@ pub enum CliSemanticContext {
     Both,
 }
 
-impl CliSemanticContext {
+impl CliAppContext {
     fn resolved(self) -> (bool, screenpipe_config::SemanticContextMode) {
         use screenpipe_config::SemanticContextMode;
 
@@ -593,13 +593,13 @@ pub struct RecordArgs {
     /// Memory builds compact context for retrieval and pipes; automation keeps
     /// action controls, state, and bounds for computer-use agents. Off by default.
     #[arg(long, value_enum)]
-    pub semantic_context: Option<CliSemanticContext>,
+    pub app_context: Option<CliAppContext>,
 
     /// Enable experimental normalized semantic context parsing. Parsing runs
     /// after durable frame capture in a bounded background worker. Off by
     /// default, preserving the historical capture and retrieval behavior.
-    /// Kept for compatibility; equivalent to `--semantic-context memory` on a
-    /// fresh CLI configuration. `--semantic-context` takes precedence when
+    /// Kept for compatibility; equivalent to `--app-context memory` on a
+    /// fresh CLI configuration. `--app-context` takes precedence when
     /// both are supplied.
     #[arg(
         long,
@@ -882,7 +882,7 @@ pub struct RecordArgSources {
     pub filter_music: bool,
     pub disable_vision: bool,
     pub disable_screenshots: bool,
-    pub semantic_context: bool,
+    pub app_context: bool,
     pub enable_semantic_context: bool,
     pub ignored_windows: bool,
     pub included_windows: bool,
@@ -946,7 +946,7 @@ impl RecordArgSources {
             filter_music: from_command_line(record, "filter_music"),
             disable_vision: from_command_line(record, "disable_vision"),
             disable_screenshots: from_command_line(record, "disable_screenshots"),
-            semantic_context: from_command_line(record, "semantic_context"),
+            app_context: from_command_line(record, "app_context"),
             enable_semantic_context: from_command_line(record, "enable_semantic_context"),
             ignored_windows: from_command_line(record, "ignored_windows"),
             included_windows: from_command_line(record, "included_windows"),
@@ -999,7 +999,7 @@ impl RecordArgSources {
             || self.filter_music
             || self.disable_vision
             || self.disable_screenshots
-            || self.semantic_context
+            || self.app_context
             || self.enable_semantic_context
             || self.ignored_windows
             || self.included_windows
@@ -1140,10 +1140,8 @@ impl RecordArgs {
         } else {
             screenpipe_config::AecMode::Off
         };
-        let (enable_semantic_context, semantic_context_mode) = self
-            .semantic_context
-            .map(CliSemanticContext::resolved)
-            .unwrap_or((
+        let (enable_semantic_context, semantic_context_mode) =
+            self.app_context.map(CliAppContext::resolved).unwrap_or((
                 self.enable_semantic_context,
                 screenpipe_config::SemanticContextMode::Memory,
             ));
@@ -1477,10 +1475,10 @@ impl RecordArgs {
         if sources.disable_screenshots {
             settings.disable_screenshots = self.disable_screenshots;
         }
-        if sources.semantic_context {
+        if sources.app_context {
             let (enabled, mode) = self
-                .semantic_context
-                .expect("explicit semantic context source must have a value")
+                .app_context
+                .expect("explicit app context source must have a value")
                 .resolved();
             settings.enable_semantic_context = enabled;
             settings.semantic_context_mode = mode;
@@ -2393,7 +2391,7 @@ mod tests {
         match cli.command {
             Command::Record(args) => {
                 assert!(!args.pause_on_drm_content, "default should be false");
-                assert!(args.semantic_context.is_none());
+                assert!(args.app_context.is_none());
                 assert!(
                     !args.enable_semantic_context,
                     "semantic parsing must remain opt-in"
@@ -2428,7 +2426,7 @@ mod tests {
     }
 
     #[test]
-    fn test_semantic_context_modes_flow_to_recording_settings() {
+    fn test_app_context_modes_flow_to_recording_settings() {
         use screenpipe_config::SemanticContextMode;
 
         let cases = [
@@ -2440,15 +2438,15 @@ mod tests {
 
         for (value, enabled, mode) in cases {
             let cli =
-                Cli::try_parse_from(["screenpipe", "record", "--semantic-context", value]).unwrap();
+                Cli::try_parse_from(["screenpipe", "record", "--app-context", value]).unwrap();
             match cli.command {
                 Command::Record(args) => {
                     let settings = args.to_recording_settings();
                     assert_eq!(settings.enable_semantic_context, enabled, "mode: {value}");
                     assert_eq!(settings.semantic_context_mode, mode, "mode: {value}");
                     assert!(
-                        record_sources(["screenpipe", "record", "--semantic-context", value,])
-                            .semantic_context,
+                        record_sources(["screenpipe", "record", "--app-context", value,])
+                            .app_context,
                         "mode should register as an explicit CLI source: {value}"
                     );
                 }
@@ -2458,12 +2456,12 @@ mod tests {
     }
 
     #[test]
-    fn test_semantic_context_argument_takes_precedence_over_legacy_enable_flag() {
+    fn test_app_context_argument_takes_precedence_over_legacy_enable_flag() {
         let cli = Cli::try_parse_from([
             "screenpipe",
             "record",
             "--enable-semantic-context",
-            "--semantic-context",
+            "--app-context",
             "off",
         ])
         .unwrap();
@@ -2805,8 +2803,8 @@ mod tests {
     }
 
     #[test]
-    fn test_semantic_context_off_overrides_persisted_enabled_mode() {
-        let args = ["screenpipe", "record", "--semantic-context", "off"];
+    fn test_app_context_off_overrides_persisted_enabled_mode() {
+        let args = ["screenpipe", "record", "--app-context", "off"];
         let cli = Cli::try_parse_from(args).unwrap();
         let sources = record_sources(args);
         let mut settings = screenpipe_config::RecordingSettings {
@@ -2828,8 +2826,8 @@ mod tests {
     }
 
     #[test]
-    fn test_semantic_context_automation_overrides_persisted_disabled_mode() {
-        let args = ["screenpipe", "record", "--semantic-context", "automation"];
+    fn test_app_context_automation_overrides_persisted_disabled_mode() {
+        let args = ["screenpipe", "record", "--app-context", "automation"];
         let cli = Cli::try_parse_from(args).unwrap();
         let sources = record_sources(args);
         let mut settings = screenpipe_config::RecordingSettings {
@@ -2851,7 +2849,7 @@ mod tests {
     }
 
     #[test]
-    fn test_absent_semantic_context_arguments_preserve_persisted_settings() {
+    fn test_absent_app_context_arguments_preserve_persisted_settings() {
         let args = ["screenpipe", "record", "--port", "4040"];
         let cli = Cli::try_parse_from(args).unwrap();
         let sources = record_sources(args);
@@ -2871,7 +2869,7 @@ mod tests {
             settings.semantic_context_mode,
             screenpipe_config::SemanticContextMode::Both
         );
-        assert!(!sources.semantic_context);
+        assert!(!sources.app_context);
         assert!(!sources.enable_semantic_context);
     }
 
