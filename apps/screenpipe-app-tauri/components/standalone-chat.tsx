@@ -3540,16 +3540,10 @@ export function StandaloneChat({
   // receive the same event, causing duplicate abort→session→prompt sequences.
   const prefillInFlightRef = useRef(false);
 
-  // Cross-window dedup for parallel-job autoSend prefills. Two parallel jobs
-  // can fire identical-content autoSend prefills targeting DIFFERENT windows
-  // ("home" + "chat"); each window mints its own session id and persists the
-  // same logical run twice (the duplicate sidebar rows). Each Tauri window has
-  // isolated localStorage, so we coordinate via Tauri events with a
-  // DETERMINISTIC tie-break (no atomic lock needed): every competing window
-  // broadcasts its claim, waits a fixed collection window to gather all claims
-  // for the same normalized prompt, then independently picks the SAME winner
-  // (smallest window label, then earliest ts, then nonce). Losers drop.
-  const prefillClaimsRef = useRef<Map<string, Array<{ windowLabel: string; timestamp: number; nonce: string }>>>(new Map());
+  // Cross-window dedup for autoSend prefills. Claims are retained for the
+  // request lifetime so late listeners/reloads cannot mint a second session
+  // after the short election window has elapsed.
+  const prefillClaimsRef = useRef<Map<string, { windowLabel: string; timestamp: number; nonce: string }>>(new Map());
   useEffect(() => {
     const unlisten = listen<{ dedupKey: string; windowLabel: string; timestamp: number; nonce: string }>(
       "chat-prefill-claim",
@@ -3557,9 +3551,10 @@ export function StandaloneChat({
         const { dedupKey, windowLabel, timestamp, nonce } = event.payload || ({} as any);
         if (!dedupKey) return;
         const bucket = prefillClaimsRef.current.get(dedupKey) ?? [];
-        if (!bucket.some((c) => c.nonce === nonce && c.windowLabel === windowLabel)) {
-          bucket.push({ windowLabel, timestamp, nonce });
-          prefillClaimsRef.current.set(dedupKey, bucket);
+        const existing = prefillClaimsRef.current.get(dedupKey);
+        const incoming = { windowLabel, timestamp, nonce };
+        if (!existing || comparePrefillClaims(incoming, existing) < 0) {
+          prefillClaimsRef.current.set(dedupKey, incoming);
         }
       },
     );
@@ -3567,6 +3562,15 @@ export function StandaloneChat({
       unlisten.then((fn) => fn());
     };
   }, []);
+
+  function comparePrefillClaims(
+    a: { windowLabel: string; timestamp: number; nonce: string },
+    b: { windowLabel: string; timestamp: number; nonce: string },
+  ): number {
+    if (a.windowLabel !== b.windowLabel) return a.windowLabel < b.windowLabel ? -1 : 1;
+    if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
+    return a.nonce < b.nonce ? -1 : a.nonce > b.nonce ? 1 : 0;
+  }
 
   // Listen for chat-prefill events from search modal and pipe creation
   useEffect(() => {
@@ -3590,6 +3594,7 @@ export function StandaloneChat({
         const trimmedContext = context?.trim();
         const fullMessage = trimmedContext ? `${trimmedContext}\n\n${prompt}` : prompt;
         // Start a new conversation then send
+        const dedupKey = `${fullMessage.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 200)}|images:${prefillImages.map((img) => img.slice(0, 96)).join("|")}`;
         (async () => {
           try {
             // Cross-window dedup: compete for the right to handle this prefill.
@@ -3598,22 +3603,19 @@ export function StandaloneChat({
             const myWindowLabel = getCurrentWindow().label;
             const myNonce = Math.random().toString(36).slice(2, 10);
             const myClaim = { windowLabel: myWindowLabel, timestamp: Date.now(), nonce: myNonce };
-            const bucket = prefillClaimsRef.current.get(dedupKey) ?? [];
-            bucket.push(myClaim);
-            prefillClaimsRef.current.set(dedupKey, bucket);
+            const existingClaim = prefillClaimsRef.current.get(dedupKey);
+            if (!existingClaim || comparePrefillClaims(myClaim, existingClaim) < 0) {
+              prefillClaimsRef.current.set(dedupKey, myClaim);
+            }
             try {
               await emit("chat-prefill-claim", { dedupKey, ...myClaim });
             } catch {}
-            // Wait the collection window so every competing window's claim lands.
+            // Keep a short collection window for deterministic ordering, then
+            // consult the shared winner. The claim remains until the request
+            // completes, so a delayed/reloaded listener cannot send again.
             await new Promise((r) => setTimeout(r, 250));
-            const claims = prefillClaimsRef.current.get(dedupKey) ?? [myClaim];
-            const winner = [...claims].sort((a, b) => {
-              if (a.windowLabel !== b.windowLabel) return a.windowLabel < b.windowLabel ? -1 : 1;
-              if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
-              return a.nonce < b.nonce ? -1 : a.nonce > b.nonce ? 1 : 0;
-            })[0];
-            setTimeout(() => prefillClaimsRef.current.delete(dedupKey), 5_000);
-            if (!winner || winner.nonce !== myNonce || winner.windowLabel !== myWindowLabel) {
+            const winner = prefillClaimsRef.current.get(dedupKey) ?? myClaim;
+            if (winner.nonce !== myNonce || winner.windowLabel !== myWindowLabel) {
               // Another window won the tie-break — drop this duplicate.
               console.log(`[chat-prefill] dropped duplicate autoSend (winner=${winner?.windowLabel})`);
               return;
@@ -3655,6 +3657,7 @@ export function StandaloneChat({
           } finally {
             autoSendBypassRef.current = false;
             prefillInFlightRef.current = false;
+            prefillClaimsRef.current.delete(dedupKey);
             setIsPreparingPrefill(false);
           }
         })();
