@@ -30,7 +30,9 @@ export function useCodingWorkspace({
   const [error, setError] = useState<string | null>(null);
   const requestGenerationRef = useRef(0);
   const conversationIdRef = useRef(conversationId);
+  const lockedRef = useRef(locked);
   conversationIdRef.current = conversationId;
+  lockedRef.current = locked;
 
   useEffect(
     () => () => {
@@ -79,7 +81,7 @@ export function useCodingWorkspace({
     async (repositoryPath: string) => {
       if (!conversationId)
         throw new Error("Start a conversation before choosing a repository");
-      if (locked)
+      if (lockedRef.current)
         throw new Error(
           "Choose a coding workspace before sending the first message",
         );
@@ -131,7 +133,7 @@ export function useCodingWorkspace({
         }
       }
     },
-    [conversationId, locked],
+    [conversationId],
   );
 
   const hasCurrentConversation =
@@ -149,6 +151,7 @@ export function useCodingWorkspace({
       title: "choose a Git repository for this chat",
     });
     if (typeof selected === "string") {
+      if (lockedRef.current) return;
       try {
         await attachRepositoryPath(selected);
       } catch {

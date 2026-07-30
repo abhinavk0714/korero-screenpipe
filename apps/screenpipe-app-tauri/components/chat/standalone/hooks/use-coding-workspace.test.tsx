@@ -10,6 +10,7 @@ import { useCodingWorkspace } from "./use-coding-workspace";
 const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   get: vi.fn(),
+  open: vi.fn(),
   toast: vi.fn(),
 }));
 
@@ -21,7 +22,7 @@ vi.mock("@/lib/utils/tauri", () => ({
 }));
 
 vi.mock("@/components/ui/use-toast", () => ({ toast: mocks.toast }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.open }));
 
 function workspace(conversationId: string): CodingWorkspace {
   return {
@@ -142,5 +143,34 @@ describe("useCodingWorkspace", () => {
 
     await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
     expect(window.__e2eAttachCodingWorkspace).toBeUndefined();
+  });
+
+  it("does not attach after the chat locks while the repository picker is open", async () => {
+    let resolvePicker: ((value: string) => void) | undefined;
+    mocks.get.mockResolvedValue({ status: "ok", data: null });
+    mocks.open.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePicker = resolve;
+      }),
+    );
+
+    const hook = renderHook(
+      ({ locked }) =>
+        useCodingWorkspace({ conversationId: "conversation-a", locked }),
+      { initialProps: { locked: false } },
+    );
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+
+    let selection: Promise<void>;
+    act(() => {
+      selection = hook.result.current.chooseRepository();
+    });
+    hook.rerender({ locked: true });
+    await act(async () => {
+      resolvePicker!("/repos/conversation-a");
+      await selection!;
+    });
+
+    expect(mocks.create).not.toHaveBeenCalled();
   });
 });
