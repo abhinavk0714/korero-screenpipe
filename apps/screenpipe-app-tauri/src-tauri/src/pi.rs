@@ -1450,6 +1450,45 @@ fn ensure_connection_gate_extension(project_dir: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn coding_workspace_resource_args(project_dir: &Path) -> Result<Vec<String>, String> {
+    let mut args = vec!["--no-approve".to_string()];
+    let extensions_dir = project_dir.join(".pi").join("extensions");
+    for name in [
+        "web-search.ts",
+        "mcp-bridge.ts",
+        "save-artifact.ts",
+        "live-views.ts",
+        "connection-gate.ts",
+    ] {
+        let path = extensions_dir.join(name);
+        if path.is_file() {
+            args.push("--extension".to_string());
+            args.push(path.to_string_lossy().into_owned());
+        }
+    }
+
+    let skills_dir = project_dir.join(".pi").join("skills");
+    let mut skill_files = std::fs::read_dir(&skills_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path().join("SKILL.md"))
+                .filter(|path| path.is_file())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    skill_files.sort();
+    for path in skill_files {
+        args.push("--skill".to_string());
+        args.push(path.to_string_lossy().into_owned());
+    }
+
+    if args.len() == 1 {
+        return Err("Screenpipe coding resources were not installed".to_string());
+    }
+    Ok(args)
+}
+
 /// Configuration for which AI provider Pi should use
 #[derive(Debug, Clone, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -1796,7 +1835,17 @@ pub async fn pi_start(
     provider_config: Option<PiProviderConfig>,
 ) -> Result<PiInfo, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
-    pi_start_inner(app, &state, &sid, project_dir, user_token, provider_config).await
+    let use_coding_workspace = crate::coding_workspace::workspace_path_if_owned(&sid)?.is_some();
+    pi_start_inner(
+        app,
+        &state,
+        &sid,
+        project_dir,
+        user_token,
+        provider_config,
+        use_coding_workspace,
+    )
+    .await
 }
 
 /// Kill orphan Pi RPC processes left over from a previous app crash.
@@ -1933,6 +1982,7 @@ pub async fn pi_start_inner(
     project_dir: String,
     user_token: Option<String>,
     provider_config: Option<PiProviderConfig>,
+    use_coding_workspace: bool,
 ) -> Result<PiInfo, String> {
     let project_dir = project_dir.trim().to_string();
     if project_dir.is_empty() {
@@ -1987,6 +2037,12 @@ pub async fn pi_start_inner(
     // Ensure Pi is configured with the user's provider
     ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
     ensure_required_pi_extension_package().await?;
+
+    let launch_dir = if use_coding_workspace {
+        crate::coding_workspace::workspace_path_for_session(session_id)?
+    } else {
+        PathBuf::from(&project_dir)
+    };
 
     // Determine which Pi provider and model to use
     let (pi_provider, pi_model) = match &provider_config {
@@ -2134,27 +2190,39 @@ pub async fn pi_start_inner(
         }
     };
 
+    if use_coding_workspace {
+        let revalidated = crate::coding_workspace::workspace_path_for_session(session_id)?;
+        if revalidated != launch_dir {
+            return Err("Coding workspace ownership changed while Pi was starting".to_string());
+        }
+    }
+
     let bun_path = find_bun_executable().unwrap_or_else(|| "NOT FOUND".to_string());
     info!(
         "Starting pi from {} in dir: {} with provider: {} model: {} bun: {}",
-        pi_path, project_dir, pi_provider, pi_model, bun_path
+        pi_path,
+        launch_dir.display(),
+        pi_provider,
+        pi_model,
+        bun_path
     );
 
     // Build command — use cmd.exe /C wrapper for .cmd files on Windows (Rust 1.77+ CVE fix)
     let mut cmd = build_command_for_path(&pi_path);
-    cmd.current_dir(&project_dir).args([
-        "--mode",
-        "rpc",
+    cmd.current_dir(&launch_dir).args(["--mode", "rpc"]);
+    if use_coding_workspace {
+        // Never trust executable .pi resources from the selected repository.
+        // Screenpipe-managed resources live in the separate runtime directory
+        // and are loaded explicitly so changing cwd cannot change this trust
+        // decision.
+        cmd.args(coding_workspace_resource_args(Path::new(&project_dir))?);
+    } else {
         // pi 0.80 gates project-dir .pi/extensions behind a trust prompt that
-        // rpc mode can never answer — without --approve, mcp-bridge and
-        // connection-gate silently don't load. The project dir is created and
-        // populated exclusively by screenpipe, so it is trusted by definition.
-        "--approve",
-        "--provider",
-        &pi_provider,
-        "--model",
-        &pi_model,
-    ]);
+        // rpc mode can never answer. This directory is populated exclusively
+        // by screenpipe, so it is trusted by definition.
+        cmd.arg("--approve");
+    }
+    cmd.args(["--provider", &pi_provider, "--model", &pi_model]);
 
     // Ensure bun is discoverable by pi.exe shim: the bun global-install shim (pi.exe)
     // needs to find bun.exe to execute the actual JS. If bun isn't in PATH (common on
@@ -2251,6 +2319,11 @@ pub async fn pi_start_inner(
     if is_local_model {
         let api_hint = "IMPORTANT: You MUST read the screenpipe-api skill file BEFORE making any API calls. It contains authentication instructions, endpoint docs, and examples. Without reading it first, your API calls will fail with 403 unauthorized.";
         cmd.args(["--append-system-prompt", api_hint]);
+    }
+
+    if use_coding_workspace {
+        let workspace_hint = "You are running inside a conversation-owned Git worktree. Make code changes only in the current worktree, keep its existing branch, and do not modify, move, or remove the source checkout or worktree metadata.";
+        cmd.args(["--append-system-prompt", workspace_hint]);
     }
 
     // Append the user's AI preset system prompt (enables Anthropic prompt caching —
@@ -2402,7 +2475,7 @@ pub async fn pi_start_inner(
 
         m.child = Some(child);
         m.stdin = None; // stdin is now owned by the queue
-        m.project_dir = Some(project_dir.clone());
+        m.project_dir = Some(launch_dir.to_string_lossy().into_owned());
         m.launch_fingerprint = Some(launch_fingerprint);
         m.last_activity = std::time::Instant::now();
         // Fresh flag for this session — old reader threads keep their own Arc
@@ -3895,6 +3968,7 @@ pub async fn pi_update_config(
         project_dir,
         user_token,
         provider_config,
+        false,
     )
     .await?;
 
@@ -5670,5 +5744,29 @@ error: InstallFailed extracting tarball"#;
             assert!(m["cost"]["input"].is_number(), "model missing cost.input");
             assert!(m["cost"]["output"].is_number(), "model missing cost.output");
         }
+    }
+
+    #[test]
+    fn coding_workspace_loads_only_explicit_screenpipe_project_resources() {
+        let temp = tempfile::tempdir().unwrap();
+        let extensions = temp.path().join(".pi").join("extensions");
+        let skills = temp.path().join(".pi").join("skills");
+        std::fs::create_dir_all(&extensions).unwrap();
+        std::fs::create_dir_all(skills.join("screenpipe-api")).unwrap();
+        std::fs::create_dir_all(skills.join("user-imported")).unwrap();
+        std::fs::write(extensions.join("mcp-bridge.ts"), "export default {};").unwrap();
+        std::fs::write(extensions.join("repo-injected.ts"), "throw new Error();").unwrap();
+        std::fs::write(skills.join("screenpipe-api").join("SKILL.md"), "api").unwrap();
+        std::fs::write(skills.join("user-imported").join("SKILL.md"), "user").unwrap();
+
+        let args = super::coding_workspace_resource_args(temp.path()).unwrap();
+        let joined = args.join("\n");
+
+        assert_eq!(args.first().map(String::as_str), Some("--no-approve"));
+        assert!(!args.iter().any(|arg| arg == "--approve"));
+        assert!(joined.contains("mcp-bridge.ts"));
+        assert!(!joined.contains("repo-injected.ts"));
+        assert!(joined.contains("screenpipe-api"));
+        assert!(joined.contains("user-imported"));
     }
 }

@@ -71,6 +71,7 @@ import { usePiSteeringRefs } from "@/components/chat/standalone/hooks/use-pi-ste
 import { useNextTurnAttachments } from "@/components/chat/standalone/hooks/use-next-turn-attachments";
 import { useChatComposerDraftSync } from "@/components/chat/standalone/hooks/use-chat-composer-draft-sync";
 import { usePipeWatchSession } from "@/components/chat/standalone/hooks/use-pipe-watch-session";
+import { useCodingWorkspace } from "@/components/chat/standalone/hooks/use-coding-workspace";
 import { useChatTemplateSettings } from "@/components/chat/standalone/hooks/use-chat-template-settings";
 import { useTryInChatEvent } from "@/components/chat/standalone/hooks/use-try-in-chat-event";
 import {
@@ -536,6 +537,12 @@ export function StandaloneChat({
       : undefined,
   );
   const messages = (pipeWatchMessages ?? localMessages) as Message[];
+  const codingWorkspaceDisabled =
+    pipeWatchMessages !== undefined || messages.length > 0 || isLoading || isStreaming;
+  const codingWorkspace = useCodingWorkspace({
+    conversationId,
+    locked: codingWorkspaceDisabled,
+  });
 
   const {
     consumePendingAttachments,
@@ -1454,8 +1461,10 @@ export function StandaloneChat({
           sectionRef: inputSectionRef,
           inputRef,
           value: input,
-          disabledReason,
-          canChat: Boolean(canChat),
+          disabledReason: codingWorkspace.isLoading
+            ? "Preparing coding workspace..."
+            : disabledReason,
+          canChat: Boolean(canChat) && !codingWorkspace.isLoading,
           isLoading,
           isStreaming,
           isEmbedded,
@@ -1527,6 +1536,13 @@ export function StandaloneChat({
           currentQueueSessionId,
           onPresetSaved: handlePiRestart,
           onSelectPreset: handleSetActivePreset,
+        }}
+        codingWorkspace={{
+          workspace: codingWorkspace.workspace,
+          isLoading: codingWorkspace.isLoading,
+          error: codingWorkspace.error,
+          disabled: codingWorkspaceDisabled,
+          onChooseRepository: codingWorkspace.chooseRepository,
         }}
         connectBanner={{
           show: showConnectBanner,

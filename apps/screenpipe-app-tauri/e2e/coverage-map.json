@@ -93,6 +93,12 @@
       "layers": ["chat-ai"]
     },
     {
+      "id": "chat-coding-worktrees",
+      "label": "Conversation-owned coding worktrees",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "tauri-command", "real-ui-e2e"]
+    },
+    {
       "id": "tray-search",
       "label": "Tray/search window behavior",
       "platforms": ["windows", "macos", "linux"],
@@ -203,6 +209,16 @@
       "confidence": "partial",
       "ux": "mixed",
       "notes": "Composer draft isolation across conversations."
+    },
+    {
+      "spec": "chat-coding-worktree.spec.ts",
+      "platforms": ["macos", "linux"],
+      "layers": ["chat-ai", "tauri-command", "real-ui-e2e"],
+      "features": ["chat", "chat-coding-worktrees"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Creates a conversation-owned worktree through the real desktop command path, proves dirty-source preservation, conversation isolation and resume, launches Pi in the owned cwd while ignoring a hostile project-local extension, and verifies work survives Pi stop. Windows feature coverage is pending a dedicated CI lane."
     },
     {
       "spec": "chat-empty-space.spec.ts",
