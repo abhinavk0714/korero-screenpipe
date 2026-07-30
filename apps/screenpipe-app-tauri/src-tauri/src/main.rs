@@ -415,8 +415,9 @@ async fn main() {
         }
     }
 
-    // Queue a bounded Windows Error Reporting minidump for fail-fast crashes
-    // such as 0xc0000409, which deliberately bypass Rust panic/Sentry hooks.
+    // Register the WER helper DLL that writes a local minidump for fail-fast
+    // crashes such as 0xc0000409, which bypass Rust panic/Sentry hooks, and
+    // recover dumps produced by a previous run.
     #[cfg(target_os = "windows")]
     windows_crash_dump::install();
 

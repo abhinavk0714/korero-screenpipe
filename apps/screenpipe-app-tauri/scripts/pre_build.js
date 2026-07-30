@@ -808,6 +808,20 @@ async function copyVcredistDlls(arch = 'x64') {
 	console.log('VC CRT DLLs copied to vcredist');
 }
 
+// Build the WER runtime exception helper DLL (writes local minidumps for
+// fail-fast crashes like 0xc0000409) and stage it under src-tauri/wer for the
+// Tauri bundle resources (Windows only). arch: 'x64' or 'arm64'.
+async function buildWerDumpHelper(arch = 'x64') {
+	const target = arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc'
+	await $`cargo build --release --package screenpipe-wer-dump-helper --target ${target}`
+	const dll = 'screenpipe_wer_dump_helper.dll'
+	const targetDir = process.env.CARGO_TARGET_DIR || path.join(cwd, 'target')
+	const werDir = path.join(cwd, 'wer')
+	await fs.mkdir(werDir, { recursive: true })
+	await fs.copyFile(path.join(targetDir, target, 'release', dll), path.join(werDir, dll))
+	console.log('WER dump helper DLL staged for bundling')
+}
+
 async function moveDirectoryContents(source, destination) {
 	await fs.mkdir(destination, { recursive: true })
 	for (const entry of await fs.readdir(source, { withFileTypes: true })) {
@@ -948,6 +962,10 @@ if (platform == 'windows') {
 	}
 
 	exports.openBlas = await setupOpenBlas({ cwd, winArch })
+
+	// Build the WER runtime exception helper DLL (fail-fast crash dumps) and
+	// stage it under src-tauri/wer for the Tauri bundle resources.
+	await buildWerDumpHelper(winArch)
 
 	// Copy VC143 CRT DLLs for Tauri bundle (required in CI; optional locally). Use arch matching current Windows (x64 or arm64).
 		const inCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
