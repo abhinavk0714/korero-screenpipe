@@ -382,10 +382,18 @@ export function LiveViewCanvas({
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const drawSessionRef = useRef<DrawSession | null>(null);
   const latestDocumentRef = useRef(document);
+  const isMountedRef = useRef(true);
   const slotsById = useMemo(
     () => new Map(slots.map((slot) => [slot.id, slot])),
     [slots],
   );
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     latestDocumentRef.current = document;
@@ -397,6 +405,7 @@ export function LiveViewCanvas({
 
   const applyDocument = useCallback(
     (next: BrainViewCanvasDocument, persist: boolean) => {
+      if (!isMountedRef.current) return;
       latestDocumentRef.current = next;
       onChange(next, { persist });
     },
