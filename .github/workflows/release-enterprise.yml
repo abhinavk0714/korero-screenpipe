@@ -146,6 +146,18 @@ jobs:
         working-directory: apps/screenpipe-app-tauri
         run: bun ./scripts/pre_build.js
 
+      # Built as a plain workflow step, not inside pre_build.js: cargo invoked
+      # through bun's shell resolves Git's GNU link.exe instead of MSVC's and
+      # the link fails (PR #5568).
+      - name: Build WER crash-dump helper DLL
+        shell: pwsh
+        working-directory: apps/screenpipe-app-tauri/src-tauri
+        run: |
+          cargo build --release --package screenpipe-wer-dump-helper --target x86_64-pc-windows-msvc
+          $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "target" }
+          New-Item -ItemType Directory -Force wer | Out-Null
+          Copy-Item "$targetDir/x86_64-pc-windows-msvc/release/screenpipe_wer_dump_helper.dll" wer/
+
       - name: Download ONNX Runtime (CPU) for Windows
         shell: pwsh
         run: |

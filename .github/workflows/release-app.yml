@@ -555,6 +555,19 @@ jobs:
         env:
           SCREENPIPE_RELEASE_TARGET: ${{ matrix.target }}
 
+      # Built as a plain workflow step, not inside pre_build.js: cargo invoked
+      # through bun's shell resolves Git's GNU link.exe instead of MSVC's and
+      # the link fails (PR #5568).
+      - name: Build WER crash-dump helper DLL
+        if: matrix.os_type == 'windows'
+        shell: pwsh
+        working-directory: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri
+        run: |
+          cargo build --release --package screenpipe-wer-dump-helper --target ${{ matrix.target }}
+          $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "target" }
+          New-Item -ItemType Directory -Force wer | Out-Null
+          Copy-Item "$targetDir/${{ matrix.target }}/release/screenpipe_wer_dump_helper.dll" wer/
+
       # This constructs the exact mixed oasgen + Axum router that ships in the
       # desktop app. A schema/handler mismatch must fail the Release App run,
       # otherwise signed artifacts can be green while the local API panics on
