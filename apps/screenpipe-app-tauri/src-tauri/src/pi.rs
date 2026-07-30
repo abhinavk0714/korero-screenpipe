@@ -2471,7 +2471,7 @@ pub async fn pi_start_inner(
 
         m.child = Some(child);
         m.stdin = None; // stdin is now owned by the queue
-        m.project_dir = Some(launch_dir.to_string_lossy().into_owned());
+        m.project_dir = Some(screenpipe_core::agents::worktree::portable_path(&launch_dir));
         m.launch_fingerprint = Some(launch_fingerprint);
         m.last_activity = std::time::Instant::now();
         // Fresh flag for this session — old reader threads keep their own Arc

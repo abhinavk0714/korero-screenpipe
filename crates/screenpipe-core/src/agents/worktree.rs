@@ -117,11 +117,17 @@ fn owner_record_path(root: &Path, owner_id: &str) -> PathBuf {
         .join(format!("{}.json", stable_key(owner_id, 24)))
 }
 
-fn path_string(path: &Path) -> String {
-    portable_path_string(&path.to_string_lossy())
+/// Render a harness-owned path without Windows' internal verbatim prefix.
+///
+/// Canonicalized Windows paths commonly start with `\\?\`. That form is useful
+/// to Rust's filesystem APIs, but it is not portable across Git, Node, or UI
+/// consumers. Keep it inside the harness and expose the ordinary drive/UNC
+/// representation at process and serialization boundaries.
+pub fn portable_path(path: &Path) -> String {
+    portable_path_value(&path.to_string_lossy())
 }
 
-fn portable_path_string(value: &str) -> String {
+fn portable_path_value(value: &str) -> String {
     if let Some(path) = value.strip_prefix(r"\\?\UNC\") {
         return format!(r"\\{path}");
     }
@@ -365,7 +371,7 @@ fn managed_worktree_path(
     common_dir: &Path,
 ) -> PathBuf {
     let owner_key = stable_key(owner_id, 16);
-    let repo_key = stable_key(&path_string(common_dir), 16);
+    let repo_key = stable_key(&portable_path(common_dir), 16);
     let repo_name = repo_root
         .file_name()
         .and_then(|name| name.to_str())
@@ -560,7 +566,7 @@ fn create_worktree_in(
             "Agent worktree branch {branch} exists without an owned worktree; refusing to claim it"
         ));
     }
-    let worktree_arg = path_string(&worktree);
+    let worktree_arg = portable_path(&worktree);
     let add_result = run_git(
         &repo_root,
         &[
@@ -583,9 +589,9 @@ fn create_worktree_in(
     let worktree_record = AgentWorktree {
         version: 1,
         owner_id: owner_id.to_string(),
-        repo_root: path_string(&repo_root),
-        git_common_dir: path_string(&common_dir),
-        worktree_path: path_string(&worktree),
+        repo_root: portable_path(&repo_root),
+        git_common_dir: portable_path(&common_dir),
+        worktree_path: portable_path(&worktree),
         branch,
         base_commit,
         source_dirty,
@@ -668,14 +674,14 @@ mod tests {
     #[test]
     fn strips_windows_verbatim_prefixes_from_persisted_and_git_paths() {
         assert_eq!(
-            portable_path_string(r"\\?\C:\screenpipe\worktree"),
+            portable_path_value(r"\\?\C:\screenpipe\worktree"),
             r"C:\screenpipe\worktree"
         );
         assert_eq!(
-            portable_path_string(r"\\?\UNC\server\share\worktree"),
+            portable_path_value(r"\\?\UNC\server\share\worktree"),
             r"\\server\share\worktree"
         );
-        assert_eq!(portable_path_string("/tmp/worktree"), "/tmp/worktree");
+        assert_eq!(portable_path_value("/tmp/worktree"), "/tmp/worktree");
     }
 
     #[test]
@@ -929,7 +935,7 @@ mod tests {
         let (temp, repo, data) = fixture();
         create(&data, "conversation-a", &repo);
         let outside = temp.path().join("redirected-worktree");
-        let outside_arg = path_string(&outside);
+        let outside_arg = portable_path(&outside);
         run_git(
             &repo,
             &[
@@ -947,9 +953,9 @@ mod tests {
         let forged = AgentWorktree {
             version: 1,
             owner_id: "conversation-a".to_string(),
-            repo_root: path_string(&repo_root),
-            git_common_dir: path_string(&common_dir),
-            worktree_path: path_string(&outside),
+            repo_root: portable_path(&repo_root),
+            git_common_dir: portable_path(&common_dir),
+            worktree_path: portable_path(&outside),
             branch: "attacker-redirect".to_string(),
             base_commit: git(&outside, &["rev-parse", "HEAD"]),
             source_dirty: false,
