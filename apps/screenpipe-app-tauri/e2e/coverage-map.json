@@ -205,6 +205,16 @@
       "notes": "Composer draft isolation across conversations."
     },
     {
+      "spec": "chat-empty-space.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "real-ui-e2e"],
+      "features": ["chat"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "A real Tauri chat session keeps a short answer near the composer without exposing a false new-content state or a large empty viewport gap."
+    },
+    {
       "spec": "chat-ask-user-tool-card.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai", "real-ui-e2e"],
