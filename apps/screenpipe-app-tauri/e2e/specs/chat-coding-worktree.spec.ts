@@ -51,6 +51,7 @@ function createDirtyRepository(): { root: string; repo: string } {
   const repo = join(root, "source-repo");
   mkdirSync(join(repo, ".pi", "extensions"), { recursive: true });
   git(repo, "init");
+  git(repo, "config", "core.autocrlf", "false");
   git(repo, "config", "user.email", "screenpipe-e2e@example.com");
   git(repo, "config", "user.name", "screenpipe e2e");
   writeFileSync(join(repo, "tracked.txt"), "committed\n");
@@ -106,20 +107,53 @@ async function attachCurrentConversation(
 }
 
 async function openFreshChat(): Promise<void> {
-  await browser.execute(() => {
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "n",
-        metaKey: true,
-        ctrlKey: true,
-        bubbles: true,
-      }),
-    );
-  });
+  const conversationId = randomUUID();
+  const result = (await browser.executeAsync(
+    (id: string, done: (result?: { ok: boolean; error?: string }) => void) => {
+      const invoke = (
+        window as unknown as {
+          __TAURI_INTERNALS__?: {
+            invoke: (command: string, args: object) => Promise<unknown>;
+          };
+        }
+      ).__TAURI_INTERNALS__?.invoke;
+      if (!invoke) {
+        done({ ok: false, error: "Tauri event bridge is unavailable" });
+        return;
+      }
+      void invoke("plugin:event|emit", {
+        event: "chat-load-conversation",
+        payload: { conversationId: id, targetWindow: "home" },
+      })
+        .then(() => done({ ok: true }))
+        .catch((error: unknown) =>
+          done({
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+    },
+    conversationId,
+  )) as { ok: boolean; error?: string } | undefined;
+  if (!result?.ok) {
+    throw new Error(result?.error ?? "failed to open a fresh chat");
+  }
   await browser.waitUntil(
     async () => {
       const button = await $('[data-testid="coding-workspace-button"]');
-      return (await button.isExisting()) && (await button.isEnabled());
+      const foreground = (await browser.execute(
+        () =>
+          (
+            window as unknown as {
+              __e2eForegroundReady?: string | null;
+            }
+          ).__e2eForegroundReady ?? null,
+      )) as string | null;
+      return (
+        foreground === conversationId &&
+        (await button.isExisting()) &&
+        (await button.isEnabled())
+      );
     },
     {
       timeout: t(15_000),

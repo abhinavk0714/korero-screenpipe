@@ -678,18 +678,13 @@ Refresh the assigned Live View output targets from source-backed activity.
     }
     await openDashboardMenu();
     const customize = await waitForTestId("overview-edit", 10_000);
-    await customize.moveTo({
-      xOffset: 10,
-      yOffset: 10,
-    });
-    await browser.pause(1_000);
+    expect((await customize.getText()).toLowerCase()).toBe("customize");
 
     const renderedText = (await browser.execute(
       () => document.body?.innerText || "",
     )) as string;
     expect(renderedText).toContain("Live Views");
     expect(renderedText).toContain("DASHBOARDS");
-    expect(renderedText).toContain("CUSTOMIZE");
     expect(renderedText).toContain("Automation opportunities");
     expect(await dashboardSelector.getValue()).toBe(SELECTABLE_VIEW_ID);
     const selectedDashboardTitle = (await browser.execute(() => {
