@@ -118,7 +118,14 @@ fn owner_record_path(root: &Path, owner_id: &str) -> PathBuf {
 }
 
 fn path_string(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
+    portable_path_string(&path.to_string_lossy())
+}
+
+fn portable_path_string(value: &str) -> String {
+    if let Some(path) = value.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{path}");
+    }
+    value.strip_prefix(r"\\?\").unwrap_or(value).to_string()
 }
 
 fn git_command(cwd: &Path) -> Command {
@@ -331,6 +338,26 @@ fn validated_branch_prefix(branch_prefix: &str) -> Result<&str, String> {
     Ok(branch_prefix)
 }
 
+fn cleanup_failed_worktree_branch(
+    repo_root: &Path,
+    worktree: &Path,
+    branch: &str,
+    base_commit: &str,
+) {
+    let branch_ref = format!("refs/heads/{branch}");
+    let branch_is_unchanged =
+        run_git(repo_root, &["rev-parse", &branch_ref]).is_ok_and(|commit| commit == base_commit);
+    let branch_is_unattached =
+        run_git(repo_root, &["worktree", "list", "--porcelain"]).is_ok_and(|list| {
+            !list
+                .lines()
+                .any(|line| line == format!("branch {branch_ref}"))
+        });
+    if !worktree.exists() && branch_is_unchanged && branch_is_unattached {
+        let _ = run_git(repo_root, &["branch", "-D", branch]);
+    }
+}
+
 fn managed_worktree_path(
     root: &Path,
     owner_id: &str,
@@ -534,7 +561,7 @@ fn create_worktree_in(
         ));
     }
     let worktree_arg = path_string(&worktree);
-    run_git(
+    let add_result = run_git(
         &repo_root,
         &[
             "worktree",
@@ -544,7 +571,14 @@ fn create_worktree_in(
             &worktree_arg,
             &base_commit,
         ],
-    )?;
+    );
+    if let Err(error) = add_result {
+        // `git worktree add -b` creates the branch before the worktree. If the
+        // later filesystem step fails, remove only that just-created,
+        // unchanged, unattached branch so a corrected retry can proceed.
+        cleanup_failed_worktree_branch(&repo_root, &worktree, &branch, &base_commit);
+        return Err(error);
+    }
 
     let worktree_record = AgentWorktree {
         version: 1,
@@ -629,6 +663,36 @@ mod tests {
         git(&repo, &["add", "tracked.txt"]);
         git(&repo, &["commit", "-m", "initial"]);
         (temp, repo, data)
+    }
+
+    #[test]
+    fn strips_windows_verbatim_prefixes_from_persisted_and_git_paths() {
+        assert_eq!(
+            portable_path_string(r"\\?\C:\screenpipe\worktree"),
+            r"C:\screenpipe\worktree"
+        );
+        assert_eq!(
+            portable_path_string(r"\\?\UNC\server\share\worktree"),
+            r"\\server\share\worktree"
+        );
+        assert_eq!(portable_path_string("/tmp/worktree"), "/tmp/worktree");
+    }
+
+    #[test]
+    fn cleans_only_an_unchanged_unattached_branch_after_failed_creation() {
+        let (temp, repo, _data) = fixture();
+        let branch = "screenpipe/chat-failed-create";
+        let base_commit = git(&repo, &["rev-parse", "HEAD"]);
+        git(&repo, &["branch", branch, &base_commit]);
+
+        cleanup_failed_worktree_branch(
+            &repo,
+            &temp.path().join("missing-worktree"),
+            branch,
+            &base_commit,
+        );
+
+        assert!(run_git(&repo, &["rev-parse", "--verify", branch]).is_err());
     }
 
     #[test]
