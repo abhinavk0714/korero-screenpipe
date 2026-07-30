@@ -19,7 +19,7 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 68 | 214 | 172.7 | 15 | 69 | 88% |
+| windows | 69 | 215 | 173.1 | 15 | 70 | 90% |
 | macos | 77 | 199 | 151.6 | 17 | 71 | 88% |
 | linux | 60 | 177 | 143.7 | 13 | 66 | 85% |
 
@@ -37,7 +37,7 @@ pass/fail/skip counts.
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
 | billing | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts |
 | capture-ocr | 2 specs / 15 tests / 6.0 pts | 5 specs / 7 tests / 2.8 pts | 1 specs / 3 tests / 1.2 pts |
-| chat-ai | 22 specs / 35 tests / 26.1 pts | 26 specs / 44 tests / 28.9 pts | 22 specs / 35 tests / 26.0 pts |
+| chat-ai | 23 specs / 36 tests / 26.5 pts | 26 specs / 44 tests / 28.9 pts | 22 specs / 35 tests / 26.0 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
 | local-api | 16 specs / 97 tests / 81.0 pts | 17 specs / 73 tests / 62.4 pts | 13 specs / 70 tests / 61.2 pts |
 | notifications | 2 specs / 11 tests / 10.1 pts | 2 specs / 4 tests / 2.4 pts | 1 specs / 3 tests / 2.1 pts |
@@ -45,10 +45,10 @@ pass/fail/skip counts.
 | os-integration | 5 specs / 17 tests / 16.1 pts | 6 specs / 5 tests / 1.7 pts | - |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
 | pipes | 5 specs / 15 tests / 15.0 pts | 5 specs / 15 tests / 15.0 pts | 5 specs / 15 tests / 15.0 pts |
-| real-ui-e2e | 46 specs / 132 tests / 106.5 pts | 49 specs / 120 tests / 96.4 pts | 44 specs / 113 tests / 94.1 pts |
+| real-ui-e2e | 47 specs / 133 tests / 106.9 pts | 49 specs / 120 tests / 96.4 pts | 44 specs / 113 tests / 94.1 pts |
 | settings | 13 specs / 33 tests / 30.6 pts | 15 specs / 28 tests / 24.3 pts | 12 specs / 25 tests / 22.6 pts |
 | storage-privacy | 7 specs / 22 tests / 21.1 pts | 6 specs / 14 tests / 13.1 pts | 5 specs / 14 tests / 13.1 pts |
-| tauri-command | 10 specs / 19 tests / 12.3 pts | 11 specs / 21 tests / 12.2 pts | 10 specs / 19 tests / 11.7 pts |
+| tauri-command | 11 specs / 20 tests / 12.7 pts | 11 specs / 21 tests / 12.2 pts | 10 specs / 19 tests / 11.7 pts |
 | window-lifecycle | 18 specs / 62 tests / 52.6 pts | 18 specs / 43 tests / 31.0 pts | 13 specs / 38 tests / 29.5 pts |
 
 ## Critical Feature Matrix
@@ -70,7 +70,7 @@ pass/fail/skip counts.
 | Meeting note creation and editing | real-ui-e2e | covered (strong; windows-user-journey, meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click) |
 | Pipes discover, install, and play | pipes | covered (strong; pipes, pipes-mcp-connections) | covered (strong; pipes, pipes-mcp-connections) | covered (strong; pipes, pipes-mcp-connections) |
 | Chat window, composer, and streaming state | chat-ai | covered (strong; chat-sidebar-groups, chat-tool-activity) | covered (strong; chat-sidebar-groups, chat-tool-activity) | covered (strong; chat-sidebar-groups, chat-tool-activity) |
-| Conversation-owned coding worktrees | chat-ai, tauri-command, real-ui-e2e | gap | weak (conditional; chat-coding-worktree) | weak (conditional; chat-coding-worktree) |
+| Conversation-owned coding worktrees | chat-ai, tauri-command, real-ui-e2e | weak (conditional; chat-coding-worktree) | weak (conditional; chat-coding-worktree) | weak (conditional; chat-coding-worktree) |
 | Tray/search window behavior | window-lifecycle | covered (strong; window-lifecycle, tray-search) | covered (strong; window-lifecycle, tray-search) | covered (strong; window-lifecycle, tray-search) |
 | Native tray recording status refresh | os-integration | covered (strong; tray-recording-status) | - | - |
 | Storage retention safety UX | storage-privacy | covered (strong; settings-sections, windows-user-journey) | covered (strong; settings-sections) | covered (strong; settings-sections) |
@@ -79,7 +79,7 @@ pass/fail/skip counts.
 
 ## Critical Gaps
 
-- windows: Real capture, OCR, and indexing (weak); Conversation-owned coding worktrees (gap); Updater install and rollback safety (gap).
+- windows: Real capture, OCR, and indexing (weak); Conversation-owned coding worktrees (weak); Updater install and rollback safety (gap).
 - macos: Real capture, OCR, and indexing (weak); Audio device health (weak); Conversation-owned coding worktrees (weak); Updater install and rollback safety (gap).
 - linux: Real capture, OCR, and indexing (weak); Audio device health (gap); Conversation-owned coding worktrees (weak); Updater install and rollback safety (gap).
 
@@ -107,7 +107,7 @@ pass/fail/skip counts.
 | capture-loop-liveness.spec.ts | macos | capture-ocr, local-api, os-integration | app-launch, capture-ocr | high | conditional | api | 1 | Opt-in macOS fault injection wedges a visual-change probe; asserts the bounded probe keeps the capture loop and its /health heartbeat live (no false stale/incident). |
 | chat-ask-user-tool-card.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-tools, pi-ask-user | medium | partial | mixed | 1 | Synthetic assistant tool block renders the Pi ask_user dropdown and sends the selected answer through the normal chat reply path. |
 | chat-automation-card-duplicate.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-sidebar-dedupe | medium | partial | real-user-flow | 1 | Home automation card clicks must create exactly one persisted conversation per card, guarding the #4719 duplicate-row path. |
-| chat-coding-worktree.spec.ts | macos, linux | chat-ai, tauri-command, real-ui-e2e | chat, chat-coding-worktrees | high | conditional | real-user-flow | 1 | Creates a conversation-owned worktree through the real desktop command path, proves dirty-source preservation, conversation isolation and resume, launches Pi in the owned cwd while ignoring a hostile project-local extension, and verifies work survives Pi stop. Windows feature coverage is pending a dedicated CI lane. |
+| chat-coding-worktree.spec.ts | windows, macos, linux | chat-ai, tauri-command, real-ui-e2e | chat, chat-coding-worktrees | high | conditional | real-user-flow | 1 | Creates a conversation-owned worktree through the real desktop command path, proves dirty-source preservation, conversation isolation and resume, launches Pi in the owned cwd while ignoring a hostile project-local extension, and verifies work survives Pi stop. Runs in the focused Windows CI list as well as the recursive macOS and Linux suites. |
 | chat-composer-isolation.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-drafts | medium | partial | mixed | 1 | Composer draft isolation across conversations. |
 | chat-connections-context-duplicate.spec.ts | windows, macos | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | QUARANTINED (#4689): connections-context wrapper stripping regression. The synthetic background-router event path never persists deterministically on Linux/macOS CI; re-enable once it drives a deterministic persisted session. |
 | chat-cross-window-transcript-sync.spec.ts | windows, macos, linux | chat-ai, window-lifecycle, real-ui-e2e | chat, chat-streaming, window-lifecycle | high | strong | mixed | 1 | Both Home and standalone Chat show persistent pending feedback, then hydrate a completed disk transcript and clear stop state from the real cross-window save event without calling a provider. |

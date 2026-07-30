@@ -23,6 +23,9 @@ export function useCodingWorkspace({
   locked: boolean;
 }) {
   const [workspace, setWorkspace] = useState<CodingWorkspace | null>(null);
+  const [resolvedConversationId, setResolvedConversationId] = useState<
+    string | null
+  >(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestGenerationRef = useRef(0);
@@ -41,6 +44,7 @@ export function useCodingWorkspace({
     setWorkspace(null);
     setError(null);
     if (!conversationId) {
+      setResolvedConversationId(null);
       setIsLoading(false);
       return;
     }
@@ -52,10 +56,12 @@ export function useCodingWorkspace({
         if (generation !== requestGenerationRef.current) return;
         if (result.status === "error") throw new Error(result.error);
         setWorkspace(result.data);
+        setResolvedConversationId(conversationId);
       })
       .catch((cause) => {
         if (generation === requestGenerationRef.current) {
           setError(cause instanceof Error ? cause.message : String(cause));
+          setResolvedConversationId(conversationId);
         }
       })
       .finally(() => {
@@ -94,6 +100,7 @@ export function useCodingWorkspace({
           return result.data;
         }
         setWorkspace(result.data);
+        setResolvedConversationId(requestConversationId);
         toast({
           title: "coding workspace ready",
           description: result.data.sourceDirty
@@ -127,8 +134,15 @@ export function useCodingWorkspace({
     [conversationId, locked],
   );
 
+  const hasCurrentConversation =
+    Boolean(conversationId) && resolvedConversationId === conversationId;
+  const currentWorkspace = hasCurrentConversation ? workspace : null;
+  const currentIsLoading =
+    Boolean(conversationId) && (isLoading || !hasCurrentConversation);
+  const currentError = hasCurrentConversation ? error : null;
+
   const chooseRepository = useCallback(async () => {
-    if (locked || isLoading || workspace) return;
+    if (locked || currentIsLoading || currentWorkspace) return;
     const selected = await openDialog({
       directory: true,
       multiple: false,
@@ -141,9 +155,10 @@ export function useCodingWorkspace({
         // attachRepositoryPath already surfaced the actionable error.
       }
     }
-  }, [attachRepositoryPath, isLoading, locked, workspace]);
+  }, [attachRepositoryPath, currentIsLoading, currentWorkspace, locked]);
 
   useEffect(() => {
+    if (process.env.NEXT_PUBLIC_SCREENPIPE_E2E !== "true") return;
     window.__e2eAttachCodingWorkspace = attachRepositoryPath;
     return () => {
       delete window.__e2eAttachCodingWorkspace;
@@ -151,9 +166,9 @@ export function useCodingWorkspace({
   }, [attachRepositoryPath]);
 
   return {
-    workspace,
-    isLoading,
-    error,
+    workspace: currentWorkspace,
+    isLoading: currentIsLoading,
+    error: currentError,
     chooseRepository,
   };
 }

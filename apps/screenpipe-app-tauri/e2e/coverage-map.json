@@ -212,13 +212,13 @@
     },
     {
       "spec": "chat-coding-worktree.spec.ts",
-      "platforms": ["macos", "linux"],
+      "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai", "tauri-command", "real-ui-e2e"],
       "features": ["chat", "chat-coding-worktrees"],
       "criticality": "high",
       "confidence": "conditional",
       "ux": "real-user-flow",
-      "notes": "Creates a conversation-owned worktree through the real desktop command path, proves dirty-source preservation, conversation isolation and resume, launches Pi in the owned cwd while ignoring a hostile project-local extension, and verifies work survives Pi stop. Windows feature coverage is pending a dedicated CI lane."
+      "notes": "Creates a conversation-owned worktree through the real desktop command path, proves dirty-source preservation, conversation isolation and resume, launches Pi in the owned cwd while ignoring a hostile project-local extension, and verifies work survives Pi stop. Runs in the focused Windows CI list as well as the recursive macOS and Linux suites."
     },
     {
       "spec": "chat-empty-space.spec.ts",

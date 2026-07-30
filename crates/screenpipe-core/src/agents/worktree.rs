@@ -96,12 +96,13 @@ impl AgentWorktreeStore {
     }
 
     pub fn get_blocking(&self, owner_id: &str) -> Result<Option<AgentWorktree>, String> {
-        get_worktree_in(&self.root, owner_id)
+        get_worktree_in(&self.root, &self.branch_prefix, owner_id)
     }
 
     pub fn path_if_owned(&self, owner_id: &str) -> Result<Option<PathBuf>, String> {
-        read_worktree(&self.root, owner_id)?
-            .map(|worktree| validate_worktree(&worktree, true))
+        let root = canonicalize_allow_missing(&self.root)?;
+        read_worktree(&root, owner_id)?
+            .map(|worktree| validate_worktree(&root, &self.branch_prefix, &worktree, true))
             .transpose()
     }
 }
@@ -316,7 +317,42 @@ fn persist_worktree_owner(worktree: &AgentWorktree) -> Result<(), String> {
     persist_new_record(&owner_path, worktree, "agent worktree ownership marker")
 }
 
+fn validated_branch_prefix(branch_prefix: &str) -> Result<&str, String> {
+    let branch_prefix = branch_prefix.trim_matches('/');
+    if branch_prefix.is_empty()
+        || branch_prefix.len() > 100
+        || branch_prefix.contains("..")
+        || branch_prefix
+            .chars()
+            .any(|character| character.is_whitespace() || "~^:?*[\\".contains(character))
+    {
+        return Err("Agent worktree branch prefix is invalid".to_string());
+    }
+    Ok(branch_prefix)
+}
+
+fn managed_worktree_path(
+    root: &Path,
+    owner_id: &str,
+    repo_root: &Path,
+    common_dir: &Path,
+) -> PathBuf {
+    let owner_key = stable_key(owner_id, 16);
+    let repo_key = stable_key(&path_string(common_dir), 16);
+    let repo_name = repo_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("repository");
+    root.join("worktrees")
+        .join(repo_key)
+        .join(owner_key)
+        .join(repo_name)
+}
+
 fn validate_worktree(
+    root: &Path,
+    branch_prefix: &str,
     worktree_record: &AgentWorktree,
     require_owner_record: bool,
 ) -> Result<PathBuf, String> {
@@ -336,6 +372,28 @@ fn validate_worktree(
     let worktree = PathBuf::from(&worktree_record.worktree_path)
         .canonicalize()
         .map_err(|_| "This agent worktree is missing".to_string())?;
+
+    let root = canonicalize_allow_missing(root)?;
+    let expected_worktree = managed_worktree_path(
+        &root,
+        &worktree_record.owner_id,
+        &repo_root,
+        &expected_common,
+    )
+    .canonicalize()
+    .map_err(|_| "The deterministic managed agent worktree is missing".to_string())?;
+    if worktree != expected_worktree {
+        return Err("Agent worktree is outside its deterministic managed location".to_string());
+    }
+
+    let branch_prefix = validated_branch_prefix(branch_prefix)?;
+    let expected_branch = format!(
+        "{branch_prefix}-{}",
+        stable_key(&worktree_record.owner_id, 16)
+    );
+    if worktree_record.branch != expected_branch {
+        return Err("Agent worktree record has an unexpected managed branch".to_string());
+    }
 
     let actual_root = PathBuf::from(run_git(&worktree, &["rev-parse", "--show-toplevel"])?)
         .canonicalize()
@@ -384,16 +442,7 @@ fn create_worktree_in(
     if owner_id.is_empty() || owner_id.len() > 200 {
         return Err("Agent worktree owner id is invalid".to_string());
     }
-    let branch_prefix = branch_prefix.trim_matches('/');
-    if branch_prefix.is_empty()
-        || branch_prefix.len() > 100
-        || branch_prefix.contains("..")
-        || branch_prefix
-            .chars()
-            .any(|character| character.is_whitespace() || "~^:?*[\\".contains(character))
-    {
-        return Err("Agent worktree branch prefix is invalid".to_string());
-    }
+    let branch_prefix = validated_branch_prefix(branch_prefix)?;
 
     let (repo_root, common_dir) = resolve_repository(repository_path)?;
     let resolved_root = canonicalize_allow_missing(root)?;
@@ -403,6 +452,7 @@ fn create_worktree_in(
                 .to_string(),
         );
     }
+    let root = resolved_root.as_path();
     if let Some(existing) = read_worktree(root, owner_id)? {
         let existing_repo = PathBuf::from(&existing.repo_root)
             .canonicalize()
@@ -410,22 +460,12 @@ fn create_worktree_in(
         if existing_repo != repo_root {
             return Err("This owner already has a different agent worktree".to_string());
         }
-        validate_worktree(&existing, true)?;
+        validate_worktree(root, branch_prefix, &existing, true)?;
         return Ok(existing);
     }
 
     let owner_key = stable_key(owner_id, 16);
-    let repo_key = stable_key(&path_string(&common_dir), 16);
-    let repo_name = repo_root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or("repository");
-    let worktree = root
-        .join("worktrees")
-        .join(repo_key)
-        .join(&owner_key)
-        .join(repo_name);
+    let worktree = managed_worktree_path(root, owner_id, &repo_root, &common_dir);
     let branch = format!("{branch_prefix}-{owner_key}");
     run_git(&repo_root, &["check-ref-format", "--branch", &branch])
         .map_err(|_| "Agent worktree branch prefix is invalid".to_string())?;
@@ -452,7 +492,7 @@ fn create_worktree_in(
                 "Existing agent worktree ownership does not match this request".to_string(),
             );
         }
-        validate_worktree(&recovered, true)?;
+        validate_worktree(root, branch_prefix, &recovered, true)?;
         persist_worktree(root, &recovered)?;
         return Ok(recovered);
     }
@@ -517,9 +557,24 @@ fn create_worktree_in(
         source_dirty,
         created_at: Utc::now().to_rfc3339(),
     };
-    validate_worktree(&worktree_record, false)?;
-    persist_worktree_owner(&worktree_record)?;
-    validate_worktree(&worktree_record, true)?;
+    validate_worktree(root, branch_prefix, &worktree_record, false).map_err(|error| {
+        format!(
+            "{error}. The worktree was kept at {} so no work is lost",
+            worktree_record.worktree_path
+        )
+    })?;
+    if let Err(error) = persist_worktree_owner(&worktree_record) {
+        return Err(format!(
+            "{error}. The worktree was kept at {} so no work is lost",
+            worktree_record.worktree_path
+        ));
+    }
+    validate_worktree(root, branch_prefix, &worktree_record, true).map_err(|error| {
+        format!(
+            "{error}. The worktree was kept at {} so no work is lost",
+            worktree_record.worktree_path
+        )
+    })?;
     if let Err(error) = persist_worktree(root, &worktree_record) {
         return Err(format!(
             "{error}. The worktree was kept at {} so no work is lost",
@@ -529,10 +584,15 @@ fn create_worktree_in(
     Ok(worktree_record)
 }
 
-fn get_worktree_in(root: &Path, owner_id: &str) -> Result<Option<AgentWorktree>, String> {
-    let worktree = read_worktree(root, owner_id)?;
+fn get_worktree_in(
+    root: &Path,
+    branch_prefix: &str,
+    owner_id: &str,
+) -> Result<Option<AgentWorktree>, String> {
+    let root = canonicalize_allow_missing(root)?;
+    let worktree = read_worktree(&root, owner_id)?;
     if let Some(ref worktree) = worktree {
-        validate_worktree(worktree, true)?;
+        validate_worktree(&root, branch_prefix, worktree, true)?;
     }
     Ok(worktree)
 }
@@ -551,7 +611,7 @@ mod tests {
     }
 
     fn get(data: &Path, owner_id: &str) -> Result<Option<AgentWorktree>, String> {
-        get_worktree_in(data, owner_id)
+        get_worktree_in(data, "screenpipe/chat", owner_id)
     }
 
     fn fixture() -> (TempDir, PathBuf, PathBuf) {
@@ -798,6 +858,71 @@ mod tests {
 
         let error = get(&data, "conversation-a").unwrap_err();
         assert!(error.contains("ownership marker"));
+    }
+
+    #[test]
+    fn rejects_joint_record_and_marker_redirect_outside_the_managed_root() {
+        let (temp, repo, data) = fixture();
+        create(&data, "conversation-a", &repo);
+        let outside = temp.path().join("redirected-worktree");
+        let outside_arg = path_string(&outside);
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "attacker-redirect",
+                &outside_arg,
+                "HEAD",
+            ],
+        )
+        .unwrap();
+
+        let (repo_root, common_dir) = resolve_repository(&repo).unwrap();
+        let forged = AgentWorktree {
+            version: 1,
+            owner_id: "conversation-a".to_string(),
+            repo_root: path_string(&repo_root),
+            git_common_dir: path_string(&common_dir),
+            worktree_path: path_string(&outside),
+            branch: "attacker-redirect".to_string(),
+            base_commit: git(&outside, &["rev-parse", "HEAD"]),
+            source_dirty: false,
+            created_at: Utc::now().to_rfc3339(),
+        };
+        let forged_json = serde_json::to_vec_pretty(&forged).unwrap();
+        std::fs::write(owner_record_path(&data, "conversation-a"), &forged_json).unwrap();
+        std::fs::write(worktree_owner_path(&outside).unwrap(), forged_json).unwrap();
+
+        let error = get(&data, "conversation-a").unwrap_err();
+        assert!(error.contains("deterministic managed location"));
+    }
+
+    #[test]
+    fn normalizes_relative_storage_roots_before_creating_worktrees() {
+        let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let temp = tempfile::tempdir_in(&cwd).unwrap();
+        let repo = temp.path().join("source-repo");
+        let data = temp.path().join("screenpipe-data");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init"]);
+        git(
+            &repo,
+            &["config", "user.email", "screenpipe-test@example.com"],
+        );
+        git(&repo, &["config", "user.name", "screenpipe test"]);
+        std::fs::write(repo.join("tracked.txt"), "committed\n").unwrap();
+        git(&repo, &["add", "tracked.txt"]);
+        git(&repo, &["commit", "-m", "initial"]);
+        let relative_data = data.strip_prefix(&cwd).unwrap();
+
+        let created = create(relative_data, "conversation-a", &repo);
+        let loaded = get(relative_data, "conversation-a").unwrap().unwrap();
+
+        assert_eq!(created, loaded);
+        assert!(Path::new(&created.worktree_path).is_absolute());
+        assert!(Path::new(&created.worktree_path).starts_with(data.canonicalize().unwrap()));
     }
 
     #[test]
