@@ -65,12 +65,18 @@ function createDirtyRepository(): { root: string; repo: string } {
   return { root, repo };
 }
 
-async function attachCurrentConversation(repositoryPath: string): Promise<CodingWorkspace> {
-  const result = await browser.executeAsync(
+async function attachCurrentConversation(
+  repositoryPath: string,
+): Promise<CodingWorkspace> {
+  const result = (await browser.executeAsync(
     (path: string, done: (value?: AttachResult) => void) => {
-      const attach = (window as unknown as {
-        __e2eAttachCodingWorkspace?: (repositoryPath: string) => Promise<CodingWorkspace>;
-      }).__e2eAttachCodingWorkspace;
+      const attach = (
+        window as unknown as {
+          __e2eAttachCodingWorkspace?: (
+            repositoryPath: string,
+          ) => Promise<CodingWorkspace>;
+        }
+      ).__e2eAttachCodingWorkspace;
       if (!attach) {
         done({
           ok: false,
@@ -81,36 +87,46 @@ async function attachCurrentConversation(repositoryPath: string): Promise<Coding
       }
       void attach(path)
         .then((workspace) => done({ ok: true, workspace, error: null }))
-        .catch((error: unknown) => done({
-          ok: false,
-          workspace: null,
-          error: error instanceof Error ? error.message : String(error),
-        }));
+        .catch((error: unknown) =>
+          done({
+            ok: false,
+            workspace: null,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
     },
     repositoryPath,
-  ) as AttachResult | undefined;
+  )) as AttachResult | undefined;
   if (!result?.ok || !result.workspace) {
-    throw new Error(result?.error ?? "coding workspace attach returned no result");
+    throw new Error(
+      result?.error ?? "coding workspace attach returned no result",
+    );
   }
   return result.workspace;
 }
 
 async function openFreshChat(): Promise<void> {
   await browser.execute(() => {
-    window.dispatchEvent(new KeyboardEvent("keydown", {
-      key: "n",
-      metaKey: true,
-      ctrlKey: true,
-      bubbles: true,
-    }));
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "n",
+        metaKey: true,
+        ctrlKey: true,
+        bubbles: true,
+      }),
+    );
   });
-  await browser.waitUntil(async () => {
-    const button = await $('[data-testid="coding-workspace-button"]');
-    return (await button.isExisting()) && (await button.isEnabled());
-  }, {
-    timeout: t(15_000),
-    timeoutMsg: "a fresh chat with an enabled coding workspace control did not appear",
-  });
+  await browser.waitUntil(
+    async () => {
+      const button = await $('[data-testid="coding-workspace-button"]');
+      return (await button.isExisting()) && (await button.isEnabled());
+    },
+    {
+      timeout: t(15_000),
+      timeoutMsg:
+        "a fresh chat with an enabled coding workspace control did not appear",
+    },
+  );
 }
 
 describe("Chat coding worktrees", function () {
@@ -123,20 +139,30 @@ describe("Chat coding worktrees", function () {
     try {
       await openHomeWindow();
     } catch (error) {
-      const diagnostic = await browser.execute(() => ({
-        url: window.location.href,
-        readyState: document.readyState,
-        bodyText: document.body?.innerText.slice(0, 500) ?? "",
-        hasHomePage: Boolean(document.querySelector('[data-testid="home-page"]')),
-      })).catch((cause: unknown) => ({ diagnosticError: String(cause) }));
+      const diagnostic = await browser
+        .execute(() => ({
+          url: window.location.href,
+          readyState: document.readyState,
+          bodyText: document.body?.innerText.slice(0, 500) ?? "",
+          hasHomePage: Boolean(
+            document.querySelector('[data-testid="home-page"]'),
+          ),
+        }))
+        .catch((cause: unknown) => ({ diagnosticError: String(cause) }));
       const handles = await browser.getWindowHandles().catch(() => []);
       console.error("coding worktree home diagnostic", { diagnostic, handles });
       throw error;
     }
     await browser.waitUntil(
-      async () => (await browser.execute(() => typeof (window as unknown as {
-        __e2eAttachCodingWorkspace?: unknown;
-      }).__e2eAttachCodingWorkspace === "function")) as boolean,
+      async () =>
+        (await browser.execute(
+          () =>
+            typeof (
+              window as unknown as {
+                __e2eAttachCodingWorkspace?: unknown;
+              }
+            ).__e2eAttachCodingWorkspace === "function",
+        )) as boolean,
       { timeout: t(15_000), timeoutMsg: "coding workspace hook did not mount" },
     );
     await openFreshChat();
@@ -145,7 +171,13 @@ describe("Chat coding worktrees", function () {
   after(async () => {
     for (const workspace of created.reverse()) {
       try {
-        git(fixture.repo, "worktree", "remove", "--force", workspace.worktreePath);
+        git(
+          fixture.repo,
+          "worktree",
+          "remove",
+          "--force",
+          workspace.worktreePath,
+        );
       } catch {
         // Best-effort cleanup of this test-owned fixture only.
       }
@@ -154,12 +186,17 @@ describe("Chat coding worktrees", function () {
   });
 
   it("preserves dirty source state, isolates conversations, resumes, and launches Pi in the owned worktree", async () => {
+    const sourceHead = git(fixture.repo, "rev-parse", "HEAD");
     const first = await attachCurrentConversation(fixture.repo);
     created.push(first);
 
     expect(first.sourceDirty).toBe(true);
-    expect(readFileSync(join(fixture.repo, "tracked.txt"), "utf8")).toBe("dirty source edit\n");
-    expect(readFileSync(join(first.worktreePath, "tracked.txt"), "utf8")).toBe("committed\n");
+    expect(readFileSync(join(fixture.repo, "tracked.txt"), "utf8")).toBe(
+      "dirty source edit\n",
+    );
+    expect(readFileSync(join(first.worktreePath, "tracked.txt"), "utf8")).toBe(
+      "committed\n",
+    );
     expect(existsSync(join(first.worktreePath, "untracked.txt"))).toBe(false);
     expect(git(fixture.repo, "status", "--porcelain=v1")).not.toBe("");
     expect(git(first.worktreePath, "status", "--porcelain=v1")).toBe("");
@@ -170,29 +207,56 @@ describe("Chat coding worktrees", function () {
     const popover = await $('[data-testid="coding-workspace-popover"]');
     await popover.waitForDisplayed({ timeout: t(5_000) });
     await browser.waitUntil(
-      async () => (await $("body").getText()).includes("those changes were left untouched"),
-      { timeout: t(5_000), timeoutMsg: "dirty source safety notice did not render" },
+      async () =>
+        (await $("body").getText()).includes(
+          "those changes were left untouched",
+        ),
+      {
+        timeout: t(5_000),
+        timeoutMsg: "dirty source safety notice did not render",
+      },
     );
     await browser.pause(t(300));
     const screenshot = await saveScreenshot("chat-coding-worktree");
     expect(existsSync(screenshot)).toBe(true);
 
     writeFileSync(join(first.worktreePath, "conversation-a-only.txt"), "a\n");
-    const resumed = await invokeOrThrow<CodingWorkspace>("coding_workspace_get", {
-      conversationId: first.conversationId,
-    });
-    expect(realpathSync(resumed.worktreePath)).toBe(realpathSync(first.worktreePath));
-    expect(existsSync(join(resumed.worktreePath, "conversation-a-only.txt"))).toBe(true);
+    git(first.worktreePath, "add", "conversation-a-only.txt");
+    git(first.worktreePath, "commit", "-m", "conversation-owned change");
+    const conversationHead = git(first.worktreePath, "rev-parse", "HEAD");
+    const resumed = await invokeOrThrow<CodingWorkspace>(
+      "coding_workspace_get",
+      {
+        conversationId: first.conversationId,
+      },
+    );
+    expect(realpathSync(resumed.worktreePath)).toBe(
+      realpathSync(first.worktreePath),
+    );
+    expect(
+      existsSync(join(resumed.worktreePath, "conversation-a-only.txt")),
+    ).toBe(true);
+    expect(git(resumed.worktreePath, "rev-parse", "HEAD")).toBe(
+      conversationHead,
+    );
+    expect(git(fixture.repo, "rev-parse", "HEAD")).toBe(sourceHead);
 
-    const second = await invokeOrThrow<CodingWorkspace>("coding_workspace_create", {
-      conversationId: randomUUID(),
-      repositoryPath: fixture.repo,
-    });
+    const second = await invokeOrThrow<CodingWorkspace>(
+      "coding_workspace_create",
+      {
+        conversationId: randomUUID(),
+        repositoryPath: fixture.repo,
+      },
+    );
     created.push(second);
     expect(second.worktreePath).not.toBe(first.worktreePath);
     expect(second.branch).not.toBe(first.branch);
-    expect(existsSync(join(second.worktreePath, "conversation-a-only.txt"))).toBe(false);
-    expect(existsSync(join(fixture.repo, "conversation-a-only.txt"))).toBe(false);
+    expect(
+      existsSync(join(second.worktreePath, "conversation-a-only.txt")),
+    ).toBe(false);
+    expect(existsSync(join(fixture.repo, "conversation-a-only.txt"))).toBe(
+      false,
+    );
 
     const pi = await invokeOrThrow<PiInfo>("pi_start", {
       sessionId: first.conversationId,
@@ -215,10 +279,21 @@ describe("Chat coding worktrees", function () {
       sessionId: first.conversationId,
     });
     expect(stillRunning.running).toBe(true);
-    expect(realpathSync(stillRunning.projectDir!)).toBe(realpathSync(first.worktreePath));
+    expect(realpathSync(stillRunning.projectDir!)).toBe(
+      realpathSync(first.worktreePath),
+    );
 
     await invokeOrThrow<PiInfo>("pi_stop", { sessionId: first.conversationId });
+    const resumedAfterStop = await invokeOrThrow<CodingWorkspace>(
+      "coding_workspace_get",
+      {
+        conversationId: first.conversationId,
+      },
+    );
     expect(existsSync(first.worktreePath)).toBe(true);
-    expect(existsSync(join(first.worktreePath, "conversation-a-only.txt"))).toBe(true);
+    expect(git(resumedAfterStop.worktreePath, "rev-parse", "HEAD")).toBe(
+      conversationHead,
+    );
+    expect(git(fixture.repo, "rev-parse", "HEAD")).toBe(sourceHead);
   });
 });

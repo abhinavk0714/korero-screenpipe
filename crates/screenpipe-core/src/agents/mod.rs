@@ -11,6 +11,7 @@
 
 pub mod bash_env;
 pub mod pi;
+pub mod worktree;
 
 use anyhow::Result;
 use std::path::Path;

@@ -1835,7 +1835,7 @@ pub async fn pi_start(
     provider_config: Option<PiProviderConfig>,
 ) -> Result<PiInfo, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
-    let use_coding_workspace = crate::coding_workspace::workspace_path_if_owned(&sid)?.is_some();
+    let coding_workspace = crate::coding_workspace::launch_for_session(&sid)?;
     pi_start_inner(
         app,
         &state,
@@ -1843,7 +1843,7 @@ pub async fn pi_start(
         project_dir,
         user_token,
         provider_config,
-        use_coding_workspace,
+        coding_workspace,
     )
     .await
 }
@@ -1982,7 +1982,7 @@ pub async fn pi_start_inner(
     project_dir: String,
     user_token: Option<String>,
     provider_config: Option<PiProviderConfig>,
-    use_coding_workspace: bool,
+    coding_workspace: Option<crate::coding_workspace::CodingWorkspaceLaunch>,
 ) -> Result<PiInfo, String> {
     let project_dir = project_dir.trim().to_string();
     if project_dir.is_empty() {
@@ -2038,11 +2038,10 @@ pub async fn pi_start_inner(
     ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
     ensure_required_pi_extension_package().await?;
 
-    let launch_dir = if use_coding_workspace {
-        crate::coding_workspace::workspace_path_for_session(session_id)?
-    } else {
-        PathBuf::from(&project_dir)
-    };
+    let launch_dir = coding_workspace
+        .as_ref()
+        .map(|workspace| workspace.path().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(&project_dir));
 
     // Determine which Pi provider and model to use
     let (pi_provider, pi_model) = match &provider_config {
@@ -2190,11 +2189,8 @@ pub async fn pi_start_inner(
         }
     };
 
-    if use_coding_workspace {
-        let revalidated = crate::coding_workspace::workspace_path_for_session(session_id)?;
-        if revalidated != launch_dir {
-            return Err("Coding workspace ownership changed while Pi was starting".to_string());
-        }
+    if let Some(workspace) = &coding_workspace {
+        workspace.revalidate()?;
     }
 
     let bun_path = find_bun_executable().unwrap_or_else(|| "NOT FOUND".to_string());
@@ -2210,7 +2206,7 @@ pub async fn pi_start_inner(
     // Build command — use cmd.exe /C wrapper for .cmd files on Windows (Rust 1.77+ CVE fix)
     let mut cmd = build_command_for_path(&pi_path);
     cmd.current_dir(&launch_dir).args(["--mode", "rpc"]);
-    if use_coding_workspace {
+    if coding_workspace.is_some() {
         // Never trust executable .pi resources from the selected repository.
         // Screenpipe-managed resources live in the separate runtime directory
         // and are loaded explicitly so changing cwd cannot change this trust
@@ -2321,7 +2317,7 @@ pub async fn pi_start_inner(
         cmd.args(["--append-system-prompt", api_hint]);
     }
 
-    if use_coding_workspace {
+    if coding_workspace.is_some() {
         let workspace_hint = "You are running inside a conversation-owned Git worktree. Make code changes only in the current worktree, keep its existing branch, and do not modify, move, or remove the source checkout or worktree metadata.";
         cmd.args(["--append-system-prompt", workspace_hint]);
     }
@@ -3968,7 +3964,7 @@ pub async fn pi_update_config(
         project_dir,
         user_token,
         provider_config,
-        false,
+        None,
     )
     .await?;
 
