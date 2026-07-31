@@ -556,6 +556,35 @@ describe("ShareLogsButton attachments", () => {
     });
   });
 
+  it("ignores other jobs and recovers when its Rust job fails later", async () => {
+    render(<ShareLogsButton />);
+    await waitFor(() => expect(feedbackEventHandlers.size).toBe(1));
+
+    fireEvent.click(sendButton());
+    await waitFor(() => expect(commandsMock.startFeedbackUpload).toHaveBeenCalled());
+    const request = commandsMock.startFeedbackUpload.mock.calls[0][0];
+
+    await emitFeedbackCompleted({
+      jobId: crypto.randomUUID(),
+      status: "failed",
+      message: "another report failed",
+    });
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /sending/i })).toBeDisabled();
+
+    await emitFeedbackCompleted({
+      jobId: request.jobId,
+      status: "failed",
+      message: "feedback could not be sent; try again.",
+    });
+    expect(toastMock).toHaveBeenCalledWith({
+      title: "sharing failed",
+      description: "feedback could not be sent; try again.",
+      variant: "destructive",
+    });
+    expect(sendButton()).toBeEnabled();
+  });
+
   it("still starts the Rust job when optional chat history stalls", async () => {
     vi.useFakeTimers();
     loadAllConversationsMock.mockReturnValue(new Promise(() => {}));
@@ -589,7 +618,7 @@ describe("ShareLogsButton attachments", () => {
     await waitFor(() =>
       expect(toastMock).toHaveBeenCalledWith(
         expect.objectContaining({
-        title: "sharing failed",
+          title: "sharing failed",
           description: expect.stringContaining("native start failed"),
         }),
       ),

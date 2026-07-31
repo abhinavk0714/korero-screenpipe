@@ -12,13 +12,14 @@
 use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use bytes::Bytes;
 use futures::stream::{self, StreamExt};
 use reqwest::{Client, Response};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
-use tokio::time::timeout;
+use tokio::time::{timeout, Instant};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -51,15 +52,22 @@ pub struct FeedbackUploadRequest {
     pub video_ext: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum FeedbackUploadStatus {
+    Sent,
+    Failed,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FeedbackUploadCompleted {
-    pub job_id: String,
-    pub status: &'static str,
-    pub message: String,
-    pub support_id: Option<String>,
-    pub screenshot_uploaded: bool,
-    pub video_uploaded: bool,
+struct FeedbackUploadCompleted {
+    job_id: String,
+    status: FeedbackUploadStatus,
+    message: String,
+    support_id: Option<String>,
+    screenshot_uploaded: bool,
+    video_uploaded: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,15 +86,41 @@ struct SignedUpload {
     video_path: Option<String>,
 }
 
+#[derive(Serialize)]
+struct ProvisionRequest<'a> {
+    identifier: &'a str,
+    #[serde(rename = "type")]
+    report_type: &'a str,
+    video_ext: &'a str,
+}
+
+#[derive(Serialize)]
+struct ConfirmRequest<'a> {
+    path: &'a str,
+    identifier: &'a str,
+    #[serde(rename = "type")]
+    report_type: &'a str,
+    os: &'a str,
+    os_version: &'a str,
+    app_version: &'a str,
+    feedback_text: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    screenshot_url: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    video_url: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    screenpipe_id: Option<&'a str>,
+}
+
 #[derive(Debug)]
 struct AttachmentBytes {
-    bytes: Vec<u8>,
+    bytes: Bytes,
     content_type: &'static str,
 }
 
 #[derive(Debug)]
 enum VideoSource {
-    Bytes(Vec<u8>),
+    Bytes(Bytes),
     Path(String),
 }
 
@@ -116,8 +150,16 @@ fn validate_request(request: &FeedbackUploadRequest) -> Result<(), String> {
     if request.video_data_url.is_some() && request.video_path.is_some() {
         return Err("feedback video has multiple sources".to_string());
     }
-    if request.video_data_url.is_some() || request.video_path.is_some() {
-        video_format(request.video_ext.as_deref())?;
+    let has_video_source = request.video_data_url.is_some() || request.video_path.is_some();
+    if has_video_source {
+        let (extension, _) = video_format(request.video_ext.as_deref())?;
+        if let Some(path) = request.video_path.as_deref() {
+            if !path_extension_matches(path, extension) {
+                return Err("feedback video path does not match its extension".to_string());
+            }
+        }
+    } else if request.video_ext.is_some() {
+        return Err("feedback video extension has no source".to_string());
     }
     Ok(())
 }
@@ -133,7 +175,7 @@ fn video_format(extension: Option<&str>) -> Result<(&'static str, &'static str),
 fn decode_data_url(
     value: &str,
     allowed_content_types: &[&'static str],
-) -> Result<(Vec<u8>, &'static str), String> {
+) -> Result<(Bytes, &'static str), String> {
     let (metadata, encoded) = value
         .split_once(',')
         .ok_or_else(|| "invalid feedback attachment".to_string())?;
@@ -160,7 +202,7 @@ fn decode_data_url(
     if bytes.len() > MAX_ATTACHMENT_BYTES {
         return Err("feedback attachment exceeds 50 mb".to_string());
     }
-    Ok((bytes, content_type))
+    Ok((Bytes::from(bytes), content_type))
 }
 
 fn prepare_screenshot(data_url: Option<&str>) -> Result<Option<AttachmentBytes>, String> {
@@ -262,19 +304,26 @@ async fn checked_response(
 async fn put_bytes(
     client: &Client,
     url: &str,
-    bytes: &[u8],
+    bytes: Bytes,
     content_type: &str,
-    request_timeout: Duration,
+    overall_budget: Duration,
     label: &'static str,
 ) -> Result<(), String> {
     const ATTEMPTS: usize = 3;
+    let deadline = Instant::now() + overall_budget;
     for attempt in 1..=ATTEMPTS {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(format!("{label} timed out"));
+        }
         let result = checked_response(
             client
                 .put(url)
                 .header("Content-Type", content_type)
-                .body(bytes.to_vec())
-                .timeout(request_timeout),
+                // Bytes is reference counted, so retrying a 50 MB attachment
+                // does not copy the complete body for every attempt.
+                .body(bytes.clone())
+                .timeout(remaining),
             label,
         )
         .await;
@@ -284,9 +333,32 @@ async fn put_bytes(
         if attempt == ATTEMPTS {
             return result.map(|_| ());
         }
-        tokio::time::sleep(Duration::from_secs(1 << (attempt - 1))).await;
+        let delay = Duration::from_secs(1 << (attempt - 1));
+        if delay >= deadline.saturating_duration_since(Instant::now()) {
+            return Err(format!("{label} timed out"));
+        }
+        tokio::time::sleep(delay).await;
     }
     Err(format!("{label} failed"))
+}
+
+async fn read_bounded_attachment(path: &str) -> Result<Bytes, String> {
+    let metadata = tokio::fs::metadata(path)
+        .await
+        .map_err(|_| "video attachment could not be read".to_string())?;
+    if !metadata.is_file() {
+        return Err("video attachment is not a file".to_string());
+    }
+    if metadata.len() > MAX_ATTACHMENT_BYTES as u64 {
+        return Err("feedback attachment exceeds 50 mb".to_string());
+    }
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|_| "video attachment could not be read".to_string())?;
+    if bytes.len() > MAX_ATTACHMENT_BYTES {
+        return Err("feedback attachment exceeds 50 mb".to_string());
+    }
+    Ok(Bytes::from(bytes))
 }
 
 fn path_extension_matches(path: &str, extension: &str) -> bool {
@@ -317,14 +389,15 @@ async fn upload_report(
     video: Option<PreparedVideo>,
 ) -> Result<UploadReceipt, String> {
     let requested_video_ext = video.as_ref().map(|video| video.extension).unwrap_or("mp4");
+    let provision = ProvisionRequest {
+        identifier: &request.identifier,
+        report_type: &request.report_type,
+        video_ext: requested_video_ext,
+    };
     let signed: SignedUploadEnvelope = checked_response(
         client
             .post(format!("{base_url}/api/logs"))
-            .json(&serde_json::json!({
-                "identifier": request.identifier,
-                "type": request.report_type,
-                "video_ext": requested_video_ext,
-            }))
+            .json(&provision)
             .timeout(API_TIMEOUT),
         "upload request",
     )
@@ -336,7 +409,7 @@ async fn upload_report(
     put_bytes(
         client,
         &signed.data.signed_url,
-        redacted_logs.as_bytes(),
+        Bytes::from(redacted_logs),
         "text/plain",
         UPLOAD_TIMEOUT,
         "log upload",
@@ -344,19 +417,27 @@ async fn upload_report(
     .await?;
 
     let mut screenshot_uploaded = false;
-    if let (Some(screenshot), Some(url)) =
-        (screenshot, signed.data.signed_url_screenshot.as_deref())
-    {
-        put_bytes(
-            client,
-            url,
-            &screenshot.bytes,
-            screenshot.content_type,
-            UPLOAD_TIMEOUT,
-            "screenshot upload",
-        )
-        .await?;
-        screenshot_uploaded = true;
+    if let Some(screenshot) = screenshot {
+        match (
+            signed.data.signed_url_screenshot.as_deref(),
+            signed.data.screenshot_path.as_deref(),
+        ) {
+            (Some(url), Some(_)) => {
+                put_bytes(
+                    client,
+                    url,
+                    screenshot.bytes,
+                    screenshot.content_type,
+                    UPLOAD_TIMEOUT,
+                    "screenshot upload",
+                )
+                .await?;
+                screenshot_uploaded = true;
+            }
+            _ => {
+                warn!("feedback upload: server omitted the screenshot upload slot; skipping image");
+            }
+        }
     }
 
     let mut video_uploaded = false;
@@ -368,14 +449,12 @@ async fn upload_report(
         if path_extension_matches(remote_path, video.extension) {
             let bytes = match video.source {
                 VideoSource::Bytes(bytes) => bytes,
-                VideoSource::Path(path) => tokio::fs::read(path)
-                    .await
-                    .map_err(|_| "video attachment could not be read".to_string())?,
+                VideoSource::Path(path) => read_bounded_attachment(&path).await?,
             };
             put_bytes(
                 client,
                 url,
-                &bytes,
+                bytes,
                 video.content_type,
                 VIDEO_UPLOAD_TIMEOUT,
                 "video upload",
@@ -387,24 +466,22 @@ async fn upload_report(
         }
     }
 
-    let screenshot_path = screenshot_uploaded
-        .then(|| signed.data.screenshot_path.clone())
-        .flatten();
-    let video_path = video_uploaded
-        .then(|| signed.data.video_path.clone())
-        .flatten();
-    let confirm_body = serde_json::json!({
-        "path": signed.data.path,
-        "identifier": request.identifier,
-        "type": request.report_type,
-        "os": request.os,
-        "os_version": request.os_version,
-        "app_version": request.app_version,
-        "feedback_text": request.feedback_text,
-        "screenshot_url": screenshot_path,
-        "video_url": video_path,
-        "screenpipe_id": request.analytics_id,
-    });
+    let confirm_body = ConfirmRequest {
+        path: &signed.data.path,
+        identifier: &request.identifier,
+        report_type: &request.report_type,
+        os: &request.os,
+        os_version: &request.os_version,
+        app_version: &request.app_version,
+        feedback_text: &request.feedback_text,
+        screenshot_url: screenshot_uploaded
+            .then_some(signed.data.screenshot_path.as_deref())
+            .flatten(),
+        video_url: video_uploaded
+            .then_some(signed.data.video_path.as_deref())
+            .flatten(),
+        screenpipe_id: request.analytics_id.as_deref(),
+    };
     let confirm: serde_json::Value = checked_response(
         client
             .post(format!("{base_url}/api/logs/confirm"))
@@ -485,7 +562,7 @@ async fn run_feedback_upload(
 }
 
 fn finish(app: &AppHandle, completed: FeedbackUploadCompleted) {
-    let (title, body) = if completed.status == "sent" {
+    let (title, body) = if completed.status == FeedbackUploadStatus::Sent {
         ("feedback sent", completed.message.as_str())
     } else {
         (
@@ -518,7 +595,7 @@ pub async fn start_feedback_upload(
                 info!("feedback upload: background job {task_job_id} completed");
                 FeedbackUploadCompleted {
                     job_id: task_job_id,
-                    status: "sent",
+                    status: FeedbackUploadStatus::Sent,
                     message,
                     support_id: receipt.support_id,
                     screenshot_uploaded: receipt.screenshot_uploaded,
@@ -529,7 +606,7 @@ pub async fn start_feedback_upload(
                 warn!("feedback upload: background job {task_job_id} failed: {error}");
                 FeedbackUploadCompleted {
                     job_id: task_job_id,
-                    status: "failed",
+                    status: FeedbackUploadStatus::Failed,
                     message: "feedback could not be sent; try again.".to_string(),
                     support_id: None,
                     screenshot_uploaded: false,
@@ -572,23 +649,100 @@ mod tests {
     fn validates_job_identity_and_video_source() {
         let mut input = request();
         assert!(validate_request(&input).is_ok());
+
         input.job_id = "not-a-uuid".to_string();
-        assert!(validate_request(&input).is_err());
+        assert_eq!(
+            validate_request(&input).unwrap_err(),
+            "invalid feedback job id"
+        );
+
         input.job_id = Uuid::new_v4().to_string();
         input.video_ext = Some("mp4".to_string());
+        assert_eq!(
+            validate_request(&input).unwrap_err(),
+            "feedback video extension has no source"
+        );
+
+        input.video_path = Some("/tmp/video.mp4".to_string());
+        assert!(validate_request(&input).is_ok());
+
+        input.video_path = Some("/tmp/video.mov".to_string());
+        assert_eq!(
+            validate_request(&input).unwrap_err(),
+            "feedback video path does not match its extension"
+        );
+
         input.video_path = Some("/tmp/video.mp4".to_string());
         input.video_data_url = Some("data:video/mp4;base64,YQ==".to_string());
-        assert!(validate_request(&input).is_err());
+        assert_eq!(
+            validate_request(&input).unwrap_err(),
+            "feedback video has multiple sources"
+        );
     }
 
     #[test]
     fn decodes_only_allowed_bounded_data_urls() {
         let (bytes, content_type) =
             decode_data_url("data:image/jpeg;base64,aGVsbG8=", &["image/jpeg"]).unwrap();
-        assert_eq!(bytes, b"hello");
+        assert_eq!(bytes.as_ref(), b"hello");
         assert_eq!(content_type, "image/jpeg");
         assert!(decode_data_url("data:text/plain;base64,aGVsbG8=", &["image/jpeg"]).is_err());
         assert!(decode_data_url("not-a-data-url", &["image/jpeg"]).is_err());
+    }
+
+    #[tokio::test]
+    async fn bounds_local_video_files_before_reading() {
+        let directory = tempfile::tempdir().unwrap();
+        let valid = directory.path().join("video.mp4");
+        tokio::fs::write(&valid, b"video").await.unwrap();
+        assert_eq!(
+            read_bounded_attachment(valid.to_str().unwrap())
+                .await
+                .unwrap(),
+            Bytes::from_static(b"video")
+        );
+
+        let oversized = directory.path().join("oversized.mp4");
+        std::fs::File::create(&oversized)
+            .unwrap()
+            .set_len(MAX_ATTACHMENT_BYTES as u64 + 1)
+            .unwrap();
+        assert_eq!(
+            read_bounded_attachment(oversized.to_str().unwrap())
+                .await
+                .unwrap_err(),
+            "feedback attachment exceeds 50 mb"
+        );
+        assert_eq!(
+            read_bounded_attachment(directory.path().to_str().unwrap())
+                .await
+                .unwrap_err(),
+            "video attachment is not a file"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_retry_uses_one_overall_deadline() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/slow-upload"))
+            .respond_with(ResponseTemplate::new(500).set_delay(Duration::from_millis(250)))
+            .mount(&server)
+            .await;
+
+        let error = put_bytes(
+            &Client::new(),
+            &format!("{}/slow-upload", server.uri()),
+            Bytes::from_static(b"payload"),
+            "text/plain",
+            Duration::from_millis(25),
+            "test upload",
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error, "test upload timed out");
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -663,11 +817,11 @@ mod tests {
             &input,
             "safe logs".to_string(),
             Some(AttachmentBytes {
-                bytes: b"image".to_vec(),
+                bytes: Bytes::from_static(b"image"),
                 content_type: "image/jpeg",
             }),
             Some(PreparedVideo {
-                source: VideoSource::Bytes(b"video".to_vec()),
+                source: VideoSource::Bytes(Bytes::from_static(b"video")),
                 extension: "mp4",
                 content_type: "video/mp4",
             }),
@@ -680,5 +834,104 @@ mod tests {
         assert!(receipt.screenshot_uploaded);
         assert!(receipt.video_uploaded);
         assert_eq!(server.received_requests().await.unwrap().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn incomplete_signed_attachment_slot_is_not_reported_as_uploaded() {
+        let server = MockServer::start().await;
+        let input = request();
+
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "signedUrl": format!("{}/upload/log", server.uri()),
+                    "path": "logs/machine-1/report.log"
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .and(body_json(serde_json::json!({
+                "path": "logs/machine-1/report.log",
+                "identifier": "machine-1",
+                "type": "machine",
+                "os": "macos",
+                "os_version": "26.6",
+                "app_version": "2.5.158",
+                "feedback_text": "the app stopped",
+                "screenpipe_id": "analytics-1"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "id": "support-7" }
+            })))
+            .mount(&server)
+            .await;
+
+        let receipt = upload_report(
+            &Client::new(),
+            &server.uri(),
+            &input,
+            "safe logs".to_string(),
+            Some(AttachmentBytes {
+                bytes: Bytes::from_static(b"image"),
+                content_type: "image/jpeg",
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(receipt.support_id.as_deref(), Some("support-7"));
+        assert!(!receipt.screenshot_uploaded);
+        assert!(!receipt.video_uploaded);
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn failed_log_upload_is_never_confirmed() {
+        let server = MockServer::start().await;
+        let input = request();
+
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "signedUrl": format!("{}/upload/log", server.uri()),
+                    "path": "logs/machine-1/report.log"
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let error = upload_report(
+            &Client::new(),
+            &server.uri(),
+            &input,
+            "safe logs".to_string(),
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error, "log upload failed (500 Internal Server Error)");
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 4);
+        assert!(requests
+            .iter()
+            .all(|request| request.url.path() != "/api/logs/confirm"));
     }
 }
