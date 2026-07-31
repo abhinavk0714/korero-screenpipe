@@ -19,7 +19,7 @@ screenpipe cannot restore an AI model's hidden context. it can give the next ses
 | periodic local context file | several tools need the same compact project state over days or months |
 
 ```mermaid
-flowchart LR
+flowchart TD
     A["bounded screenpipe history"] --> B["extract facts and open loops"]
     B --> C["reviewed local context file"]
     C --> D["Claude, Codex, Cursor, or another agent"]

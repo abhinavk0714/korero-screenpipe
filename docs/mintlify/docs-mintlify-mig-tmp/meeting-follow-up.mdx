@@ -12,7 +12,7 @@ icon: "comments"
 meeting automation fails when it skips transcript quality and jumps straight to sending. use a short verification loop so names, decisions, owners, and dates remain trustworthy.
 
 ```mermaid
-flowchart LR
+flowchart TD
     A["recording"] --> B["transcript"]
     B --> C["verify names and gaps"]
     C --> D["summary and action items"]

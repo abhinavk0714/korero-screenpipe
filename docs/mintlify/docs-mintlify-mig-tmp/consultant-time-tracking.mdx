@@ -22,7 +22,7 @@ use screenpipe to reconstruct work across calls, documents, code, email, and bro
 | acceptance | consultant reviews it; client agrees the level of detail is useful |
 
 ```mermaid
-flowchart LR
+flowchart TD
     A["local screen and audio"] --> B["authoritative active time"]
     A --> C["AI project labels"]
     B --> D["draft client report"]
@@ -65,38 +65,37 @@ flowchart LR
 export SCREENPIPE_API_KEY="$(npx -y screenpipe@latest auth token)"
 
 curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
-  "http://localhost:3030/activity-summary?start_time=2026-07-27T16:00:00Z&end_time=2026-07-27T20:00:00Z"
+  "http://localhost:3030/activity-summary?start_time=4h+ago&end_time=now"
 
 curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
-  "http://localhost:3030/search?q=project-or-client-code&content_type=all&start_time=2026-07-27T16:00:00Z&end_time=2026-07-27T20:00:00Z&limit=50"
+  "http://localhost:3030/search?q=project-or-client-code&content_type=all&start_time=4h+ago&end_time=now&limit=50"
 ```
 
-use UTC timestamps. replace the example range and project code with your own values.
+relative ranges such as `4h ago` and `now` are convenient for a first test. use ISO 8601 UTC timestamps when the report must match an exact calendar or billing window, and replace the project code with your own value.
 
-## turn it into a manual pipe
+## build it without code
 
-open **Pipes → My Pipes**, describe the report you want, and use this as the starting `pipe.md`:
+<Steps>
+  <Step title="open the pipe builder">
+    Go to **Pipes → My Pipes** and scroll to **create your own pipe**.
+  </Step>
+  <Step title="describe the first version">
+    Paste: “Create a manual pipe that writes a local client work report. use `/activity-summary` for numeric totals, bounded `/search` results for context, put ambiguous time in needs review, and never send or invoice automatically.”
+  </Step>
+  <Step title="let screenpipe build it">
+    The app opens Home, asks the agent to create the pipe, and installs the result. when it finishes, return to **Pipes → My Pipes**.
+  </Step>
+  <Step title="run and inspect">
+    Open the new pipe, run it once, and inspect its Markdown artifact and execution log. confirm that an empty window produces an explicit no-data report.
+  </Step>
+  <Step title="add a schedule later">
+    Keep the first version manual. add a daily or weekly schedule only after several reports have correct totals and project labels.
+  </Step>
+</Steps>
 
-```markdown
----
-schedule: manual
-enabled: false
-artifacts:
-  - path: output/client-work-report.md
-    title: Client work report
-    kind: markdown
----
-
-Create a draft client work report for the time range in the context header.
-
-Use only authenticated screenpipe APIs. Never access the screenpipe database directly.
-Use /activity-summary for numeric totals and bounded /search results for context.
-Apply the reporting rules below.
-Write the result to ./output/client-work-report.md.
-Do not send it or update an external system.
-```
-
-run it manually from **My Pipes** and inspect the artifact. keep `enabled: false` until the output has been accurate for several runs.
+<Note>
+the generated automation is a `pipe.md` file under `~/.screenpipe/pipes/`. advanced users can inspect and version that file; the [pipes guide](/pipes) explains its schedule, permissions, and artifacts.
+</Note>
 
 ## prompt for the report
 

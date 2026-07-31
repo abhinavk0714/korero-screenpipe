@@ -45,7 +45,7 @@ flowchart TD
     Record enough examples to see normal variation. note the approximate start and end of each run so the search windows stay bounded.
   </Step>
   <Step title="run Automate My Work or a manual pipe">
-    Use **Automate My Work** on Home, or install **Workflow Discovery** from **Pipes → Discover** and run it from **My Pipes**. if it reports no matching data, fix capture or widen the range; do not fill gaps with assumptions.
+    Use **Automate My Work** on Home. for a reusable version, open **Pipes → My Pipes → create your own pipe** and describe the bounded discovery report below. if it reports no matching data, fix capture or widen the range; do not fill gaps with assumptions.
   </Step>
   <Step title="review the candidate list">
     Remove one-off tasks and anything that depends on judgment the data does not expose. rank the rest by frequency, active time, failure cost, and ease of testing.
@@ -57,6 +57,22 @@ flowchart TD
     Automate a single stable step or add a checklist. compare the result with the original process before expanding the scope.
   </Step>
 </Steps>
+
+## build a reusable discovery pipe
+
+paste this into **Pipes → My Pipes → create your own pipe**:
+
+```text
+Create a manual workflow-discovery pipe for one named outcome.
+Review a bounded time window and write a local Markdown report.
+List only workflows repeated in the supplied data.
+For each candidate include trigger, result, observed steps, repetitions,
+friction, exceptions, evidence time ranges, and one reversible improvement.
+Use /activity-summary for time totals. Do not score employee productivity,
+send messages, or change another system.
+```
+
+after the app builds it, return to **My Pipes**, run it manually, and inspect both the report and execution log before scheduling it.
 
 ## prompt for a discovery pass
 
