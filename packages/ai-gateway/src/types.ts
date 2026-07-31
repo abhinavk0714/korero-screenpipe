@@ -208,27 +208,53 @@ export interface Env {
 	LIMIT_LOGGED_IN_RPM?: string;
 	LIMIT_SUBSCRIBED_DAILY?: string;
 	LIMIT_SUBSCRIBED_RPM?: string;
+	LIMIT_BUSINESS_MAX_DAILY?: string;
+	LIMIT_BUSINESS_MAX_RPM?: string;
+	LIMIT_BUSINESS_ULTRA_DAILY?: string;
+	LIMIT_BUSINESS_ULTRA_RPM?: string;
 	LIMIT_IP_DAILY?: string;
 	/**
 	 * Stable incident/repricing identifier for text-AI cash caps. When changed,
 	 * the gateway snapshots each account's existing UTC-day spend and enforces
 	 * the new cap only on spend incurred after that snapshot.
 	 */
-	COST_CAP_EPOCH?: string;
-	MAX_DAILY_TEXT_COST_PER_USER?: string;
-	MAX_DAILY_SUBSCRIBED_TEXT_COST?: string;
-	// Legacy/transcription base cap. Text falls back to this only when its
-	// dedicated override is absent.
-	MAX_DAILY_COST_PER_USER?: string;
+	PRIVATE_COST_CAP_EPOCH?: string;
+	MAX_DAILY_FREE_TEXT_COST?: string;
+	MAX_DAILY_BASIC_TEXT_COST?: string;
+	MAX_DAILY_BUSINESS_TEXT_COST?: string;
+	MAX_MONTHLY_FREE_TEXT_COST?: string;
+	MAX_MONTHLY_BASIC_TEXT_COST?: string;
+	MAX_MONTHLY_BUSINESS_TEXT_COST?: string;
+	MAX_REQUEST_FREE_TEXT_COST?: string;
+	MAX_REQUEST_BASIC_TEXT_COST?: string;
+	MAX_REQUEST_BUSINESS_TEXT_COST?: string;
+	MAX_GLOBAL_HOURLY_TEXT_COST?: string;
+	MAX_GLOBAL_DAILY_TEXT_COST?: string;
+	MAX_TRIAL_TEXT_COST?: string;
+	MAX_DAILY_TRIAL_TEXT_COST?: string;
+	MAX_REQUEST_TRIAL_TEXT_COST?: string;
+	MAX_DAILY_FREE_TRANSCRIPTION_COST?: string;
+	MAX_DAILY_BASIC_TRANSCRIPTION_COST?: string;
+	MAX_DAILY_BUSINESS_TRANSCRIPTION_COST?: string;
+	FREE_CHAT_COST_RESERVATION_MICRO_USD?: string;
+	FREE_CHAT_DAILY_BUDGET_MICRO_USD?: string;
 	// Per-minute RPM for free (weight-0) models — a separate, much higher bucket
 	// so heavy free usage never trips the low paid-model limit. Tunable per tier.
 	LIMIT_ANONYMOUS_FREE_RPM?: string;
 	LIMIT_LOGGED_IN_FREE_RPM?: string;
 	LIMIT_SUBSCRIBED_FREE_RPM?: string;
+	LIMIT_BUSINESS_MAX_FREE_RPM?: string;
+	LIMIT_BUSINESS_ULTRA_FREE_RPM?: string;
 }
 
 // User tier for rate limiting and model access
 export type UserTier = 'anonymous' | 'logged_in' | 'subscribed';
+
+// Capacity is deliberately separate from model access. All Business plans use
+// the subscribed model policy; Max and Ultra only receive larger usage/RPM
+// buckets. Cash-cost admission remains keyed to UserTier as another independent
+// safety boundary.
+export type UsageTier = UserTier | 'business_max' | 'business_ultra';
 
 // Server-verified commercial plan. This is intentionally separate from
 // UserTier: Free and paid Basic both keep the existing `logged_in` model/rate
@@ -237,6 +263,8 @@ export type AccountPlan =
 	| 'free'
 	| 'basic'
 	| 'business'
+	| 'business_max'
+	| 'business_ultra'
 	| 'team'
 	| 'enterprise'
 	| 'unknown';
@@ -245,7 +273,11 @@ export type AccountPlan =
 export interface AuthResult {
 	isValid: boolean;
 	tier: UserTier;
+	/** Present on current auth results; optional for older internal callers. */
+	usageTier?: UsageTier;
 	accountPlan: AccountPlan;
+	/** Server-verified temporary profile or subscription trial. */
+	hostedAiTrial?: boolean;
 	deviceId: string;
 	userId?: string;
 	/** True only for the dedicated backend service bearer. */
@@ -282,7 +314,7 @@ export interface UsageResult {
 
 // Usage status response
 export interface UsageStatus {
-	tier: UserTier;
+	tier: UsageTier;
 	used_today: number;
 	limit_today: number;
 	remaining: number;
