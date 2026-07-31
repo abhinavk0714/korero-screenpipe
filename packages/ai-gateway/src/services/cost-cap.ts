@@ -10,12 +10,6 @@ import {
 	getCostAccumulatorOrThrow,
 	getDailyUserCost,
 	getDailyUserCostOrThrow,
-	getGlobalDailyCostCap,
-	getGlobalHourlyCostCap,
-	getPlanDailyCostCap,
-	getPlanMonthlyCostCap,
-	getPlanRequestCostCap,
-	accountPlanFromTier,
 	GLOBAL_DAILY_COST_KEY,
 	GLOBAL_HOURLY_COST_KEY,
 	monthlyCostKey,
@@ -25,6 +19,11 @@ import {
 	isZeroCostModel,
 	type CostReservationShape,
 } from './cost-tracker';
+import {
+	accountPlanFromTier,
+	getPlanDailyCostCap,
+	resolveHostedAiTextCostLimits,
+} from './hosted-ai-cost-controls';
 
 const COST_BASELINE_TIER = 'daily_cost_baseline_v1';
 const COST_RESERVATION_TIER_PREFIX = 'daily_cost_reservation_v3';
@@ -258,11 +257,12 @@ export async function reserveDailyCostCap(
 			? 'gpt-5.6-luna'
 			: model;
 		const reservedMicroUsd = getCostReservationMicroUsd(reservationModel, shape);
-		const dailyCapMicroUsd = Math.floor(getPlanDailyCostCap(accountPlan, env, hostedAiTrial) * 1_000_000);
-		const monthlyCapMicroUsd = Math.floor(getPlanMonthlyCostCap(accountPlan, env, hostedAiTrial) * 1_000_000);
-		const requestCapMicroUsd = Math.floor(getPlanRequestCostCap(accountPlan, env, hostedAiTrial) * 1_000_000);
-		const globalHourlyCapMicroUsd = Math.floor(getGlobalHourlyCostCap(env) * 1_000_000);
-		const globalDailyCapMicroUsd = Math.floor(getGlobalDailyCostCap(env) * 1_000_000);
+		const limits = resolveHostedAiTextCostLimits(accountPlan, env, hostedAiTrial);
+		const dailyCapMicroUsd = Math.floor(limits.daily * 1_000_000);
+		const monthlyCapMicroUsd = Math.floor(limits.monthly * 1_000_000);
+		const requestCapMicroUsd = Math.floor(limits.request * 1_000_000);
+		const globalHourlyCapMicroUsd = Math.floor(limits.globalHourly * 1_000_000);
+		const globalDailyCapMicroUsd = Math.floor(limits.globalDaily * 1_000_000);
 		const monthKey = hostedAiTrial ? trialCostKey(deviceId) : monthlyCostKey(deviceId);
 		const monthPeriod = hostedAiTrial ? 'trial' : month;
 		const laneLimit = lane === 'background'

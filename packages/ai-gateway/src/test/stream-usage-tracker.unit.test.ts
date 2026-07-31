@@ -144,6 +144,21 @@ describe('trackStreamUsage — openai format', () => {
 		expect(u.cache_read_input_tokens).toBe(1000);
 	});
 
+	it('captures a terminal usage event without a trailing newline', async () => {
+		const finalEvent = `data: ${JSON.stringify({
+			choices: [],
+			usage: { prompt_tokens: 44, completion_tokens: 7 },
+		})}`;
+		const { response, usage } = trackResponseUsage(sseResponse([finalEvent]), 'openai');
+		expect(await drain(response.body!)).toBe(finalEvent);
+		expect(await usage).toMatchObject({
+			input_tokens: 44,
+			output_tokens: 7,
+			usage_complete: true,
+			termination: 'complete',
+		});
+	});
+
 	it('resolves observed usage when the client cancels before stream completion', async () => {
 		const event = `data: ${JSON.stringify({
 			choices: [],

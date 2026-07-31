@@ -4,6 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import type { Env } from '../types';
+import { TEST_PRIVATE_COST_CONTROLS } from './fixtures/private-cost-controls';
 
 const verifyTokenMock = mock(async () => {
 	throw new Error('invalid token');
@@ -23,25 +24,7 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		CLERK_SECRET_KEY: 'clerk-test-secret',
 		SUPABASE_URL: 'https://supabase.test',
 		SUPABASE_ANON_KEY: 'supabase-test-key',
-		FREE_CHAT_COST_RESERVATION_MICRO_USD: '100',
-		FREE_CHAT_DAILY_BUDGET_MICRO_USD: '1600',
-		MAX_DAILY_FREE_TRANSCRIPTION_COST: '101',
-		MAX_DAILY_BASIC_TRANSCRIPTION_COST: '102',
-		MAX_DAILY_BUSINESS_TRANSCRIPTION_COST: '103',
-		MAX_DAILY_FREE_TEXT_COST: '101',
-		MAX_DAILY_BASIC_TEXT_COST: '102',
-		MAX_DAILY_BUSINESS_TEXT_COST: '103',
-		MAX_MONTHLY_FREE_TEXT_COST: '201',
-		MAX_MONTHLY_BASIC_TEXT_COST: '202',
-		MAX_MONTHLY_BUSINESS_TEXT_COST: '203',
-		MAX_REQUEST_FREE_TEXT_COST: '51',
-		MAX_REQUEST_BASIC_TEXT_COST: '52',
-		MAX_REQUEST_BUSINESS_TEXT_COST: '53',
-		MAX_TRIAL_TEXT_COST: '301',
-		MAX_DAILY_TRIAL_TEXT_COST: '104',
-		MAX_REQUEST_TRIAL_TEXT_COST: '54',
-		MAX_GLOBAL_HOURLY_TEXT_COST: '401',
-		MAX_GLOBAL_DAILY_TEXT_COST: '402',
+		...TEST_PRIVATE_COST_CONTROLS,
 		RATE_LIMITER: {
 			idFromName: (name: string) => name,
 			get: () => ({
@@ -461,6 +444,40 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(response.status).toBe(503);
 		expect(await response.text()).not.toContain('model_not_allowed');
 	});
+
+	it.each(['/v1/messages', '/anthropic/v1/messages'])(
+		'rejects malformed JSON before metering or provider dispatch: %s',
+		async (path: string) => {
+			globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+				const url = String(input);
+				if (url === 'https://screenpipe.com/api/user') {
+					return new Response(JSON.stringify({
+						success: true,
+						user: {
+							clerk_id: 'user_malformed_json',
+							cloud_subscribed: false,
+							app_entitled: true,
+							subscription_plan: 'standard',
+							entitlement: { active: true, plan: 'standard', features: { app: true } },
+						},
+					}), { status: 200 });
+				}
+				throw new Error(`unexpected fetch: ${url}`);
+			}) as typeof fetch;
+
+			const response = await handleRequest(new Request(`https://gateway.test${path}`, {
+				method: 'POST',
+				headers: {
+					Authorization: 'Bearer eyJ.standard.malformed',
+					'content-type': 'application/json',
+				},
+				body: '{',
+			}), env, ctx);
+
+			expect(response.status).toBe(400);
+			expect(await errorCode(response)).toBe('invalid_json');
+		},
+	);
 
 	it('fails closed before alternate hosted inference when plan truth is missing', async () => {
 		globalThis.fetch = mock(async () => new Response(JSON.stringify({

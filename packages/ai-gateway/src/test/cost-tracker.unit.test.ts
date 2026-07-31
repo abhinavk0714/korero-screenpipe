@@ -13,24 +13,9 @@
 
 import { describe, it, expect } from 'bun:test';
 import type { Env } from '../types';
-import { getCostReservationMicroUsd, getGlobalDailyCostCap, getGlobalHourlyCostCap, getModelCost, getStreamModelCost, getStreamSettlementCost, logCost, isZeroCostModel, inferProvider, isFrontierModel, getPlanDailyCostCap, getPlanMonthlyCostCap, getPlanRequestCostCap } from '../services/cost-tracker';
-
-const TEST_PRIVATE_COST_CONTROLS = {
-	MAX_DAILY_FREE_TEXT_COST: '101',
-	MAX_DAILY_BASIC_TEXT_COST: '102',
-	MAX_DAILY_BUSINESS_TEXT_COST: '103',
-	MAX_MONTHLY_FREE_TEXT_COST: '201',
-	MAX_MONTHLY_BASIC_TEXT_COST: '202',
-	MAX_MONTHLY_BUSINESS_TEXT_COST: '203',
-	MAX_REQUEST_FREE_TEXT_COST: '51',
-	MAX_REQUEST_BASIC_TEXT_COST: '52',
-	MAX_REQUEST_BUSINESS_TEXT_COST: '53',
-	MAX_TRIAL_TEXT_COST: '301',
-	MAX_DAILY_TRIAL_TEXT_COST: '104',
-	MAX_REQUEST_TRIAL_TEXT_COST: '54',
-	MAX_GLOBAL_HOURLY_TEXT_COST: '401',
-	MAX_GLOBAL_DAILY_TEXT_COST: '402',
-} as unknown as Env;
+import { getCostReservationMicroUsd, getModelCost, getNonStreamSettlementCost, getStreamModelCost, getStreamSettlementCost, logCost, isZeroCostModel, inferProvider, isFrontierModel } from '../services/cost-tracker';
+import { getGlobalDailyCostCap, getGlobalHourlyCostCap, getPlanDailyCostCap, getPlanMonthlyCostCap, getPlanRequestCostCap } from '../services/hosted-ai-cost-controls';
+import { TEST_PRIVATE_COST_CONTROLS } from './fixtures/private-cost-controls';
 
 describe('hosted AI plan budget math', () => {
 	it('reads every operational ceiling from private bindings', () => {
@@ -45,12 +30,15 @@ describe('hosted AI plan budget math', () => {
 	});
 
 	it('fails closed instead of using a public fallback', () => {
-		expect(() => getPlanDailyCostCap('free')).toThrow('MAX_DAILY_FREE_TEXT_COST');
+		expect(() => getPlanDailyCostCap('free', {} as Env)).toThrow('MAX_DAILY_FREE_TEXT_COST');
 		expect(() => getPlanMonthlyCostCap('basic', {
 			...TEST_PRIVATE_COST_CONTROLS,
 			MAX_MONTHLY_BASIC_TEXT_COST: 'invalid',
 		})).toThrow('MAX_MONTHLY_BASIC_TEXT_COST');
-		expect(() => getGlobalDailyCostCap({} as Env)).toThrow('MAX_GLOBAL_DAILY_TEXT_COST');
+		expect(() => getGlobalDailyCostCap({
+			...TEST_PRIVATE_COST_CONTROLS,
+			MAX_GLOBAL_DAILY_TEXT_COST: undefined,
+		} as Env)).toThrow('MAX_GLOBAL_DAILY_TEXT_COST');
 	});
 });
 
@@ -111,6 +99,47 @@ describe('getStreamSettlementCost', () => {
 		};
 		expect(getStreamSettlementCost('claude-fable-5', usage, 50_000))
 			.toBe(getStreamModelCost('claude-fable-5', 200_000, 0));
+	});
+});
+
+describe('getNonStreamSettlementCost', () => {
+	it('uses complete provider usage even when it is below the reservation', () => {
+		const expected = getModelCost('claude-fable-5', 1_000, 10);
+		expect(getNonStreamSettlementCost(
+			'claude-fable-5',
+			1_000,
+			10,
+			{},
+			900_000,
+		)).toBe(expected);
+	});
+
+	it('charges at least the reservation when either terminal counter is absent', () => {
+		expect(getNonStreamSettlementCost(
+			'claude-fable-5',
+			undefined,
+			10,
+			{},
+			900_000,
+		)).toBe(0.9);
+		expect(getNonStreamSettlementCost(
+			'claude-fable-5',
+			1_000,
+			null,
+			{},
+			900_000,
+		)).toBe(0.9);
+	});
+
+	it('keeps a partial observation when it exceeds the reservation', () => {
+		const observed = getModelCost('claude-fable-5', 200_000, null);
+		expect(getNonStreamSettlementCost(
+			'claude-fable-5',
+			200_000,
+			null,
+			{},
+			50_000,
+		)).toBe(observed);
 	});
 });
 

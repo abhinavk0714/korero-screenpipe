@@ -37,6 +37,12 @@ import {
 	type FreeChatPreflight,
 } from './free-chat-limit';
 import { trackResponseUsage } from '../utils/stream-usage-tracker';
+import { TEST_PRIVATE_COST_CONTROLS } from '../test/fixtures/private-cost-controls';
+import {
+	reservedCostAttribution,
+	settleActualOrReservedCost,
+	settleProviderException,
+} from './hosted-ai-cost-settlement';
 
 const USAGE_SCHEMA = [
 	`CREATE TABLE usage (
@@ -67,30 +73,44 @@ const USAGE_SCHEMA = [
 	) WITHOUT ROWID`,
 ];
 
-const TEST_PRIVATE_COST_CONTROLS = {
-	FREE_CHAT_COST_RESERVATION_MICRO_USD: '100',
-	FREE_CHAT_DAILY_BUDGET_MICRO_USD: '1600',
-	MAX_DAILY_FREE_TEXT_COST: '101',
-	MAX_DAILY_BASIC_TEXT_COST: '102',
-	MAX_DAILY_BUSINESS_TEXT_COST: '103',
-	MAX_MONTHLY_FREE_TEXT_COST: '201',
-	MAX_MONTHLY_BASIC_TEXT_COST: '202',
-	MAX_MONTHLY_BUSINESS_TEXT_COST: '203',
-	MAX_REQUEST_FREE_TEXT_COST: '51',
-	MAX_REQUEST_BASIC_TEXT_COST: '52',
-	MAX_REQUEST_BUSINESS_TEXT_COST: '53',
-	MAX_TRIAL_TEXT_COST: '301',
-	MAX_DAILY_TRIAL_TEXT_COST: '104',
-	MAX_REQUEST_TRIAL_TEXT_COST: '54',
-	MAX_GLOBAL_HOURLY_TEXT_COST: '401',
-	MAX_GLOBAL_DAILY_TEXT_COST: '402',
-};
-
 function metered(
 	userId: string,
 	turnKey: string,
 ): Extract<FreeChatPreflight, { mode: 'metered' }> {
 	return { mode: 'metered', userId, turnKey };
+}
+
+/** Keep synthetic overrides consistent with the invariants production validates. */
+function setUniformTextWindows(
+	env: Env,
+	limits: { request: number; daily: number; monthly: number },
+): void {
+	if (!(limits.request <= limits.daily && limits.daily <= limits.monthly)) {
+		throw new Error('invalid synthetic text windows');
+	}
+	for (const plan of ['FREE', 'BASIC', 'BUSINESS'] as const) {
+		env[`MAX_REQUEST_${plan}_TEXT_COST`] = String(limits.request);
+		env[`MAX_DAILY_${plan}_TEXT_COST`] = String(limits.daily);
+		env[`MAX_MONTHLY_${plan}_TEXT_COST`] = String(limits.monthly);
+	}
+}
+
+function setGlobalTextWindows(env: Env, hourly: number, daily: number): void {
+	if (hourly > daily) throw new Error('invalid synthetic global windows');
+	env.MAX_GLOBAL_HOURLY_TEXT_COST = String(hourly);
+	env.MAX_GLOBAL_DAILY_TEXT_COST = String(daily);
+}
+
+function setTrialTextWindows(
+	env: Env,
+	limits: { request: number; daily: number; total: number },
+): void {
+	if (!(limits.request <= limits.daily && limits.daily <= limits.total)) {
+		throw new Error('invalid synthetic trial windows');
+	}
+	env.MAX_REQUEST_TRIAL_TEXT_COST = String(limits.request);
+	env.MAX_DAILY_TRIAL_TEXT_COST = String(limits.daily);
+	env.MAX_TRIAL_TEXT_COST = String(limits.total);
 }
 
 describe('usage reservations against workerd D1', () => {
@@ -293,7 +313,11 @@ describe('usage reservations against workerd D1', () => {
 	it('reserves half the account budget for foreground Chat', async () => {
 		const now = new Date('2026-07-14T12:00:00.000Z');
 		const holdUsd = getCostReservationMicroUsd('claude-sonnet-5') / 1_000_000;
-		env.MAX_DAILY_BUSINESS_TEXT_COST = String(holdUsd * 3);
+		setUniformTextWindows(env, {
+			request: holdUsd * 3,
+			daily: holdUsd * 3,
+			monthly: holdUsd * 6,
+		});
 		const firstPipe = await reserveDailyCostCap(
 			env, 'user-d1-chat-headroom', 'subscribed', 'claude-sonnet-5', now, 'background',
 		);
@@ -333,7 +357,11 @@ describe('usage reservations against workerd D1', () => {
 			inputTokens: 200_000,
 			maxOutputTokens: 16_000,
 		}) / 1_000_000;
-		env.MAX_DAILY_BUSINESS_TEXT_COST = String(shapedHoldUsd / 2);
+		setUniformTextWindows(env, {
+			request: shapedHoldUsd / 2,
+			daily: shapedHoldUsd / 2,
+			monthly: shapedHoldUsd,
+		});
 		const result = await reserveDailyCostCap(
 			env,
 			'user-d1-large-shape',
@@ -350,7 +378,7 @@ describe('usage reservations against workerd D1', () => {
 		})).toBe(990_000);
 		expect(result.allowed).toBe(false);
 		if (!result.allowed) {
-			expect(await result.response.text()).toContain('daily_cost_limit_exceeded');
+			expect(await result.response.text()).toContain('request_cost_limit_exceeded');
 		}
 	});
 
@@ -358,7 +386,11 @@ describe('usage reservations against workerd D1', () => {
 		const now = new Date('2026-07-14T12:00:00.000Z');
 		const model = 'gemini-2.5-flash';
 		const holdUsd = getCostReservationMicroUsd(model) / 1_000_000;
-		env.MAX_DAILY_BUSINESS_TEXT_COST = String(holdUsd * 4);
+		setUniformTextWindows(env, {
+			request: holdUsd * 4,
+			daily: holdUsd * 4,
+			monthly: holdUsd * 8,
+		});
 		const background = await reserveDailyCostCap(
 			env, 'user-d1-cost-settle', 'subscribed', model, now, 'background',
 		);
@@ -460,11 +492,98 @@ describe('usage reservations against workerd D1', () => {
 		expect(hold).toBeNull();
 	});
 
+	it('charges and releases a hold when the provider throws after admission', async () => {
+		const deviceId = 'user-d1-provider-exception';
+		const model = 'claude-sonnet-5';
+		const result = await reserveDailyCostCap(
+			env,
+			deviceId,
+			'subscribed',
+			model,
+			new Date(),
+			'interactive',
+			{},
+			'business',
+		);
+		if (!result.allowed || !result.reservation) {
+			throw new Error('expected provider-exception reservation');
+		}
+
+		await settleProviderException(env, result.reservation, reservedCostAttribution({
+			isValid: true,
+			tier: 'subscribed',
+			accountPlan: 'business',
+			deviceId,
+			userId: deviceId,
+		}, model, '/v1/chat/completions', false));
+
+		const expectedCost = result.reservation.reservedMicroUsd / 1_000_000;
+		const account = await env.DB.prepare(
+			'SELECT daily_cost_usd FROM usage WHERE device_id = ?',
+		).bind(deviceId).first<{ daily_cost_usd: number }>();
+		expect(account?.daily_cost_usd).toBeCloseTo(expectedCost, 8);
+		expect(await env.DB.prepare(
+			'SELECT device_id FROM usage WHERE device_id = ?',
+		).bind(result.reservation.key).first()).toBeNull();
+	});
+
+	it('charges the hold when a non-stream provider response cannot be decoded', async () => {
+		const deviceId = 'user-d1-malformed-provider-response';
+		const model = 'claude-sonnet-5';
+		const result = await reserveDailyCostCap(
+			env,
+			deviceId,
+			'subscribed',
+			model,
+			new Date(),
+			'interactive',
+			{},
+			'business',
+		);
+		if (!result.allowed || !result.reservation) {
+			throw new Error('expected malformed-response reservation');
+		}
+		const settlement = settleActualOrReservedCost(
+			env,
+			result.reservation,
+			reservedCostAttribution({
+				isValid: true,
+				tier: 'subscribed',
+				accountPlan: 'business',
+				deviceId,
+				userId: deviceId,
+			}, model, '/v1/chat/completions', false),
+			async () => {
+				throw new SyntaxError('synthetic malformed provider response');
+			},
+		);
+		const response = withDailyCostSettlement(
+			new Response('malformed upstream'),
+			env,
+			result.reservation,
+			settlement,
+		);
+		expect(await response.text()).toBe('malformed upstream');
+
+		const expectedCost = result.reservation.reservedMicroUsd / 1_000_000;
+		const account = await env.DB.prepare(
+			'SELECT daily_cost_usd FROM usage WHERE device_id = ?',
+		).bind(deviceId).first<{ daily_cost_usd: number }>();
+		expect(account?.daily_cost_usd).toBeCloseTo(expectedCost, 8);
+		expect(await env.DB.prepare(
+			'SELECT device_id FROM usage WHERE device_id = ?',
+		).bind(result.reservation.key).first()).toBeNull();
+	});
+
 	it('reclaims an expired priced-request reservation without accepting its stale release', async () => {
 		const start = new Date('2026-07-14T12:00:00.000Z');
 		const model = 'gemini-2.5-flash';
 		const holdUsd = getCostReservationMicroUsd(model) / 1_000_000;
-		env.MAX_DAILY_BUSINESS_TEXT_COST = String(holdUsd * 1.5);
+		setUniformTextWindows(env, {
+			request: holdUsd * 1.5,
+			daily: holdUsd * 1.5,
+			monthly: holdUsd * 3,
+		});
 		const first = await reserveDailyCostCap(env, 'user-d1-cost-expired', 'subscribed', model, start);
 		expect(first.allowed).toBe(true);
 		expect((await reserveDailyCostCap(
@@ -500,9 +619,18 @@ describe('usage reservations against workerd D1', () => {
 	it('atomically enforces a Basic monthly allowance across parallel requests', async () => {
 		const now = new Date('2026-07-14T12:00:00.000Z');
 		const hold = getCostReservationMicroUsd('gpt-5.6-luna');
-		env.MAX_DAILY_BASIC_TEXT_COST = '1';
-		env.MAX_MONTHLY_BASIC_TEXT_COST = String((hold * 2 + 1) / 1_000_000);
-		env.MAX_REQUEST_BASIC_TEXT_COST = '1';
+		setUniformTextWindows(env, { request: 1, daily: 1, monthly: 1 });
+		const remainingMicroUsd = hold * 2 + 1;
+		await env.DB.prepare(`
+			INSERT INTO usage
+				(device_id, daily_count, last_reset, tier, cost_day, daily_cost_usd)
+			VALUES (?, 0, ?, 'monthly_cost_test', ?, ?)
+		`).bind(
+			monthlyCostKey('user-d1-monthly-basic'),
+			utcMonth(now),
+			utcMonth(now),
+			(1_000_000 - remainingMicroUsd) / 1_000_000,
+		).run();
 		const results = await Promise.all(Array.from({ length: 8 }, () =>
 			reserveDailyCostCap(
 				env,
@@ -527,11 +655,8 @@ describe('usage reservations against workerd D1', () => {
 	it('atomically stops different accounts at the global hourly breaker', async () => {
 		const now = new Date('2026-07-14T12:00:00.000Z');
 		const hold = getCostReservationMicroUsd('claude-sonnet-5');
-		env.MAX_DAILY_BUSINESS_TEXT_COST = '10';
-		env.MAX_MONTHLY_BUSINESS_TEXT_COST = '10';
-		env.MAX_REQUEST_BUSINESS_TEXT_COST = '2';
-		env.MAX_GLOBAL_HOURLY_TEXT_COST = String((hold * 2 + 1) / 1_000_000);
-		env.MAX_GLOBAL_DAILY_TEXT_COST = '10';
+		setUniformTextWindows(env, { request: 1, daily: 1, monthly: 1 });
+		setGlobalTextWindows(env, (hold * 2 + 1) / 1_000_000, 1);
 		const results = await Promise.all(Array.from({ length: 8 }, (_, index) =>
 			reserveDailyCostCap(
 				env,
@@ -562,11 +687,19 @@ describe('usage reservations against workerd D1', () => {
 	it('atomically stops different accounts at the global daily breaker', async () => {
 		const now = new Date('2026-07-14T12:00:00.000Z');
 		const hold = getCostReservationMicroUsd('claude-sonnet-5');
-		env.MAX_DAILY_BUSINESS_TEXT_COST = '10';
-		env.MAX_MONTHLY_BUSINESS_TEXT_COST = '10';
-		env.MAX_REQUEST_BUSINESS_TEXT_COST = '2';
-		env.MAX_GLOBAL_HOURLY_TEXT_COST = '10';
-		env.MAX_GLOBAL_DAILY_TEXT_COST = String((hold * 2 + 1) / 1_000_000);
+		setUniformTextWindows(env, { request: 1, daily: 1, monthly: 1 });
+		setGlobalTextWindows(env, 1, 1);
+		const remainingMicroUsd = hold * 2 + 1;
+		await env.DB.prepare(`
+			INSERT INTO usage
+				(device_id, daily_count, last_reset, tier, cost_day, daily_cost_usd)
+			VALUES (?, 0, ?, 'global_daily_cost_test', ?, ?)
+		`).bind(
+			GLOBAL_DAILY_COST_KEY,
+			now.toISOString().slice(0, 10),
+			now.toISOString().slice(0, 10),
+			(1_000_000 - remainingMicroUsd) / 1_000_000,
+		).run();
 		const results = await Promise.all(Array.from({ length: 8 }, (_, index) =>
 			reserveDailyCostCap(
 				env,
@@ -625,7 +758,12 @@ describe('usage reservations against workerd D1', () => {
 	it('keeps trial spend in a non-resetting allowance instead of a calendar month', async () => {
 		const deviceId = 'user-d1-trial-budget';
 		const trialHoldUsd = getCostReservationMicroUsd('claude-sonnet-5') / 1_000_000;
-		env.MAX_TRIAL_TEXT_COST = String(0.9 + trialHoldUsd / 2);
+		const trialTotal = 0.9 + trialHoldUsd / 2;
+		setTrialTextWindows(env, {
+			request: trialHoldUsd,
+			daily: trialTotal,
+			total: trialTotal,
+		});
 		const recorded = await logCost(env, {
 			device_id: deviceId,
 			tier: 'subscribed',
@@ -678,7 +816,11 @@ describe('usage reservations against workerd D1', () => {
 		const postEpochCap = holdUsd * 3;
 		const incidentSpend = 40;
 		env.PRIVATE_COST_CAP_EPOCH = 'incident-v2';
-		env.MAX_DAILY_BUSINESS_TEXT_COST = String(postEpochCap);
+		setUniformTextWindows(env, {
+			request: postEpochCap,
+			daily: postEpochCap,
+			monthly: postEpochCap * 2,
+		});
 		await env.DB.prepare(`
 			INSERT INTO usage (device_id, last_reset, tier, cost_day, daily_cost_usd)
 			VALUES (?, ?, 'subscribed', ?, ?)

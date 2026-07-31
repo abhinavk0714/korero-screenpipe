@@ -15,7 +15,7 @@
 
 import { describe, it, expect } from 'bun:test';
 import type { Env } from '../types';
-import { getTranscriptionDailyCostCap } from '../services/cost-tracker';
+import { getTranscriptionDailyCostCap } from '../services/hosted-ai-cost-controls';
 
 // Replicate the cost estimation logic from index.ts /v1/listen handler
 function estimateTranscriptionCost(contentLength: number): {

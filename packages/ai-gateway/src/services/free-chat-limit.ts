@@ -4,6 +4,7 @@
 
 import type { AuthResult, Env, RequestBody } from '../types';
 import { hasPaidHostedAiPlan } from './hosted-ai-policy';
+import { PrivateCostControlError } from './hosted-ai-cost-controls';
 import { isBackgroundRequest } from '../utils/latency';
 import { withResponseFinalizer } from '../utils/response-finalizer';
 
@@ -27,23 +28,43 @@ const FREE_CHAT_LEASE_TIER = 'free_chat_in_flight_v1';
 const INTERNAL_TITLE_SESSION_PREFIX = '__title:';
 
 function requiredPrivatePositiveInteger(value: string | undefined, name: string): number {
-	const parsed = Number(value);
+	const normalized = value?.trim();
+	if (!normalized || !/^\d+$/.test(normalized)) {
+		throw new PrivateCostControlError(name);
+	}
+	const parsed = Number(normalized);
 	if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
-	throw new Error(`missing or invalid private free chat cost control: ${name}`);
+	throw new PrivateCostControlError(name);
+}
+
+export type FreeChatCostControls = {
+	reservationMicroUsd: number;
+	dailyBudgetMicroUsd: number;
+};
+
+export function loadFreeChatCostControls(env: Env): FreeChatCostControls {
+	const controls = {
+		reservationMicroUsd: requiredPrivatePositiveInteger(
+			env.FREE_CHAT_COST_RESERVATION_MICRO_USD,
+			'FREE_CHAT_COST_RESERVATION_MICRO_USD',
+		),
+		dailyBudgetMicroUsd: requiredPrivatePositiveInteger(
+			env.FREE_CHAT_DAILY_BUDGET_MICRO_USD,
+			'FREE_CHAT_DAILY_BUDGET_MICRO_USD',
+		),
+	};
+	if (controls.reservationMicroUsd > controls.dailyBudgetMicroUsd) {
+		throw new PrivateCostControlError('free chat budget windows', 'inconsistent');
+	}
+	return controls;
 }
 
 export function getFreeChatCostReservationMicroUsd(env: Env): number {
-	return requiredPrivatePositiveInteger(
-		env.FREE_CHAT_COST_RESERVATION_MICRO_USD,
-		'FREE_CHAT_COST_RESERVATION_MICRO_USD',
-	);
+	return loadFreeChatCostControls(env).reservationMicroUsd;
 }
 
 export function getFreeChatDailyBudgetMicroUsd(env: Env): number {
-	return requiredPrivatePositiveInteger(
-		env.FREE_CHAT_DAILY_BUDGET_MICRO_USD,
-		'FREE_CHAT_DAILY_BUDGET_MICRO_USD',
-	);
+	return loadFreeChatCostControls(env).dailyBudgetMicroUsd;
 }
 
 export type FreeChatLimitError = {
@@ -686,8 +707,9 @@ export async function reserveFreeChatBudget(
 	const { userId } = preflight;
 	const day = utcDay(now);
 	try {
-		const reservationMicroUsd = getFreeChatCostReservationMicroUsd(env);
-		const dailyBudgetMicroUsd = getFreeChatDailyBudgetMicroUsd(env);
+		const controls = loadFreeChatCostControls(env);
+		const reservationMicroUsd = controls.reservationMicroUsd;
+		const dailyBudgetMicroUsd = controls.dailyBudgetMicroUsd;
 		const budgetKey = await accountResourceKey('budget', `${userId}:${day}`);
 		const budgetTier = `${FREE_CHAT_BUDGET_TIER_PREFIX}:${day}`;
 		const incrementBudget = async () => env.DB.prepare(`

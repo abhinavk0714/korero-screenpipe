@@ -20,6 +20,7 @@ import {
 	applyFreeChatRequestLimits,
 	getFreeChatCostReservationMicroUsd,
 	getFreeChatDailyBudgetMicroUsd,
+	loadFreeChatCostControls,
 	prepareFreeChatTurn,
 	releaseFreeChatLease,
 	reserveFreeChatBudget,
@@ -733,6 +734,25 @@ describe('free chat capacity reservations', () => {
 		);
 		expect(result.allowed).toBe(false);
 		if (!result.allowed) expect(result.error.code).toBe('free_chat_budget_unavailable');
+	});
+
+	it.each(['100oops', '1.5', '1e3', '0', '-1', ''])(
+		'fails closed for malformed private integer %p',
+		(value: string) => {
+			const env = envWith(new FakeD1());
+			env.FREE_CHAT_COST_RESERVATION_MICRO_USD = value;
+			expect(() => loadFreeChatCostControls(env)).toThrow(
+				'FREE_CHAT_COST_RESERVATION_MICRO_USD',
+			);
+		},
+	);
+
+	it('rejects a per-call reservation larger than the daily budget', () => {
+		const env = envWith(new FakeD1());
+		env.FREE_CHAT_COST_RESERVATION_MICRO_USD = '1601';
+		expect(() => loadFreeChatCostControls(env)).toThrow(
+			'inconsistent private hosted AI cost control: free chat budget windows',
+		);
 	});
 
 	it('does not burn a turn or budget when an overlapping request is rejected', async () => {

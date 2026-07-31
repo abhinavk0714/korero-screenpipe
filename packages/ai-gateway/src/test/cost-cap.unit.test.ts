@@ -12,23 +12,7 @@
 import { describe, expect, it } from 'bun:test';
 import { enforceDailyCostCap, reserveDailyCostCap } from '../services/cost-cap';
 import { Env } from '../types';
-
-const TEST_PRIVATE_COST_CONTROLS = {
-	MAX_DAILY_FREE_TEXT_COST: '101',
-	MAX_DAILY_BASIC_TEXT_COST: '102',
-	MAX_DAILY_BUSINESS_TEXT_COST: '103',
-	MAX_MONTHLY_FREE_TEXT_COST: '201',
-	MAX_MONTHLY_BASIC_TEXT_COST: '202',
-	MAX_MONTHLY_BUSINESS_TEXT_COST: '203',
-	MAX_REQUEST_FREE_TEXT_COST: '51',
-	MAX_REQUEST_BASIC_TEXT_COST: '52',
-	MAX_REQUEST_BUSINESS_TEXT_COST: '53',
-	MAX_TRIAL_TEXT_COST: '301',
-	MAX_DAILY_TRIAL_TEXT_COST: '104',
-	MAX_REQUEST_TRIAL_TEXT_COST: '54',
-	MAX_GLOBAL_HOURLY_TEXT_COST: '401',
-	MAX_GLOBAL_DAILY_TEXT_COST: '402',
-};
+import { TEST_PRIVATE_COST_CONTROLS } from './fixtures/private-cost-controls';
 
 function dbEnv(dailyCost: number | null, withPrivateControls = true): Env {
 	return {
