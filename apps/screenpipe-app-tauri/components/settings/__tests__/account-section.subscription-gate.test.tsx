@@ -129,6 +129,7 @@ describe("AccountSection subscription/login gating", () => {
     vi.useRealTimers();
     vi.clearAllMocks();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     mocks.eventHandlers.clear();
     mocks.state.user = null;
   });
@@ -169,6 +170,43 @@ describe("AccountSection subscription/login gating", () => {
     const card = screen.getByTestId(ACTIVE_CARD);
     expect(card).toBeInTheDocument();
     expect(within(card).getByText("active")).toBeInTheDocument();
+  });
+
+  it("shows one quiet next-tier action and opens the exact Max billing target", () => {
+    vi.stubEnv("NEXT_PUBLIC_BUSINESS_POWER_PLANS_ENABLED", "true");
+    mocks.state.user = {
+      id: "u1",
+      email: "pro@screenpipe.test",
+      token: "tok",
+      cloud_subscribed: true,
+      subscription_plan: "pro",
+    };
+
+    render(<AccountSection />);
+    const upgrade = screen.getByTestId("account-capacity-upgrade");
+    expect(within(upgrade).getByText(/higher query and request-rate limits/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("account-capacity-upgrade-button"));
+
+    expect(mocks.openUrl).toHaveBeenCalledWith(
+      "https://screenpipe.com/account/billing?target_plan=pro_max&interval=month",
+    );
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "desktop_business_capacity_upgrade_opened",
+      { current_plan: "pro", target_plan: "pro_max" },
+    );
+  });
+
+  it("does not show power-plan promotion while the rollout flag is off", () => {
+    mocks.state.user = {
+      id: "u1",
+      email: "pro@screenpipe.test",
+      token: "tok",
+      cloud_subscribed: true,
+      subscription_plan: "pro",
+    };
+
+    render(<AccountSection />);
+    expect(screen.queryByTestId("account-capacity-upgrade")).not.toBeInTheDocument();
   });
 
   it("opens website billing before a profile-granted Business plan expires", () => {
