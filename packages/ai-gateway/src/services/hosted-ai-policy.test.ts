@@ -51,7 +51,7 @@ describe('hosted AI model products', () => {
 	});
 
 	it('maps Business, Team, and Enterprise to frontier access', () => {
-		for (const plan of ['business', 'team', 'enterprise'] as const) {
+		for (const plan of ['business', 'business_max', 'business_ultra', 'team', 'enterprise'] as const) {
 			expect(getHostedAiPlan(plan)).toBe('business');
 			expect(isHostedAiModelAllowed('claude-fable-5', plan)).toBe(true);
 			expect(isHostedAiModelAllowed('gpt-5.6-sol', plan)).toBe(true);

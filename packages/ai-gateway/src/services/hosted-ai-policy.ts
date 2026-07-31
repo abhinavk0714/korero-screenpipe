@@ -55,6 +55,8 @@ export function getHostedAiPlan(accountPlan: AccountPlan): HostedAiPlan | null {
 		case 'free': return 'free';
 		case 'basic': return 'basic';
 		case 'business':
+		case 'business_max':
+		case 'business_ultra':
 		case 'team':
 		case 'enterprise':
 			return 'business';

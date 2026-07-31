@@ -40,8 +40,8 @@ describe('TIER_CONFIG', () => {
   });
 
   it('raises capacity monotonically without changing model access', () => {
-    expect(TIER_CONFIG.business_max.dailyQueries).toBe(3000);
-    expect(TIER_CONFIG.business_ultra.dailyQueries).toBe(6000);
+    expect(TIER_CONFIG.business_max.dailyQueries).toBe(120);
+    expect(TIER_CONFIG.business_ultra.dailyQueries).toBe(240);
     expect(TIER_CONFIG.business_max.rpm).toBeGreaterThan(TIER_CONFIG.subscribed.rpm);
     expect(TIER_CONFIG.business_ultra.rpm).toBeGreaterThan(TIER_CONFIG.business_max.rpm);
     expect(TIER_CONFIG.business_max.allowedModels).toEqual(TIER_CONFIG.subscribed.allowedModels);
@@ -200,8 +200,8 @@ describe('getUsageStatus.upsell_banner', () => {
   it('returns exact Max and Ultra capacity without showing the Business upsell', async () => {
     const max = await getUsageStatus(mockEnv(), 'd', 'business_max');
     const ultra = await getUsageStatus(mockEnv(), 'd', 'business_ultra');
-    expect(max).toMatchObject({ tier: 'business_max', limit_today: 3000, upsell_banner: false });
-    expect(ultra).toMatchObject({ tier: 'business_ultra', limit_today: 6000, upsell_banner: false });
+    expect(max).toMatchObject({ tier: 'business_max', limit_today: 120, upsell_banner: false });
+    expect(ultra).toMatchObject({ tier: 'business_ultra', limit_today: 240, upsell_banner: false });
     expect(max.upgrade_options).toBeUndefined();
     expect(ultra.upgrade_options).toBeUndefined();
   });
@@ -236,21 +236,21 @@ describe('trackUsage power-tier boundaries', () => {
 	}
 
 	it('allows the final Max unit and rejects the next without inflating usage', async () => {
-		const { env, row } = usageEnv(2999);
-		expect(await trackUsage(env, 'max-device', 'business_max', undefined, undefined, 'gpt-4o')).toMatchObject({ used: 3000, limit: 3000, remaining: 0, allowed: true });
-		expect(await trackUsage(env, 'max-device', 'business_max', undefined, undefined, 'gpt-4o')).toMatchObject({ used: 3000, limit: 3000, remaining: 0, allowed: false });
-		expect(row.daily_count).toBe(3000);
+		const { env, row } = usageEnv(119);
+		expect(await trackUsage(env, 'max-device', 'business_max', undefined, undefined, 'gpt-4o')).toMatchObject({ used: 120, limit: 120, remaining: 0, allowed: true });
+		expect(await trackUsage(env, 'max-device', 'business_max', undefined, undefined, 'gpt-4o')).toMatchObject({ used: 120, limit: 120, remaining: 0, allowed: false });
+		expect(row.daily_count).toBe(120);
 	});
 
 	it('rejects a weighted request that cannot fit without inflating usage', async () => {
-		const { env, row } = usageEnv(2999);
+		const { env, row } = usageEnv(119);
 		expect(await trackUsage(env, 'max-device', 'business_max', undefined, undefined, 'gpt-5.6-sol')).toMatchObject({
-			used: 2999,
-			limit: 3000,
+			used: 119,
+			limit: 120,
 			remaining: 1,
 			allowed: false,
 		});
-		expect(row.daily_count).toBe(2999);
+		expect(row.daily_count).toBe(119);
 	});
 
 	it('rejects an oversized first request after a daily reset without rewriting the stale counter', async () => {
@@ -267,8 +267,8 @@ describe('trackUsage power-tier boundaries', () => {
 	});
 
 	it('uses the independent Ultra boundary', async () => {
-		const { env } = usageEnv(5999);
-		expect(await trackUsage(env, 'ultra-device', 'business_ultra', undefined, undefined, 'gpt-4o')).toMatchObject({ used: 6000, limit: 6000, remaining: 0, allowed: true });
+		const { env } = usageEnv(239);
+		expect(await trackUsage(env, 'ultra-device', 'business_ultra', undefined, undefined, 'gpt-4o')).toMatchObject({ used: 240, limit: 240, remaining: 0, allowed: true });
 	});
 });
 

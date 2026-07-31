@@ -462,16 +462,22 @@ export async function trackUsage(
 /**
  * Get current usage status without incrementing
  */
+function defaultAccountPlanForUsageTier(tier: UsageTier): AccountPlan {
+  switch (tier) {
+    case 'business_max': return 'business_max';
+    case 'business_ultra': return 'business_ultra';
+    case 'subscribed': return 'business';
+    case 'logged_in': return 'basic';
+    default: return 'free';
+  }
+}
+
 export async function getUsageStatus(
   env: Env,
   deviceId: string,
   tier: UsageTier,
   userId?: string,
-  accountPlan: AccountPlan = tier === 'subscribed'
-    ? 'business'
-    : tier === 'logged_in'
-      ? 'basic'
-      : 'free',
+  accountPlan: AccountPlan = defaultAccountPlanForUsageTier(tier),
 ): Promise<UsageStatus> {
   const today = getTodayUTC();
   const limits = getTierConfig(env)[tier];

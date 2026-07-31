@@ -95,8 +95,8 @@ describe('getTierConfig — freeRpm bucket', () => {
 			expect(cfg[tier].freeRpm).toBeGreaterThan(cfg[tier].rpm);
 		}
 		expect(cfg.logged_in.freeRpm).toBe(120);
-		expect(cfg.business_max).toMatchObject({ dailyQueries: 3000, rpm: 120, freeRpm: 480 });
-		expect(cfg.business_ultra).toMatchObject({ dailyQueries: 6000, rpm: 240, freeRpm: 960 });
+		expect(cfg.business_max).toMatchObject({ dailyQueries: 120, rpm: 120, freeRpm: 480 });
+		expect(cfg.business_ultra).toMatchObject({ dailyQueries: 240, rpm: 240, freeRpm: 960 });
 	});
 
 	it('honors the LIMIT_*_FREE_RPM env override', () => {
@@ -106,21 +106,21 @@ describe('getTierConfig — freeRpm bucket', () => {
 
 	it('honors Max and Ultra env overrides independently', () => {
 		const cfg = getTierConfig({
-			LIMIT_BUSINESS_MAX_DAILY: '3100',
+			LIMIT_BUSINESS_MAX_DAILY: '121',
 			LIMIT_BUSINESS_MAX_RPM: '121',
-			LIMIT_BUSINESS_ULTRA_DAILY: '6200',
+			LIMIT_BUSINESS_ULTRA_DAILY: '241',
 			LIMIT_BUSINESS_ULTRA_FREE_RPM: '999',
 		} as unknown as Env);
-		expect(cfg.business_max.dailyQueries).toBe(3100);
+		expect(cfg.business_max.dailyQueries).toBe(121);
 		expect(cfg.business_max.rpm).toBe(121);
-		expect(cfg.business_ultra.dailyQueries).toBe(6200);
+		expect(cfg.business_ultra.dailyQueries).toBe(241);
 		expect(cfg.business_ultra.freeRpm).toBe(999);
 	});
 
 	it('fails closed to safe defaults for malformed or non-positive overrides', () => {
 		const cfg = getTierConfig({ LIMIT_BUSINESS_MAX_DAILY: '-1', LIMIT_BUSINESS_MAX_RPM: '0', LIMIT_BUSINESS_MAX_FREE_RPM: '120rpm', LIMIT_BUSINESS_ULTRA_DAILY: '1.5', LIMIT_BUSINESS_ULTRA_RPM: '9007199254740993' } as unknown as Env);
-		expect(cfg.business_max).toMatchObject({ dailyQueries: 3000, rpm: 120, freeRpm: 480 });
-		expect(cfg.business_ultra).toMatchObject({ dailyQueries: 6000, rpm: 240 });
+		expect(cfg.business_max).toMatchObject({ dailyQueries: 120, rpm: 120, freeRpm: 480 });
+		expect(cfg.business_ultra).toMatchObject({ dailyQueries: 240, rpm: 240 });
 	});
 });
 
