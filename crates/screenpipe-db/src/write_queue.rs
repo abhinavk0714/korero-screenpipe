@@ -226,11 +226,23 @@ struct WriteQueueHealthInner {
     /// value before its debounce and cancels a stale restart when it changes.
     fatal_run_recovery_epoch: std::sync::atomic::AtomicU64,
     hard_faulted: AtomicBool,
+    /// Canonicalized by the coordinator when used. None keeps isolated unit
+    /// tests independent; production managers always bind health to a path.
+    hard_fault_path: Option<Arc<str>>,
     degraded: AtomicBool,
     last_success_unix_ms: std::sync::atomic::AtomicI64,
 }
 
 impl WriteQueueHealth {
+    pub(crate) fn for_database_path(database_path: impl Into<Arc<str>>) -> Self {
+        Self {
+            inner: Arc::new(WriteQueueHealthInner {
+                hard_fault_path: Some(database_path.into()),
+                ..Default::default()
+            }),
+        }
+    }
+
     /// True once the write path has failed and needs operator attention.
     pub fn is_degraded(&self) -> bool {
         self.inner.degraded.load(Ordering::SeqCst)
@@ -239,6 +251,9 @@ impl WriteQueueHealth {
     /// The latch never clears; recovery requires a new `DatabaseManager`.
     pub fn is_hard_faulted(&self) -> bool {
         self.inner.hard_faulted.load(Ordering::SeqCst)
+            || self.inner.hard_fault_path.as_ref().is_some_and(|path| {
+                screenpipe_sqlite_coordinator::registered_sqlite_hard_fault(path.as_ref()).is_some()
+            })
     }
     /// Consecutive fatal batches right now (0 when healthy).
     pub fn consecutive_fatal_batches(&self) -> u64 {
@@ -307,9 +322,16 @@ impl WriteQueueHealth {
     /// Latch the first hard fault while the caller still owns the write
     /// coordinator. This ordering lets checkpoint maintenance acquire the same
     /// coordinator later and reliably observe the quarantine boundary.
-    pub(crate) fn latch_hard_fault(&self) -> bool {
+    pub(crate) fn latch_hard_fault(&self, error: &sqlx::Error) -> bool {
         self.inner.degraded.store(true, Ordering::SeqCst);
-        !self.inner.hard_faulted.swap(true, Ordering::SeqCst)
+        let first_for_manager = !self.inner.hard_faulted.swap(true, Ordering::SeqCst);
+        if let (Some(path), Some(code)) = (
+            self.inner.hard_fault_path.as_ref(),
+            crate::sqlite_error::sqlite_hard_fault_code(error),
+        ) {
+            screenpipe_sqlite_coordinator::latch_sqlite_hard_fault(path.as_ref(), code);
+        }
+        first_for_manager
     }
     fn note_reopen(&self) {
         self.inner.write_pool_reopens.fetch_add(1, Ordering::SeqCst);
@@ -1031,7 +1053,7 @@ async fn execute_batch(
             Ok(Ok(conn)) => conn,
             Ok(Err(e)) => {
                 if is_hard_fault(&e) {
-                    health.latch_hard_fault();
+                    health.latch_hard_fault(&e);
                     send_error_to_all(batch, e);
                     return BatchOutcome::HardFault;
                 }
@@ -1090,7 +1112,7 @@ async fn execute_batch(
                 );
             }
             Err(e) if is_hard_fault(&e) => {
-                health.latch_hard_fault();
+                health.latch_hard_fault(&e);
                 let _raw = conn.detach();
                 send_error_to_all(batch, e);
                 return BatchOutcome::HardFault;
@@ -1104,7 +1126,7 @@ async fn execute_batch(
                 break;
             }
             Err(e) if is_hard_fault(&e) => {
-                health.latch_hard_fault();
+                health.latch_hard_fault(&e);
                 let _raw = conn.detach();
                 send_error_to_all(batch, e);
                 return BatchOutcome::HardFault;
@@ -1199,7 +1221,7 @@ async fn execute_batch(
             let contention = is_busy_error(&e);
             let fatal = should_recycle_sqlite_connection(&e) || is_nested_transaction_error(&e);
             if hard_fault {
-                health.latch_hard_fault();
+                health.latch_hard_fault(&e);
             }
             send_error_to_all(batch, e);
             return if hard_fault {
@@ -1231,7 +1253,7 @@ async fn execute_batch(
                 if is_connection_error(&e) {
                     warn!("write_queue: fatal connection error during batch: {}", e);
                     if is_hard_fault(&e) {
-                        health.latch_hard_fault();
+                        health.latch_hard_fault(&e);
                         any_hard_fault = true;
                     }
                     any_fatal = true;
@@ -1257,7 +1279,7 @@ async fn execute_batch(
         if let Err(e) = sqlx::query("ROLLBACK").execute(&mut *conn).await {
             warn!("write_queue: ROLLBACK failed: {}, detaching connection", e);
             if is_hard_fault(&e) {
-                health.latch_hard_fault();
+                health.latch_hard_fault(&e);
                 outcome = BatchOutcome::HardFault;
             }
             let _raw = conn.detach();
@@ -1272,7 +1294,7 @@ async fn execute_batch(
         let hard_fault = is_hard_fault(&e);
         let fatal = is_connection_error(&e);
         if hard_fault {
-            health.latch_hard_fault();
+            health.latch_hard_fault(&e);
         }
         warn!("write_queue: COMMIT failed: {}", e);
         // Always detach. The previous code skipped detaching when the
