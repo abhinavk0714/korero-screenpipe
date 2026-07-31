@@ -50,6 +50,7 @@ mod db_recovery_notifications;
 mod db_relaunch;
 mod diagnostic_logs;
 mod disk_usage;
+mod disk_pressure_notifications;
 mod e2e_seed;
 mod embedded_server;
 mod enterprise;
@@ -59,6 +60,7 @@ mod enterprise_policy;
 mod enterprise_sync;
 mod events;
 mod feedback_redact;
+mod feedback_upload;
 mod google_calendar;
 mod hardware;
 mod ics_calendar;
@@ -272,6 +274,15 @@ async fn is_server_running(app: AppHandle) -> Result<bool, String> {
     let response = api.apply_auth(client.get(api.url("/health"))).send().await;
     Ok(response.is_ok())
 }
+
+// `tauri_collect_commands!` historically degraded to an empty handler when
+// its generated registry was missing. Make the same compile-time view a hard
+// build invariant so a commandless native app can never be published again.
+const TAURI_COMMAND_COUNT: usize = tauri_helper::array_collect_commands!(false).len();
+const _: () = assert!(
+    TAURI_COMMAND_COUNT > 0,
+    "generated Tauri command registry must not be empty"
+);
 
 /// Shared tauri-specta registry body.
 macro_rules! define_specta_builder {
@@ -1834,7 +1845,10 @@ async fn main() {
                                 *guard = Some(server);
                             }
                             if let Some(capture) = capture {
-                                *capture_guard = Some(capture);
+                                crate::recording::install_capture_session(
+                                    &mut capture_guard,
+                                    capture,
+                                );
                                 info!("Server + capture started successfully on dedicated runtime");
                             } else {
                                 info!("Server started without capture");
@@ -1967,6 +1981,7 @@ async fn main() {
             crate::meeting_live_notes::start(app_handle.clone());
             crate::meeting_stall_notifications::start(app_handle.clone());
             crate::db_recovery_notifications::start(app_handle.clone());
+            crate::disk_pressure_notifications::start(app_handle.clone());
 
             // Background ChatGPT OAuth token refresh — keeps access tokens
             // fresh so the lazy path in get_valid_token() rarely needs to
