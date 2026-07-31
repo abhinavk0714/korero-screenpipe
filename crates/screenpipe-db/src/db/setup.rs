@@ -9,21 +9,22 @@ use std::path::Path;
 const SQLITE_HEADER_BYTES: usize = 100;
 
 fn startup_not_a_database(detail: impl std::fmt::Display) -> SqlxError {
-    SqlxError::Protocol(
-        format!(
-            "existing database failed bounded startup preflight: (code: 26) file is not a database: {detail}"
-        )
-        .into(),
-    )
+    SqlxError::Protocol(format!(
+        "existing database failed bounded startup preflight: (code: 26) file is not a database: {detail}"
+    ))
 }
 
 fn startup_malformed_database(detail: impl std::fmt::Display) -> SqlxError {
-    SqlxError::Protocol(
-        format!(
-            "existing database failed bounded startup preflight: (code: 11) database disk image is malformed: {detail}"
-        )
-        .into(),
-    )
+    SqlxError::Protocol(format!(
+        "existing database failed bounded startup preflight: (code: 11) database disk image is malformed: {detail}"
+    ))
+}
+
+fn quarantine_startup_error(database_path: &Path, error: SqlxError) -> SqlxError {
+    if let Some(code) = crate::sqlite_error::sqlite_hard_fault_code(&error) {
+        screenpipe_sqlite_coordinator::latch_sqlite_hard_fault(database_path, code);
+    }
+    error
 }
 
 fn parse_sqlite_page_size(raw: u16) -> Option<u32> {
@@ -42,7 +43,7 @@ fn preflight_existing_database_header(path: &Path) -> Result<(), SqlxError> {
     file.by_ref()
         .take(SQLITE_HEADER_BYTES as u64)
         .read_exact(&mut header)
-        .map_err(|error| startup_not_a_database(error))?;
+        .map_err(startup_not_a_database)?;
     if &header[..16] != b"SQLite format 3\0" {
         return Err(startup_not_a_database("invalid SQLite header magic"));
     }
@@ -124,12 +125,9 @@ impl DatabaseManager {
         if let Some(code) =
             screenpipe_sqlite_coordinator::registered_sqlite_hard_fault(database_path)
         {
-            return Err(SqlxError::Protocol(
-                format!(
-                    "SQLite database remains quarantined for this process after hard fault (code: {code})"
-                )
-                .into(),
-            ));
+            return Err(SqlxError::Protocol(format!(
+                "SQLite database remains quarantined for this process after hard fault (code: {code})"
+            )));
         }
 
         // Validate the fixed-size SQLite header before journal conversion,
@@ -147,8 +145,13 @@ impl DatabaseManager {
         }
 
         // Create the database if it doesn't exist
-        if !sqlx::Sqlite::database_exists(&connection_string).await? {
-            sqlx::Sqlite::create_database(&connection_string).await?;
+        if !sqlx::Sqlite::database_exists(&connection_string)
+            .await
+            .map_err(|error| quarantine_startup_error(database_file, error))?
+        {
+            sqlx::Sqlite::create_database(&connection_string)
+                .await
+                .map_err(|error| quarantine_startup_error(database_file, error))?;
         }
 
         // This process-wide coordinator is also used by the standalone
@@ -187,11 +190,17 @@ impl DatabaseManager {
                 .acquire_owned()
                 .await
                 .map_err(|_| SqlxError::PoolClosed)?;
-            let mut conn = connect_options.connect().await?;
+            let mut conn = connect_options
+                .connect()
+                .await
+                .map_err(|error| quarantine_startup_error(database_file, error))?;
             sqlx::query("PRAGMA journal_mode=WAL")
                 .execute(&mut conn)
-                .await?;
-            conn.close().await?;
+                .await
+                .map_err(|error| quarantine_startup_error(database_file, error))?;
+            conn.close()
+                .await
+                .map_err(|error| quarantine_startup_error(database_file, error))?;
         }
 
         // Read pool: handles all SELECT queries (search, timeline, API, pipes).
@@ -200,7 +209,8 @@ impl DatabaseManager {
             .min_connections(config.read_pool_min)
             .acquire_timeout(Duration::from_secs(5))
             .connect_with(connect_options.clone())
-            .await?;
+            .await
+            .map_err(|error| quarantine_startup_error(database_file, error))?;
 
         // Write pool: dedicated to INSERT/UPDATE/DELETE via begin_immediate_with_retry().
         // Writes are serialized by write_semaphore so only 1 is active
@@ -210,7 +220,8 @@ impl DatabaseManager {
             .min_connections(1)
             .acquire_timeout(Duration::from_secs(10))
             .connect_with(connect_options.clone())
-            .await?;
+            .await
+            .map_err(|error| quarantine_startup_error(database_file, error))?;
 
         // Recovery wiring: let the drain loop reopen its write pool in-process on a
         // persistent disk-I/O wedge, surface degradation via `write_queue_health`,
@@ -609,6 +620,7 @@ impl DatabaseManager {
                         conn: Some(conn),
                         committed: false,
                         _write_permit: Some(permit),
+                        hard_fault_reporter: self.hard_fault_reporter(),
                     })
                 }
                 Err(e) if crate::sqlite_error::is_sqlite_hard_fault(&e) => {
@@ -700,7 +712,12 @@ impl DatabaseManager {
     /// desync that only a full engine restart can clear). The app wires this to a
     /// recording restart. Safe to call after construction and to overwrite.
     pub fn set_persistent_failure_hook(&self, hook: crate::write_queue::PersistentFailureHook) {
-        *self.persistent_failure_hook.lock().unwrap() = Some(hook);
+        self.persistent_failure_hook.set_hook(hook);
+        if self.write_queue_health.is_hard_faulted() {
+            if let Some(hook) = self.persistent_failure_hook.take_hard_fault_hook() {
+                hook();
+            }
+        }
     }
 
     /// Route a hard SQLite error observed outside the coalescing queue (for
@@ -708,17 +725,15 @@ impl DatabaseManager {
     /// process-wide quarantine and app recovery hook. Returns true only for
     /// IOERR, CORRUPT, FULL, or NOTADB.
     pub fn report_sqlite_error(&self, error: &sqlx::Error) -> bool {
-        if !crate::sqlite_error::is_sqlite_hard_fault(error) {
-            return false;
+        self.hard_fault_reporter().report_error(error)
+    }
+
+    fn hard_fault_reporter(&self) -> HardFaultReporter {
+        HardFaultReporter {
+            health: self.write_queue_health.clone(),
+            persistent_failure_hook: self.persistent_failure_hook.clone(),
+            close_token: self.close_token.clone(),
         }
-        let first_for_manager = self.write_queue_health.latch_hard_fault(error);
-        self.close_token.cancel();
-        if first_for_manager {
-            if let Some(hook) = self.persistent_failure_hook.lock().unwrap().clone() {
-                hook();
-            }
-        }
-        true
     }
 
     /// Check if the error indicates a stuck/nested transaction on the connection.
@@ -741,6 +756,79 @@ impl DatabaseManager {
 #[cfg(test)]
 mod shutdown_tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn early_startup_hard_fault_closes_the_process_writer_gate() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("early-open.sqlite");
+        std::fs::File::create(&db_path).expect("create placeholder");
+        let writer_gate = screenpipe_sqlite_coordinator::sqlite_write_lock(&db_path);
+
+        let error = quarantine_startup_error(
+            &db_path,
+            SqlxError::Protocol("error returned from database: (code: 522) disk I/O error".into()),
+        );
+
+        assert!(error.to_string().contains("code: 522"));
+        assert_eq!(
+            screenpipe_sqlite_coordinator::registered_sqlite_hard_fault(&db_path),
+            Some(522)
+        );
+        assert!(
+            writer_gate.is_closed(),
+            "a startup fault must close writers before a retry can reopen the path"
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_full_is_process_lifetime_and_signals_recovery_once() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("full.sqlite");
+        let database = DatabaseManager::new(
+            db_path.to_str().expect("utf-8 temp path"),
+            DbConfig::for_tier(screenpipe_config::DeviceTier::Low),
+        )
+        .await
+        .expect("database init");
+        let writer_gate = Arc::clone(&database.write_semaphore);
+        let hook_calls = Arc::new(AtomicUsize::new(0));
+        let hook_counter = Arc::clone(&hook_calls);
+
+        let full = SqlxError::Protocol(
+            "error returned from database: (code: 13) database or disk is full".into(),
+        );
+        assert!(database.report_sqlite_error(&full));
+        assert!(database.report_sqlite_error(&full));
+        assert_eq!(hook_calls.load(Ordering::SeqCst), 0);
+        database.set_persistent_failure_hook(Arc::new(move || {
+            hook_counter.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert!(database.write_queue_health().is_hard_faulted());
+        assert!(writer_gate.is_closed());
+        assert_eq!(hook_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            screenpipe_sqlite_coordinator::registered_sqlite_hard_fault(&db_path),
+            Some(13)
+        );
+        database.close().await;
+
+        let replacement_error = match DatabaseManager::new(
+            db_path.to_str().expect("utf-8 temp path"),
+            DbConfig::for_tier(screenpipe_config::DeviceTier::Low),
+        )
+        .await
+        {
+            Ok(replacement) => {
+                replacement.close().await;
+                panic!("SQLITE_FULL path must remain quarantined in this process");
+            }
+            Err(error) => error,
+        };
+        assert!(replacement_error
+            .to_string()
+            .contains("remains quarantined"));
+    }
 
     #[tokio::test]
     async fn wrong_page_header_fails_before_sqlite_can_mutate_the_file() {

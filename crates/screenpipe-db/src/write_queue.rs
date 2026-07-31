@@ -323,12 +323,20 @@ impl WriteQueueHealth {
     /// coordinator. This ordering lets checkpoint maintenance acquire the same
     /// coordinator later and reliably observe the quarantine boundary.
     pub(crate) fn latch_hard_fault(&self, error: &sqlx::Error) -> bool {
+        crate::sqlite_error::sqlite_hard_fault_code(error)
+            .is_some_and(|code| self.latch_hard_fault_code(code))
+    }
+
+    /// Latch an already-classified SQLite extended result code. This is used
+    /// when SQLx no longer owns the statement error but SQLite still exposes
+    /// it through `sqlite3_extended_errcode()` on the connection handle.
+    pub(crate) fn latch_hard_fault_code(&self, code: i32) -> bool {
+        if !crate::sqlite_error::is_sqlite_hard_fault_code(code) {
+            return false;
+        }
         self.inner.degraded.store(true, Ordering::SeqCst);
         let first_for_manager = !self.inner.hard_faulted.swap(true, Ordering::SeqCst);
-        if let (Some(path), Some(code)) = (
-            self.inner.hard_fault_path.as_ref(),
-            crate::sqlite_error::sqlite_hard_fault_code(error),
-        ) {
+        if let Some(path) = self.inner.hard_fault_path.as_ref() {
             screenpipe_sqlite_coordinator::latch_sqlite_hard_fault(path.as_ref(), code);
         }
         first_for_manager
@@ -355,12 +363,41 @@ pub type PersistentFailureHook = Arc<dyn Fn() + Send + Sync>;
 /// A slot the app fills (after `DatabaseManager` is built) with the
 /// persistent-failure hook. Shared so the drain loop reads whatever the app
 /// last set; empty until wired.
-pub(crate) type PersistentFailureSlot = Arc<std::sync::Mutex<Option<PersistentFailureHook>>>;
+pub(crate) struct PersistentFailureState {
+    hook: std::sync::Mutex<Option<PersistentFailureHook>>,
+    hard_fault_signaled: AtomicBool,
+}
+
+pub(crate) type PersistentFailureSlot = Arc<PersistentFailureState>;
+
+impl PersistentFailureState {
+    pub(crate) fn hook(&self) -> Option<PersistentFailureHook> {
+        self.hook.lock().unwrap().clone()
+    }
+
+    pub(crate) fn set_hook(&self, hook: PersistentFailureHook) {
+        *self.hook.lock().unwrap() = Some(hook);
+    }
+
+    /// Return the installed hook exactly once for a hard-fault generation.
+    /// If no hook is installed yet, leave the gate open so late app wiring can
+    /// deliver the already-observed startup fault.
+    pub(crate) fn take_hard_fault_hook(&self) -> Option<PersistentFailureHook> {
+        let hook = self.hook()?;
+        self.hard_fault_signaled
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| hook)
+    }
+}
 
 pub(crate) fn persistent_failure_slot(
     hook: Option<PersistentFailureHook>,
 ) -> PersistentFailureSlot {
-    Arc::new(std::sync::Mutex::new(hook))
+    Arc::new(PersistentFailureState {
+        hook: std::sync::Mutex::new(hook),
+        hard_fault_signaled: AtomicBool::new(false),
+    })
 }
 
 /// Rebuilds the write pool from the same options used at startup, so the drain
@@ -952,7 +989,7 @@ async fn drain_loop(
                         escalation.fatal_in_run,
                         escalation.run_elapsed(now)
                     );
-                    let hook = on_persistent_failure.lock().unwrap().clone();
+                    let hook = on_persistent_failure.hook();
                     if let Some(hook) = hook {
                         hook();
                     }
@@ -977,7 +1014,7 @@ async fn drain_loop(
                 // recovery hook. The hard-fault latch was set inside
                 // execute_batch while the shared write coordinator was held.
                 shutdown.cancel();
-                let hook = on_persistent_failure.lock().unwrap().clone();
+                let hook = on_persistent_failure.take_hard_fault_hook();
                 if let Some(hook) = hook {
                     hook();
                 }

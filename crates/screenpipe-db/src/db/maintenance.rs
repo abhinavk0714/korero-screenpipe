@@ -1576,12 +1576,9 @@ impl DatabaseManager {
                     debug!("startup integrity check: ok");
                 }
                 Ok(detail) => {
-                    let error = sqlx::Error::Protocol(
-                        format!(
-                            "(code: 11) database disk image is malformed: quick_check: {detail}"
-                        )
-                        .into(),
-                    );
+                    let error = sqlx::Error::Protocol(format!(
+                        "(code: 11) database disk image is malformed: quick_check: {detail}"
+                    ));
                     let first_for_manager = health.latch_hard_fault(&error);
                     shutdown.cancel();
                     error!(
@@ -1593,7 +1590,7 @@ impl DatabaseManager {
                          original first)."
                     );
                     if first_for_manager {
-                        if let Some(hook) = persistent_failure_hook.lock().unwrap().clone() {
+                        if let Some(hook) = persistent_failure_hook.take_hard_fault_hook() {
                             hook();
                         }
                     }
@@ -1605,7 +1602,7 @@ impl DatabaseManager {
                         let first_for_manager = health.latch_hard_fault(&e);
                         shutdown.cancel();
                         if first_for_manager {
-                            if let Some(hook) = persistent_failure_hook.lock().unwrap().clone() {
+                            if let Some(hook) = persistent_failure_hook.take_hard_fault_hook() {
                                 hook();
                             }
                         }
