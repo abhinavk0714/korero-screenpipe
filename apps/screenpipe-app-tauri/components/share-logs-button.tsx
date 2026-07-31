@@ -186,9 +186,11 @@ type SendPhase = "idle" | "sending" | "sent";
 
 export const ShareLogsButton = ({
   onComplete,
+  onBackgroundStart,
   prefillText,
 }: {
   onComplete?: () => void;
+  onBackgroundStart?: () => void;
   prefillText?: string;
 }) => {
   const { toast } = useToast();
@@ -704,7 +706,7 @@ export const ShareLogsButton = ({
             video.file,
             video.file.type ||
               (video.ext === "mov" ? "video/quicktime" : "video/mp4"),
-            setUploadPct,
+            onBackgroundStart ? undefined : setUploadPct,
           );
           videoUploaded = true;
         } else if (video.source === "file") {
@@ -719,7 +721,7 @@ export const ShareLogsButton = ({
           });
         }
       }
-      setUploadPct(null);
+      if (!onBackgroundStart) setUploadPct(null);
 
       const os = osPlatform();
       const os_version = osVersion();
@@ -772,6 +774,9 @@ export const ShareLogsButton = ({
             : `we posted it to support${reference}; mention that ID in Discord if you need an update.`) +
           attachedNote,
       });
+      // The report dialog closes as soon as its background job starts. Avoid
+      // updating that unmounted form; the final toast is the receipt instead.
+      if (onBackgroundStart) return;
       setPhase("sent");
       // Hold the "sent ✓" state briefly so the receipt registers, then reset
       // and let the dialog close.
@@ -783,12 +788,29 @@ export const ShareLogsButton = ({
         if (onComplete) onComplete();
       }, 1500);
     };
+    const sendPromise = withTimeout(
+      send(),
+      TIMEOUT_SEND_TOTAL_MS,
+      "sending feedback",
+    );
+    if (onBackgroundStart) {
+      toast({
+        title: "thanks — sending in background",
+        description:
+          video?.status === "ready"
+            ? "please keep screenpipe open while the video uploads; this can take a few minutes. we'll notify you when it's sent."
+            : "please keep screenpipe open for the next minute. we'll notify you when it's sent.",
+      });
+      onBackgroundStart();
+    }
     try {
-      await withTimeout(send(), TIMEOUT_SEND_TOTAL_MS, "sending feedback");
+      await sendPromise;
     } catch (err) {
       console.error("log sharing failed:", err);
-      setPhase("idle");
-      setUploadPct(null);
+      if (!onBackgroundStart) {
+        setPhase("idle");
+        setUploadPct(null);
+      }
       toast({
         title: "sharing failed",
         description: String(err),

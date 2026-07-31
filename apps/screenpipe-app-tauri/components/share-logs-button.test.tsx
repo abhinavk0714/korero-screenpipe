@@ -624,6 +624,40 @@ describe("ShareLogsButton attachments", () => {
     );
   });
 
+  it("dismisses the dialog while the report continues in the background", async () => {
+    const { calls } = stubServer({
+      videoPath: "logs/machine/m1/t_video.mp4",
+    });
+
+    function DialogHarness() {
+      const [open, setOpen] = React.useState(true);
+      return open ? (
+        <ShareLogsButton onBackgroundStart={() => setOpen(false)} />
+      ) : (
+        <div>dialog closed</div>
+      );
+    }
+
+    render(<DialogHarness />);
+    fireEvent.click(sendButton());
+
+    expect(await screen.findByText("dialog closed")).toBeInTheDocument();
+    expect(toastMock).toHaveBeenCalledWith({
+      title: "thanks — sending in background",
+      description:
+        "please keep screenpipe open for the next minute. we'll notify you when it's sent.",
+    });
+
+    await waitFor(() =>
+      expect(toastMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "feedback sent" }),
+      ),
+    );
+    expect(calls.some((call) => call.url.endsWith("/api/logs/confirm"))).toBe(
+      true,
+    );
+  });
+
   it("still sends the report when the log-file listing never settles", async () => {
     vi.useFakeTimers();
     stubServer({ videoPath: "logs/machine/m1/t_video.mp4" });
