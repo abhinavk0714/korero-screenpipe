@@ -150,6 +150,17 @@ describe('validateAuth — verified identities only', () => {
     ]);
   });
 
+  // `subscription.ts` also held an unreachable `validateSubscription(env,
+  // userId)` that returned `true` — subscribed — for *any* string matching
+  // /^user_[a-zA-Z0-9]+$/, with no lookup at all, and cached that verdict.
+  // Nothing called it, but it was a working bypass waiting to be wired up.
+  // Only the pure PostgREST filter survives.
+  it('leaves no subscription helper that trusts a bare identifier', async () => {
+    const subscriptionModule = await import('./subscription');
+
+    expect(Object.keys(subscriptionModule)).toEqual(['activeSubscriptionFilter']);
+  });
+
   it('does not grant the former development test token in any environment', async () => {
     const developmentEnv = { ...env, NODE_ENV: 'development' } as Env;
 
