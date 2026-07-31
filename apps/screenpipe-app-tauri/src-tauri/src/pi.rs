@@ -507,8 +507,25 @@ fn sync_queue_state_from_event(
             queue_state.clear_steer_in_flight();
         }
         Some("agent_end") => {
-            queue_state.mark_agent_idle();
-            queue_state.signal_done_if_idle();
+            // Pi emits agent_end before entering provider retry backoff. The
+            // SDK's `willRetry` flag means this logical turn still owns the
+            // process; releasing the queue here sends the next prompt into a
+            // busy agent and causes the misleading "already processing" loop.
+            if event.get("willRetry").and_then(|value| value.as_bool()) == Some(true) {
+                queue_state.mark_agent_active();
+            } else {
+                queue_state.mark_agent_idle();
+                queue_state.signal_done_if_idle();
+            }
+        }
+        Some("auto_retry_start") => {
+            queue_state.mark_agent_active();
+        }
+        Some("auto_retry_end") => {
+            if event.get("success").and_then(|value| value.as_bool()) == Some(false) {
+                queue_state.mark_agent_idle();
+                queue_state.signal_done_if_idle();
+            }
         }
         Some("message_start") => {
             if queue_state.is_steer_in_flight() {
@@ -1525,6 +1542,24 @@ fn model_supports_reasoning(provider: &str, model: &str) -> bool {
     }
 }
 
+/// GPT-5.5 and GPT-5.6 reject function tools on OpenAI's Chat Completions
+/// endpoint unless `reasoning_effort` is explicitly `none`. Pi receives the
+/// model metadata we generate here, so map every selectable thinking level to
+/// `none` for this narrow endpoint/model combination. This preserves Pi's
+/// tool loop without guessing about other OpenAI-compatible providers.
+fn requires_openai_chat_tools_reasoning_none(base_url: &str, wire_api: &str, model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    let is_affected_model = ["gpt-5.5", "gpt-5.6"]
+        .iter()
+        .any(|prefix| model == *prefix || model.starts_with(&format!("{prefix}-")));
+
+    wire_api == "openai-completions"
+        && base_url
+            .trim_end_matches('/')
+            .eq_ignore_ascii_case("https://api.openai.com/v1")
+        && is_affected_model
+}
+
 /// Claude's newer reasoning models reject the legacy
 /// `thinking: { type: "enabled", budget_tokens: ... }` request shape. Pi needs
 /// this compatibility hint for models supplied through our generated provider
@@ -1645,6 +1680,21 @@ async fn build_models_json(
                 let mut compat = serde_json::Map::new();
                 if requires_max_completion_tokens && wire_api == "openai-completions" {
                     compat.insert("maxTokensField".into(), json!("max_completion_tokens"));
+                }
+                if requires_openai_chat_tools_reasoning_none(&base_url, wire_api, &resolved_model) {
+                    compat.insert("supportsReasoningEffort".into(), json!(true));
+                    model_def.insert(
+                        "thinkingLevelMap".into(),
+                        json!({
+                            "off": "none",
+                            "minimal": "none",
+                            "low": "none",
+                            "medium": "none",
+                            "high": "none",
+                            "xhigh": "none",
+                            "max": "none",
+                        }),
+                    );
                 }
                 if wire_api == "anthropic-messages"
                     && anthropic_model_requires_adaptive_thinking(&resolved_model)
@@ -4344,6 +4394,44 @@ mod tests {
     }
 
     #[test]
+    fn queue_stays_busy_across_provider_retry_backoff() {
+        let state = crate::pi_command_queue::PiQueueState::new();
+        super::sync_queue_state_from_event(&state, &json!({ "type": "agent_start" }));
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({ "type": "agent_end", "willRetry": true }),
+        );
+        assert!(state.is_agent_active(), "retry backoff still owns the turn");
+
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({
+                "type": "auto_retry_start",
+                "attempt": 1,
+                "maxAttempts": 3,
+            }),
+        );
+        assert!(state.is_agent_active());
+
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({ "type": "agent_end", "willRetry": false }),
+        );
+        assert!(!state.is_agent_active(), "terminal agent_end releases the queue");
+    }
+
+    #[test]
+    fn exhausted_provider_retry_releases_queue() {
+        let state = crate::pi_command_queue::PiQueueState::new();
+        state.mark_agent_active();
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({ "type": "auto_retry_end", "success": false }),
+        );
+        assert!(!state.is_agent_active());
+    }
+
+    #[test]
     fn parses_npm_package_names_from_pi_sources() {
         assert_eq!(
             super::npm_package_name_from_source("npm:pi-subagentura"),
@@ -5629,6 +5717,44 @@ error: InstallFailed extracting tarball"#;
         let config = build_models_json(None, Some(&pc)).await;
         let model = &config["providers"]["custom"]["models"][0];
         assert_eq!(model["compat"]["maxTokensField"], "max_completion_tokens");
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_openai_gpt55_maps_reasoning_to_none_for_tools() {
+        for provider in ["openai", "custom"] {
+            let mut pc = make_provider_config(provider, "gpt-5.5");
+            pc.url = "https://api.openai.com/v1".to_string();
+            let config = build_models_json(None, Some(&pc)).await;
+            let provider_name = if provider == "openai" {
+                "openai-byok"
+            } else {
+                "custom"
+            };
+            let model = &config["providers"][provider_name]["models"][0];
+
+            assert_eq!(
+                model["reasoning"], true,
+                "{provider} remains a reasoning model"
+            );
+            assert_eq!(model["compat"]["supportsReasoningEffort"], true);
+            for level in ["off", "minimal", "low", "medium", "high", "xhigh", "max"] {
+                assert_eq!(
+                    model["thinkingLevelMap"][level], "none",
+                    "{provider} {level}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_does_not_override_reasoning_for_other_custom_endpoints() {
+        let mut pc = make_provider_config("custom", "gpt-5.5");
+        pc.url = "https://example.com/v1".to_string();
+        let config = build_models_json(None, Some(&pc)).await;
+        let model = &config["providers"]["custom"]["models"][0];
+
+        assert!(model.get("thinkingLevelMap").is_none());
+        assert!(model["compat"].get("supportsReasoningEffort").is_none());
     }
 
     #[tokio::test]
