@@ -736,6 +736,33 @@ mod net_tests {
         assert!(lines[2].contains("invoice"), "phrase lost: {lines:#?}");
     }
 
+    /// `?mailbox=` is the other caller-controlled value on the same routes.
+    /// It is safe for a different reason — async-imap validates EXAMINE
+    /// arguments itself — so pin that, both to document why only the search
+    /// phrase needed fixing and to catch a future switch to an API that does
+    /// not validate.
+    #[tokio::test]
+    async fn mailbox_name_cannot_inject_imap_commands() {
+        let (port, log) = spawn_fake_server(None).await;
+        let mut session = fake_session(port).await;
+
+        let err = list_messages_in(&mut session, "INBOX\r\nx9 EXPUNGE", 5, None)
+            .await
+            .expect_err("a mailbox name with CRLF must be rejected, not sent");
+        assert!(
+            err.to_string().contains("not found"),
+            "expected the mailbox error, got: {err}"
+        );
+
+        let lines = log.lock().unwrap().clone();
+        assert_eq!(
+            lines.len(),
+            1,
+            "only LOGIN should have been sent: {lines:#?}"
+        );
+        assert!(lines[0].to_uppercase().contains("LOGIN"), "{lines:#?}");
+    }
+
     #[tokio::test]
     async fn mailbox_access_is_read_only() {
         let (port, log) = spawn_fake_server(None).await;
