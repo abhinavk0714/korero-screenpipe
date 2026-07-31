@@ -21,6 +21,8 @@ describe('hosted AI plan policy', () => {
 		['free', false, true],
 		['basic', true, true],
 		['business', true, false],
+		['business_max', true, false],
+		['business_ultra', true, false],
 		['team', true, false],
 		['enterprise', true, false],
 		['unknown', false, false],

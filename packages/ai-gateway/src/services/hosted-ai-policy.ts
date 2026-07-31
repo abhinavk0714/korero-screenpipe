@@ -38,6 +38,8 @@ const BUSINESS_HOSTED_MODELS = [
 const PAID_HOSTED_AI_PLANS = new Set<AccountPlan>([
 	'basic',
 	'business',
+	'business_max',
+	'business_ultra',
 	'team',
 	'enterprise',
 ]);

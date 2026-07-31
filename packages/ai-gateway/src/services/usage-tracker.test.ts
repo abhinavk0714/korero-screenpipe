@@ -39,6 +39,15 @@ describe('TIER_CONFIG', () => {
     expect(TIER_CONFIG.subscribed.allowedModels).not.toContain('*');
   });
 
+  it('raises capacity monotonically without changing model access', () => {
+    expect(TIER_CONFIG.business_max.dailyQueries).toBe(3000);
+    expect(TIER_CONFIG.business_ultra.dailyQueries).toBe(6000);
+    expect(TIER_CONFIG.business_max.rpm).toBeGreaterThan(TIER_CONFIG.subscribed.rpm);
+    expect(TIER_CONFIG.business_ultra.rpm).toBeGreaterThan(TIER_CONFIG.business_max.rpm);
+    expect(TIER_CONFIG.business_max.allowedModels).toEqual(TIER_CONFIG.subscribed.allowedModels);
+    expect(TIER_CONFIG.business_ultra.allowedModels).toEqual(TIER_CONFIG.subscribed.allowedModels);
+  });
+
   it('logged_in should have strictly more queries than anonymous', () => {
     expect(TIER_CONFIG.logged_in.dailyQueries).toBeGreaterThan(TIER_CONFIG.anonymous.dailyQueries);
   });
@@ -186,6 +195,15 @@ describe('getUsageStatus.upsell_banner', () => {
   it('false for Business (subscribed) regardless of env', async () => {
     expect((await getUsageStatus(mockEnv(), 'd', 'subscribed')).upsell_banner).toBe(false);
 		expect((await getUsageStatus(mockEnv(), 'd', 'subscribed', undefined, 'team')).upsell_banner).toBe(false);
+  });
+
+  it('returns exact Max and Ultra capacity without showing the Business upsell', async () => {
+    const max = await getUsageStatus(mockEnv(), 'd', 'business_max');
+    const ultra = await getUsageStatus(mockEnv(), 'd', 'business_ultra');
+    expect(max).toMatchObject({ tier: 'business_max', limit_today: 3000, upsell_banner: false });
+    expect(ultra).toMatchObject({ tier: 'business_ultra', limit_today: 6000, upsell_banner: false });
+    expect(max.upgrade_options).toBeUndefined();
+    expect(ultra.upgrade_options).toBeUndefined();
   });
 
   it('false for everyone when the master kill-switch is off (no app release needed)', async () => {

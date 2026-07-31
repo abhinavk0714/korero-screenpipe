@@ -433,6 +433,36 @@ describe('validateAuth — verified identities only', () => {
 		});
 	});
 
+  it('keeps Max and Ultra on subscribed model access with separate capacity tiers', async () => {
+    for (const [plan, accountPlan, usageTier] of [
+      ['pro_max', 'business_max', 'business_max'],
+      ['pro_ultra', 'business_ultra', 'business_ultra'],
+    ] as const) {
+      __resetAuthEntitlementCacheForTests();
+      const clerkId = `user_${plan}`;
+      verifyTokenMock.mockImplementation(async () => ({ sub: clerkId }) as any);
+      globalThis.fetch = mock(async () => new Response(JSON.stringify({
+        success: true,
+        user: {
+          clerk_id: clerkId,
+          cloud_subscribed: true,
+          app_entitled: true,
+          subscription_plan: plan,
+          entitlement: { active: true, plan, features: { app: true } },
+        },
+      }), { status: 200 })) as typeof fetch;
+
+      expect(await validateAuth(requestFor(`eyJ.${plan}.clerk`), env)).toEqual({
+        isValid: true,
+        tier: 'subscribed',
+        usageTier,
+        accountPlan,
+        deviceId: clerkId,
+        userId: clerkId,
+      });
+    }
+  });
+
   it('does not trust paid plan data for a different Clerk subject', async () => {
     verifyTokenMock.mockImplementation(async () => ({ sub: 'user_verified_caller' }) as any);
     const fetchMock = mock(async (input: RequestInfo | URL) => {
