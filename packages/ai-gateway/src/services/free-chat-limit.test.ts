@@ -5,8 +5,6 @@
 import { describe, expect, it } from 'bun:test';
 import type { AuthResult, Env, RequestBody } from '../types';
 import {
-	FREE_CHAT_COST_RESERVATION_MICRO_USD,
-	FREE_CHAT_DAILY_BUDGET_MICRO_USD,
 	FREE_CHAT_IN_FLIGHT_LEASE_SECONDS,
 	FREE_CHAT_MESSAGE_LIMIT,
 	FREE_CHAT_MAX_IMAGE_BYTES,
@@ -20,6 +18,8 @@ import {
 	FREE_CHAT_MAX_TOOLS_BYTES,
 	acquireFreeChatLease,
 	applyFreeChatRequestLimits,
+	getFreeChatCostReservationMicroUsd,
+	getFreeChatDailyBudgetMicroUsd,
 	prepareFreeChatTurn,
 	releaseFreeChatLease,
 	reserveFreeChatBudget,
@@ -174,7 +174,11 @@ class FakeD1 {
 }
 
 function envWith(db: FakeD1): Env {
-	return { DB: db as unknown as D1Database } as Env;
+	return {
+		DB: db as unknown as D1Database,
+		FREE_CHAT_COST_RESERVATION_MICRO_USD: '100',
+		FREE_CHAT_DAILY_BUDGET_MICRO_USD: '1600',
+	} as Env;
 }
 
 function requestFor(
@@ -700,7 +704,7 @@ describe('reserveFreeChatTurn', () => {
 		expect(results.filter((result) => !result.allowed)).toHaveLength(1);
 	});
 
-	it('fails open for free hosted chat when D1 is unavailable', async () => {
+	it('fails closed for free hosted chat when D1 is unavailable', async () => {
 		const db = new FakeD1();
 		db.fail = true;
 
@@ -708,14 +712,27 @@ describe('reserveFreeChatTurn', () => {
 			envWith(db),
 			metered('user-a', 'turn-a'),
 		);
-		expect(result).toEqual({ allowed: true });
+		expect(result.allowed).toBe(false);
+		if (!result.allowed) expect(result.error.code).toBe('free_chat_control_unavailable');
 	});
 });
 
 describe('free chat capacity reservations', () => {
 	it('keeps enough daily budget for both advertised messages at the request cap', () => {
-		expect(FREE_CHAT_DAILY_BUDGET_MICRO_USD / FREE_CHAT_COST_RESERVATION_MICRO_USD)
+		const env = envWith(new FakeD1());
+		expect(getFreeChatDailyBudgetMicroUsd(env) / getFreeChatCostReservationMicroUsd(env))
 			.toBeGreaterThanOrEqual(FREE_CHAT_MESSAGE_LIMIT * FREE_CHAT_MAX_PROVIDER_CALLS_PER_MESSAGE);
+	});
+
+	it('fails closed when private free-preview cost controls are missing', async () => {
+		const env = envWith(new FakeD1());
+		delete env.FREE_CHAT_DAILY_BUDGET_MICRO_USD;
+		const result = await reserveFreeChatBudget(
+			env,
+			metered('user-missing-control', 'turn-missing-control'),
+		);
+		expect(result.allowed).toBe(false);
+		if (!result.allowed) expect(result.error.code).toBe('free_chat_budget_unavailable');
 	});
 
 	it('does not burn a turn or budget when an overlapping request is rejected', async () => {
@@ -731,7 +748,7 @@ describe('free chat capacity reservations', () => {
 		const turnRow = Array.from(db.rows.entries()).find(([key]) => key.startsWith('turn-ordered:'))?.[1];
 		expect(turnRow?.dailyCount).toBe(1);
 		const budget = Array.from(db.rows.values()).find((row) => row.tier.startsWith('free_chat_budget_v2:'));
-		expect(budget?.dailyCount).toBe(FREE_CHAT_COST_RESERVATION_MICRO_USD);
+		expect(budget?.dailyCount).toBe(getFreeChatCostReservationMicroUsd(env));
 		if (first.allowed && first.lease) await releaseFreeChatLease(env, first.lease);
 	});
 
@@ -775,7 +792,8 @@ describe('free chat capacity reservations', () => {
 		const turn = metered('user-budget', 'turn-budget');
 		const dayOne = new Date('2026-07-14T12:00:00.000Z');
 		const dayTwo = new Date('2026-07-15T12:00:00.000Z');
-		const reservations = FREE_CHAT_DAILY_BUDGET_MICRO_USD / FREE_CHAT_COST_RESERVATION_MICRO_USD;
+		const reservations = getFreeChatDailyBudgetMicroUsd(env)
+			/ getFreeChatCostReservationMicroUsd(env);
 
 		const results = await Promise.all(
 			Array.from({ length: reservations + 4 }, () => reserveFreeChatBudget(env, turn, dayOne)),
@@ -783,20 +801,20 @@ describe('free chat capacity reservations', () => {
 		expect(results.filter((result) => result.allowed)).toHaveLength(reservations);
 		expect(results.filter((result) => !result.allowed)).toHaveLength(4);
 		const dayOneBudget = Array.from(db.rows.values()).find((row) => row.tier === 'free_chat_budget_v2:2026-07-14');
-		expect(dayOneBudget?.dailyCount).toBe(FREE_CHAT_DAILY_BUDGET_MICRO_USD);
+		expect(dayOneBudget?.dailyCount).toBe(getFreeChatDailyBudgetMicroUsd(env));
 		expect(await reserveFreeChatBudget(env, turn, dayTwo)).toEqual({ allowed: true });
 		const dayTwoBudget = Array.from(db.rows.values()).find((row) => row.tier === 'free_chat_budget_v2:2026-07-15');
-		expect(dayTwoBudget?.dailyCount).toBe(FREE_CHAT_COST_RESERVATION_MICRO_USD);
+		expect(dayTwoBudget?.dailyCount).toBe(getFreeChatCostReservationMicroUsd(env));
 	});
 
-	it('fails open when lease or budget storage is unavailable', async () => {
+	it('fails closed when lease or budget storage is unavailable', async () => {
 		const db = new FakeD1();
 		db.fail = true;
 		const env = envWith(db);
 		const turn = metered('user-fail', 'turn-fail');
-		expect(await acquireFreeChatLease(env, turn)).toEqual({ allowed: true, lease: null });
-		expect(await reserveFreeChatBudget(env, turn)).toEqual({ allowed: true });
-		expect(await reserveFreeChatRequest(env, turn)).toEqual({ allowed: true, lease: null });
+		expect((await acquireFreeChatLease(env, turn)).allowed).toBe(false);
+		expect((await reserveFreeChatBudget(env, turn)).allowed).toBe(false);
+		expect((await reserveFreeChatRequest(env, turn)).allowed).toBe(false);
 	});
 });
 

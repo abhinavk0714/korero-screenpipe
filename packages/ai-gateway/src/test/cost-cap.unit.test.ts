@@ -13,8 +13,26 @@ import { describe, expect, it } from 'bun:test';
 import { enforceDailyCostCap, reserveDailyCostCap } from '../services/cost-cap';
 import { Env } from '../types';
 
-function dbEnv(dailyCost: number | null): Env {
+const TEST_PRIVATE_COST_CONTROLS = {
+	MAX_DAILY_FREE_TEXT_COST: '101',
+	MAX_DAILY_BASIC_TEXT_COST: '102',
+	MAX_DAILY_BUSINESS_TEXT_COST: '103',
+	MAX_MONTHLY_FREE_TEXT_COST: '201',
+	MAX_MONTHLY_BASIC_TEXT_COST: '202',
+	MAX_MONTHLY_BUSINESS_TEXT_COST: '203',
+	MAX_REQUEST_FREE_TEXT_COST: '51',
+	MAX_REQUEST_BASIC_TEXT_COST: '52',
+	MAX_REQUEST_BUSINESS_TEXT_COST: '53',
+	MAX_TRIAL_TEXT_COST: '301',
+	MAX_DAILY_TRIAL_TEXT_COST: '104',
+	MAX_REQUEST_TRIAL_TEXT_COST: '54',
+	MAX_GLOBAL_HOURLY_TEXT_COST: '401',
+	MAX_GLOBAL_DAILY_TEXT_COST: '402',
+};
+
+function dbEnv(dailyCost: number | null, withPrivateControls = true): Env {
 	return {
+		...(withPrivateControls ? TEST_PRIVATE_COST_CONTROLS : {}),
 		DB: {
 			prepare(sql: string) {
 				return {
@@ -42,7 +60,7 @@ describe('enforceDailyCostCap', () => {
 
 	it('caps a weight-zero but priced model once over the ceiling', async () => {
 		const response = await enforceDailyCostCap(
-			dbEnv(40), 'dev', 'subscribed', 'gemini-3.5-flash',
+			dbEnv(200), 'dev', 'subscribed', 'gemini-3.5-flash',
 		);
 		expect(response?.status).toBe(429);
 		expect(await response!.text()).toContain('daily_cost_limit_exceeded');
@@ -50,20 +68,28 @@ describe('enforceDailyCostCap', () => {
 
 	it('allows the same priced model while under the ceiling', async () => {
 		expect(
-			await enforceDailyCostCap(dbEnv(10), 'dev', 'subscribed', 'gemini-3.5-flash'),
+			await enforceDailyCostCap(dbEnv(100), 'dev', 'subscribed', 'gemini-3.5-flash'),
 		).toBeNull();
 	});
 
 	it('uses lower anonymous and logged-in ceilings than the subscribed tier', async () => {
 		expect(
-			(await enforceDailyCostCap(dbEnv(5), 'dev', 'anonymous', 'gemini-3.5-flash'))?.status,
+			(await enforceDailyCostCap(dbEnv(102.5), 'dev', 'anonymous', 'gemini-3.5-flash'))?.status,
 		).toBe(429);
 		expect(
-			(await enforceDailyCostCap(dbEnv(5), 'dev', 'logged_in', 'gemini-3.5-flash'))?.status,
+			(await enforceDailyCostCap(dbEnv(102.5), 'dev', 'logged_in', 'gemini-3.5-flash'))?.status,
 		).toBe(429);
 		expect(
-			await enforceDailyCostCap(dbEnv(5), 'dev', 'subscribed', 'gemini-3.5-flash'),
+			await enforceDailyCostCap(dbEnv(102.5), 'dev', 'subscribed', 'gemini-3.5-flash'),
 		).toBeNull();
+	});
+
+	it('fails closed when private controls are missing', async () => {
+		const response = await enforceDailyCostCap(
+			dbEnv(0, false), 'dev', 'subscribed', 'gemini-3.5-flash',
+		);
+		expect(response?.status).toBe(503);
+		expect(await response!.text()).toContain('cost_control_unavailable');
 	});
 
 	it('fails closed when accounting storage is unavailable', async () => {

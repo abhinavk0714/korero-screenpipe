@@ -7,7 +7,7 @@ import { Env, RequestBody, AuthResult } from './types';
 import { handleOptions, createSuccessResponse, createErrorResponse, addCorsHeaders } from './utils/cors';
 import { validateAuth } from './utils/auth';
 import { RateLimiter, checkRateLimit } from './utils/rate-limiter';
-import { trackUsage, getUsageStatus, isModelAllowed, isFreeModel, resolveModelGate, getTierConfig } from './services/usage-tracker';
+import { trackUsage, getUsageStatus, isModelAllowed, isFreeModel, resolveModelGate } from './services/usage-tracker';
 import { handleChatCompletions } from './handlers/chat';
 import { handleModelListing } from './handlers/models';
 import { handleFileTranscription, handleABTestAdmin } from './handlers/transcription';
@@ -16,7 +16,24 @@ import { handleVoiceTranscription, handleVoiceQuery, handleTextToSpeech, handleV
 import { handleVertexProxy, handleVertexModels } from './handlers/vertex-proxy';
 import { handleWebSearch } from './handlers/web-search';
 import { handleTinfoilAttestation, handleTinfoilProxy, parseTinfoilUsageMetrics } from './handlers/tinfoil-proxy';
-import { logCost, getModelCost, getStreamModelCost, inferProvider, getSpendSummary, getDailyUserCost, getMaxDailyCostPerUser, getTierDailyCostCap, resolveServedModel, type CostReservationShape } from './services/cost-tracker';
+import {
+	getCostAccumulatorOrThrow,
+	getPlanDailyCostCap,
+	getPlanMonthlyCostCap,
+	getDailyUserCost,
+	getTranscriptionDailyCostOrThrow,
+	getTranscriptionDailyCostCap,
+	getModelCost,
+	getStreamSettlementCost,
+	getSpendSummary,
+	inferProvider,
+	logCost,
+	monthlyCostKey,
+	trialCostKey,
+	resolveServedModel,
+	utcMonth,
+	type CostReservationShape,
+} from './services/cost-tracker';
 import { trackResponseUsage } from './utils/stream-usage-tracker';
 import { pruneRuntimeState } from './services/runtime-state-maintenance';
 import { resolveLatencyClass, isBackgroundRequest } from './utils/latency';
@@ -39,7 +56,14 @@ import {
 	type FreeChatLease,
 	type FreeChatLimitError,
 } from './services/free-chat-limit';
-import { hasPaidHostedAiPlan, isHostedAiUpgradeEligible } from './services/hosted-ai-policy';
+import {
+	getHostedAiAllowedModels,
+	getHostedAiIncludedCredits,
+	getHostedAiPlan,
+	hasPaidHostedAiPlan,
+	isHostedAiModelAllowed,
+	isHostedAiUpgradeEligible,
+} from './services/hosted-ai-policy';
 import { resolveModelAlias } from './providers';
 // import { handleTTSWebSocketUpgrade } from './handlers/voice-ws';
 
@@ -53,6 +77,27 @@ function freeChatErrorResponse(error: FreeChatLimitError): Response {
 		max_provider_calls_per_message: FREE_CHAT_MAX_PROVIDER_CALLS_PER_MESSAGE,
 		max_output_tokens: FREE_CHAT_MAX_OUTPUT_TOKENS,
 		upgrade_url: 'https://screenpi.pe/onboarding',
+	})));
+}
+
+function modelNotAllowedResponse(auth: AuthResult, model: string): Response {
+	const allowedModels = [...getHostedAiAllowedModels(auth.accountPlan)];
+	const currentPlan = getHostedAiPlan(auth.accountPlan);
+	const requiredPlan = auth.accountPlan === 'free' && isHostedAiModelAllowed(model, 'basic')
+		? 'basic'
+		: currentPlan === 'business'
+			? null
+			: 'business';
+	return addCorsHeaders(createErrorResponse(403, JSON.stringify({
+		error: 'model_not_allowed',
+		message: requiredPlan
+			? `Model "${model}" requires ${requiredPlan === 'basic' ? 'Basic' : 'Business'}. Choose an included model or upgrade.`
+			: `Model "${model}" is not available through hosted AI. Choose another model or use your own provider key.`,
+		plan: currentPlan ?? 'unknown',
+		required_plan: requiredPlan,
+		allowed_models: allowedModels,
+		upgrade_url: requiredPlan ? 'https://screenpi.pe/account/billing' : null,
+		byok_supported: true,
 	})));
 }
 
@@ -153,6 +198,9 @@ async function handleMeteredTinfoilRequest(
 		model,
 		new Date(),
 		isBackgroundRequest(request) ? 'background' : 'interactive',
+		{},
+		auth.accountPlan,
+		auth.hostedAiTrial === true,
 	);
 	if (!reservation.allowed) return reservation.response;
 	let response: Response;
@@ -169,6 +217,7 @@ async function handleMeteredTinfoilRequest(
 		device_id: auth.deviceId,
 		user_id: auth.userId,
 		tier: auth.tier,
+		hosted_ai_trial: auth.hostedAiTrial === true,
 		provider: 'tinfoil',
 		model,
 		input_tokens: usage?.promptTokens ?? null,
@@ -190,7 +239,12 @@ async function handleMeteredVoiceAiRequest(
 	auth: AuthResult,
 	endpoint: '/v1/voice/query' | '/v1/voice/chat',
 ): Promise<Response> {
-	const model = request.headers.get('ai-model') || 'gpt-5.4';
+	// The implicit voice model must remain available to Basic. Business callers
+	// can explicitly select a frontier model through the same server-side gate.
+	const model = request.headers.get('ai-model') || 'gpt-5.4-mini';
+	if (!isModelAllowed(model, auth.tier, env, auth.accountPlan)) {
+		return modelNotAllowedResponse(auth, model);
+	}
 	const reservation = await reserveDailyCostCap(
 		env,
 		auth.deviceId,
@@ -198,6 +252,9 @@ async function handleMeteredVoiceAiRequest(
 		model,
 		new Date(),
 		isBackgroundRequest(request) ? 'background' : 'interactive',
+		{},
+		auth.accountPlan,
+		auth.hostedAiTrial === true,
 	);
 	if (!reservation.allowed) return reservation.response;
 	let response: Response;
@@ -215,6 +272,7 @@ async function handleMeteredVoiceAiRequest(
 		device_id: auth.deviceId,
 		user_id: auth.userId,
 		tier: auth.tier,
+		hosted_ai_trial: auth.hostedAiTrial === true,
 		provider: inferProvider(model),
 		model,
 		input_tokens: null,
@@ -261,18 +319,74 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 
 		// Usage status endpoint - returns current usage without incrementing
 		if (path === '/v1/usage' && request.method === 'GET') {
-			const status = await getUsageStatus(env, authResult.deviceId, authResult.tier, authResult.userId);
+			const status = await getUsageStatus(
+				env,
+				authResult.deviceId,
+				authResult.tier,
+				authResult.userId,
+				authResult.accountPlan,
+			);
 			// Enrich with cost-based limit flag (NOT the raw $ numbers — those
 			// are our internal margin and shouldn't leak to any client/user).
 			// Stored query credits do not raise the cash ceiling. Credit-funded
 			// provider spend needs consumptive accounting before it can safely do so.
 			const dailyCost = await getDailyUserCostForCap(env, authResult.deviceId);
-			const maxCost = getTierDailyCostCap(authResult.tier, env);
+			let maxCost: number;
+			let monthlyCap: number;
+			try {
+				maxCost = getPlanDailyCostCap(
+					authResult.accountPlan,
+					env,
+					authResult.hostedAiTrial === true,
+				);
+				monthlyCap = getPlanMonthlyCostCap(
+					authResult.accountPlan,
+					env,
+					authResult.hostedAiTrial === true,
+				);
+			} catch (error) {
+				console.error('usage cost control configuration unavailable', error);
+				return addCorsHeaders(createErrorResponse(503, JSON.stringify({
+					error: 'cost_control_unavailable',
+					message: 'Hosted AI usage controls are temporarily unavailable. Try again shortly.',
+				})));
+			}
+			let monthlyCost: number | null = null;
+			try {
+				monthlyCost = await getCostAccumulatorOrThrow(
+					env,
+					authResult.hostedAiTrial === true
+						? trialCostKey(authResult.deviceId)
+						: monthlyCostKey(authResult.deviceId),
+					authResult.hostedAiTrial === true ? 'trial' : utcMonth(),
+				);
+			} catch {
+				// Admission still fails closed. The status route stays available but
+				// marks usage unknown instead of pretending the customer spent zero.
+			}
+			const includedCredits = getHostedAiIncludedCredits(authResult.accountPlan);
+			const usedCredits = monthlyCost === null ? null : Math.ceil(monthlyCost * 100);
 			const enriched = {
 				...status,
-				cost_limit_reached: dailyCost >= maxCost,
+				cost_limit_reached: dailyCost >= maxCost || (monthlyCost !== null && monthlyCost >= monthlyCap),
 				upgrade_eligible: isHostedAiUpgradeEligible(authResult),
 				upsell_banner: status.upsell_banner === true && isHostedAiUpgradeEligible(authResult),
+				hosted_ai: {
+					plan: getHostedAiPlan(authResult.accountPlan) ?? 'unknown',
+					trial: authResult.hostedAiTrial === true,
+					included_credits: includedCredits,
+					used_credits: usedCredits,
+					remaining_credits: usedCredits === null
+						? null
+						: Math.max(0, includedCredits - usedCredits),
+					model_access: [...getHostedAiAllowedModels(authResult.accountPlan)],
+					upgrade_url: isHostedAiUpgradeEligible(authResult)
+						? 'https://screenpi.pe/account/billing'
+						: null,
+					// Legacy query credits do not raise the provider-cost ceiling yet.
+					can_buy_credits: false,
+					byok_supported: true,
+				},
 			};
 			return addCorsHeaders(createSuccessResponse(enriched));
 		}
@@ -384,18 +498,18 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			// now-gated model would silently break every run — so it downgrades to
 			// 'auto' (free, always allowed) and keeps running. Interactive requests
 			// still get the visible 403 so the app can surface the upgrade UI.
-			const gate = resolveModelGate(body.model, authResult.tier, env, isBackgroundRequest(request));
+			const gate = resolveModelGate(
+				body.model,
+				authResult.tier,
+				env,
+				isBackgroundRequest(request),
+				authResult.accountPlan,
+			);
 			if (gate === 'downgrade') {
 				console.log(`background request for disallowed model "${body.model}" (${authResult.tier}) -> downgraded to auto`);
 				body.model = 'auto';
 			} else if (gate === 'reject') {
-				const allowedModels = getTierConfig(env)[authResult.tier].allowedModels;
-				return addCorsHeaders(createErrorResponse(403, JSON.stringify({
-					error: 'model_not_allowed',
-					message: `Model "${body.model}" is not available for your tier (${authResult.tier}). Available models: ${allowedModels.join(', ')}`,
-					tier: authResult.tier,
-					allowed_models: allowedModels,
-				})));
+				return modelNotAllowedResponse(authResult, body.model);
 			}
 
 			// Per-minute rate limit. Now that the model is resolved (a 'downgrade'
@@ -433,7 +547,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						},
 						subscribe: {
 							url: 'https://screenpi.pe/onboarding',
-							benefit: `${getTierConfig(env).subscribed.dailyQueries} queries/day + 500 credits/mo + encrypted sync`,
+							benefit: 'Frontier Claude and GPT models, higher hosted AI limits, and encrypted sync',
 							price: '$29/mo',
 						},
 					},
@@ -463,6 +577,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				new Date(),
 				isBackgroundRequest(request) ? 'background' : 'interactive',
 				costReservationShape(body, rawRequestBytes),
+				authResult.accountPlan,
+				authResult.hostedAiTrial === true,
 			);
 			if (!costReservation.allowed) {
 				if (freeChatLease) await releaseFreeChatLease(env, freeChatLease);
@@ -504,7 +620,10 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					latency,
 					authResult.deviceId,
 					authResult.service === true,
-					{ freePreview: freeChat.mode === 'metered' },
+					{
+						freePreview: freeChat.mode === 'metered',
+						efficientOnly: getHostedAiPlan(authResult.accountPlan) !== 'business',
+					},
 				);
 				const latencyMs = Date.now() - reqStart;
 				// Difficulty-router decision (null unless the router ran) for A/B measurement.
@@ -532,16 +651,20 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						device_id: authResult.deviceId,
 						user_id: authResult.userId,
 						tier: authResult.tier,
+						hosted_ai_trial: authResult.hostedAiTrial === true,
 						provider: inferProvider(servedModel),
 						model: pricedModel,
 						input_tokens: u.input_tokens ?? null,
 						output_tokens: u.output_tokens ?? null,
 						cache_read_tokens: u.cache_read_input_tokens ?? null,
 						cache_creation_tokens: u.cache_creation_input_tokens ?? null,
-						estimated_cost_usd: getStreamModelCost(pricedModel, u.input_tokens, u.output_tokens, {
+						estimated_cost_usd: getStreamSettlementCost(pricedModel, {
+							input_tokens: u.input_tokens,
+							output_tokens: u.output_tokens,
 							cache_read_tokens: u.cache_read_input_tokens,
 							cache_creation_tokens: u.cache_creation_input_tokens,
-						}),
+							usage_complete: u.usage_complete,
+						}, dailyCostReservation?.reservedMicroUsd),
 						endpoint: '/v1/chat/completions',
 						stream: true,
 						latency_ms: latencyMs,
@@ -562,6 +685,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 								device_id: authResult.deviceId,
 								user_id: authResult.userId,
 								tier: authResult.tier,
+								hosted_ai_trial: authResult.hostedAiTrial === true,
 								provider: inferProvider(servedModel),
 								model: pricedModel,
 								input_tokens: inputTokens,
@@ -625,6 +749,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				'gemini-2.5-flash',
 				new Date(),
 				isBackgroundRequest(request) ? 'background' : 'interactive',
+				{},
+				authResult.accountPlan,
+				authResult.hostedAiTrial === true,
 			);
 			if (!costReservation.allowed) return costReservation.response;
 			const webSearchResponse = await handleWebSearch(request, env);
@@ -632,6 +759,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				device_id: authResult.deviceId,
 				user_id: authResult.userId,
 				tier: authResult.tier,
+				hosted_ai_trial: authResult.hostedAiTrial === true,
 				provider: 'google',
 				model: 'gemini-2.5-flash',
 				input_tokens: null,
@@ -649,17 +777,22 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 		}
 
 		if (path === '/v1/listen' && request.method === 'POST') {
-			// Per-user daily cost cap for transcription
-			// 2x safety margin: free=$10/day, subscribed=$50/day
-			const dailyCost = await getDailyUserCost(env, authResult.deviceId);
-			const baseCap = getMaxDailyCostPerUser(env);
-			const maxCost = authResult.tier === 'subscribed' ? baseCap * 100 : baseCap * 2;
+			let dailyCost: number;
+			let maxCost: number;
+			try {
+				dailyCost = await getTranscriptionDailyCostOrThrow(env, authResult.deviceId);
+				maxCost = getTranscriptionDailyCostCap(authResult.accountPlan, env);
+			} catch (error) {
+				console.error('transcription cost control unavailable', error);
+				return addCorsHeaders(createErrorResponse(503, JSON.stringify({
+					error: 'cost_control_unavailable',
+					message: 'Hosted transcription controls are temporarily unavailable. Local transcription still works.',
+				})));
+			}
 			if (dailyCost >= maxCost) {
 				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 					error: 'daily_cost_limit_exceeded',
-					message: `You've reached your daily transcription limit ($${maxCost}/day). Audio will be transcribed locally until tomorrow.`,
-					daily_cost: dailyCost,
-					limit: maxCost,
+					message: "You've reached today's hosted transcription allowance. Audio will be transcribed locally until tomorrow.",
 				})));
 			}
 
@@ -684,6 +817,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					estimated_cost_usd: estimatedCost,
 					endpoint: '/v1/listen',
 					stream: false,
+					budgeted: false,
+					transcription_budgeted: true,
 				}));
 			}
 
@@ -691,6 +826,24 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 		}
 
 		if (path === '/v1/realtime' && request.method === 'GET') {
+			try {
+				const [dailyCost, maxCost] = await Promise.all([
+					getTranscriptionDailyCostOrThrow(env, authResult.deviceId),
+					Promise.resolve(getTranscriptionDailyCostCap(authResult.accountPlan, env)),
+				]);
+				if (dailyCost >= maxCost) {
+					return addCorsHeaders(createErrorResponse(429, JSON.stringify({
+						error: 'daily_cost_limit_exceeded',
+						message: "You've reached today's hosted transcription allowance. Use local transcription or try again tomorrow.",
+					})));
+				}
+			} catch (error) {
+				console.error('realtime transcription cost control unavailable', error);
+				return addCorsHeaders(createErrorResponse(503, JSON.stringify({
+					error: 'cost_control_unavailable',
+					message: 'Hosted transcription controls are temporarily unavailable. Local transcription still works.',
+				})));
+			}
 			return await handleRealtimeTranscriptionUpgrade(request, env, ctx, authResult);
 		}
 
@@ -700,6 +853,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				env,
 				authResult.tier,
 				isHostedAiUpgradeEligible(authResult),
+				authResult.accountPlan,
 			);
 		}
 
@@ -774,14 +928,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				parsedModel = resolveModelAlias(body.model || parsedModel);
 				parsedStream = body.stream === true;
 				parsedRequestShape = costReservationShape(body);
-				if (!isModelAllowed(parsedModel, authResult.tier, env)) {
-					const allowedModels = getTierConfig(env)[authResult.tier].allowedModels;
-					return addCorsHeaders(createErrorResponse(403, JSON.stringify({
-						error: 'model_not_allowed',
-						message: `Model "${parsedModel}" is not available for your tier (${authResult.tier}). Available models: ${allowedModels.join(', ')}`,
-						tier: authResult.tier,
-						allowed_models: allowedModels,
-					})));
+				if (!isModelAllowed(parsedModel, authResult.tier, env, authResult.accountPlan)) {
+					return modelNotAllowedResponse(authResult, parsedModel);
 				}
 			} catch (e) {
 				// If body parse fails, let the proxy handle the error downstream
@@ -809,6 +957,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				new Date(),
 				isBackgroundRequest(request) ? 'background' : 'interactive',
 				parsedRequestShape,
+				authResult.accountPlan,
+				authResult.hostedAiTrial === true,
 			);
 			if (!costReservation.allowed) return costReservation.response;
 
@@ -830,16 +980,20 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					device_id: authResult.deviceId,
 					user_id: authResult.userId,
 					tier: authResult.tier,
+					hosted_ai_trial: authResult.hostedAiTrial === true,
 					provider: inferProvider(parsedModel),
 					model: parsedModel,
 					input_tokens: u.input_tokens ?? null,
 					output_tokens: u.output_tokens ?? null,
 					cache_read_tokens: u.cache_read_input_tokens ?? null,
 					cache_creation_tokens: u.cache_creation_input_tokens ?? null,
-					estimated_cost_usd: getStreamModelCost(parsedModel, u.input_tokens, u.output_tokens, {
+					estimated_cost_usd: getStreamSettlementCost(parsedModel, {
+						input_tokens: u.input_tokens,
+						output_tokens: u.output_tokens,
 						cache_read_tokens: u.cache_read_input_tokens,
 						cache_creation_tokens: u.cache_creation_input_tokens,
-					}),
+						usage_complete: u.usage_complete,
+					}, costReservation.reservation?.reservedMicroUsd),
 					endpoint: '/v1/messages',
 					stream: true,
 				}));
@@ -859,6 +1013,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 							device_id: authResult.deviceId,
 							user_id: authResult.userId,
 							tier: authResult.tier,
+							hosted_ai_trial: authResult.hostedAiTrial === true,
 							provider: inferProvider(parsedModel),
 							model: parsedModel,
 							input_tokens: inputTokens,
@@ -920,14 +1075,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			// /v1/chat/completions and /v1/messages. This endpoint previously only
 			// checked for a non-anonymous tier, so any authentication weakness could
 			// be composed with this server-key proxy to reach Business-only models.
-			if (!isModelAllowed(ocModel, authResult.tier, env)) {
-				const allowedModels = getTierConfig(env)[authResult.tier].allowedModels;
-				return addCorsHeaders(createErrorResponse(403, JSON.stringify({
-					error: 'model_not_allowed',
-					message: `Model "${ocModel}" is not available for your tier (${authResult.tier}). Available models: ${allowedModels.join(', ')}`,
-					tier: authResult.tier,
-					allowed_models: allowedModels,
-				})));
+			if (!isModelAllowed(ocModel, authResult.tier, env, authResult.accountPlan)) {
+				return modelNotAllowedResponse(authResult, ocModel);
 			}
 
 			// Track usage for OpenCode requests (weighted by model)
@@ -952,6 +1101,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				new Date(),
 				isBackgroundRequest(request) ? 'background' : 'interactive',
 				ocRequestShape,
+				authResult.accountPlan,
+				authResult.hostedAiTrial === true,
 			);
 			if (!costReservation.allowed) return costReservation.response;
 
@@ -973,16 +1124,20 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					device_id: authResult.deviceId,
 					user_id: authResult.userId,
 					tier: authResult.tier,
+					hosted_ai_trial: authResult.hostedAiTrial === true,
 					provider: inferProvider(ocModel),
 					model: ocModel,
 					input_tokens: u.input_tokens ?? null,
 					output_tokens: u.output_tokens ?? null,
 					cache_read_tokens: u.cache_read_input_tokens ?? null,
 					cache_creation_tokens: u.cache_creation_input_tokens ?? null,
-					estimated_cost_usd: getStreamModelCost(ocModel, u.input_tokens, u.output_tokens, {
+					estimated_cost_usd: getStreamSettlementCost(ocModel, {
+						input_tokens: u.input_tokens,
+						output_tokens: u.output_tokens,
 						cache_read_tokens: u.cache_read_input_tokens,
 						cache_creation_tokens: u.cache_creation_input_tokens,
-					}),
+						usage_complete: u.usage_complete,
+					}, costReservation.reservation?.reservedMicroUsd),
 					endpoint: '/anthropic/v1/messages',
 					stream: true,
 				}));
@@ -1002,6 +1157,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 							device_id: authResult.deviceId,
 							user_id: authResult.userId,
 							tier: authResult.tier,
+							hosted_ai_trial: authResult.hostedAiTrial === true,
 							provider: inferProvider(ocModel),
 							model: ocModel,
 							input_tokens: inputTokens,
@@ -1039,6 +1195,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					error: 'authentication_required',
 					message: 'OpenCode requires authentication. Please log in to screenpipe.',
 				})));
+			}
+			if (getHostedAiPlan(authResult.accountPlan) !== 'business') {
+				return modelNotAllowedResponse(authResult, 'anthropic frontier models');
 			}
 			console.log('OpenCode Anthropic models request');
 			return await handleVertexModels(env);

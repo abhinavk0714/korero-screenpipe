@@ -13,19 +13,30 @@ import {
 	reserveDailyCostCap,
 	withDailyCostSettlement,
 } from './cost-cap';
-import { getCostReservationMicroUsd } from './cost-tracker';
 import {
-	FREE_CHAT_COST_RESERVATION_MICRO_USD,
-	FREE_CHAT_DAILY_BUDGET_MICRO_USD,
+	GLOBAL_DAILY_COST_KEY,
+	GLOBAL_HOURLY_COST_KEY,
+	getCostReservationMicroUsd,
+	getStreamSettlementCost,
+	logCost,
+	monthlyCostKey,
+	trialCostKey,
+	utcHour,
+	utcMonth,
+} from './cost-tracker';
+import {
 	FREE_CHAT_IN_FLIGHT_LEASE_SECONDS,
 	FREE_CHAT_MAX_PROVIDER_CALLS_PER_MESSAGE,
 	acquireFreeChatLease,
+	getFreeChatCostReservationMicroUsd,
+	getFreeChatDailyBudgetMicroUsd,
 	releaseFreeChatLease,
 	reserveFreeChatBudget,
 	reserveFreeChatRequest,
 	reserveFreeChatTurn,
 	type FreeChatPreflight,
 } from './free-chat-limit';
+import { trackResponseUsage } from '../utils/stream-usage-tracker';
 
 const USAGE_SCHEMA = [
 	`CREATE TABLE usage (
@@ -41,7 +52,39 @@ const USAGE_SCHEMA = [
 	)`,
 	'CREATE INDEX idx_usage_user_id ON usage(user_id)',
 	'CREATE INDEX idx_usage_tier ON usage(tier)',
+	`CREATE TABLE cost_daily (
+		date TEXT NOT NULL, tier TEXT NOT NULL, provider TEXT NOT NULL,
+		model TEXT NOT NULL, endpoint TEXT NOT NULL, stream INTEGER NOT NULL,
+		router_tier TEXT NOT NULL, requests INTEGER NOT NULL DEFAULT 0,
+		input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+		cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+		cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+		estimated_cost_usd REAL NOT NULL DEFAULT 0,
+		latency_ms_sum INTEGER NOT NULL DEFAULT 0,
+		latency_samples INTEGER NOT NULL DEFAULT 0,
+		updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+		PRIMARY KEY (date, tier, provider, model, endpoint, stream, router_tier)
+	) WITHOUT ROWID`,
 ];
+
+const TEST_PRIVATE_COST_CONTROLS = {
+	FREE_CHAT_COST_RESERVATION_MICRO_USD: '100',
+	FREE_CHAT_DAILY_BUDGET_MICRO_USD: '1600',
+	MAX_DAILY_FREE_TEXT_COST: '101',
+	MAX_DAILY_BASIC_TEXT_COST: '102',
+	MAX_DAILY_BUSINESS_TEXT_COST: '103',
+	MAX_MONTHLY_FREE_TEXT_COST: '201',
+	MAX_MONTHLY_BASIC_TEXT_COST: '202',
+	MAX_MONTHLY_BUSINESS_TEXT_COST: '203',
+	MAX_REQUEST_FREE_TEXT_COST: '51',
+	MAX_REQUEST_BASIC_TEXT_COST: '52',
+	MAX_REQUEST_BUSINESS_TEXT_COST: '53',
+	MAX_TRIAL_TEXT_COST: '301',
+	MAX_DAILY_TRIAL_TEXT_COST: '104',
+	MAX_REQUEST_TRIAL_TEXT_COST: '54',
+	MAX_GLOBAL_HOURLY_TEXT_COST: '401',
+	MAX_GLOBAL_DAILY_TEXT_COST: '402',
+};
 
 function metered(
 	userId: string,
@@ -63,7 +106,10 @@ describe('usage reservations against workerd D1', () => {
 		});
 		const db = await miniflare.getD1Database('DB');
 		await db.batch(USAGE_SCHEMA.map((statement) => db.prepare(statement)));
-		env = { DB: db as unknown as D1Database } as Env;
+		env = {
+			...TEST_PRIVATE_COST_CONTROLS,
+			DB: db as unknown as D1Database,
+		} as Env;
 	});
 
 	afterEach(async () => {
@@ -128,7 +174,7 @@ describe('usage reservations against workerd D1', () => {
 		const budgetRow = await db.prepare(
 			"SELECT daily_count FROM usage WHERE user_id = ? AND tier LIKE 'free_chat_budget_v2:%'",
 		).bind('user-d1-ordered').first<{ daily_count: number }>();
-		expect(budgetRow?.daily_count).toBe(FREE_CHAT_COST_RESERVATION_MICRO_USD);
+		expect(budgetRow?.daily_count).toBe(getFreeChatCostReservationMicroUsd(env));
 		if (first.allowed && first.lease) await releaseFreeChatLease(env, first.lease);
 	});
 
@@ -178,8 +224,8 @@ describe('usage reservations against workerd D1', () => {
 	it('atomically caps conservative daily spend reservations', async () => {
 		const turn = metered('user-d1-budget', 'turn-budget');
 		const now = new Date('2026-07-14T12:00:00.000Z');
-		const reservationLimit = FREE_CHAT_DAILY_BUDGET_MICRO_USD
-			/ FREE_CHAT_COST_RESERVATION_MICRO_USD;
+		const reservationLimit = getFreeChatDailyBudgetMicroUsd(env)
+			/ getFreeChatCostReservationMicroUsd(env);
 		const results = await Promise.all(
 			Array.from({ length: reservationLimit + 8 }, () => reserveFreeChatBudget(env, turn, now)),
 		);
@@ -246,7 +292,8 @@ describe('usage reservations against workerd D1', () => {
 
 	it('reserves half the account budget for foreground Chat', async () => {
 		const now = new Date('2026-07-14T12:00:00.000Z');
-		env.MAX_DAILY_SUBSCRIBED_TEXT_COST = '0.40';
+		const holdUsd = getCostReservationMicroUsd('claude-sonnet-5') / 1_000_000;
+		env.MAX_DAILY_BUSINESS_TEXT_COST = String(holdUsd * 3);
 		const firstPipe = await reserveDailyCostCap(
 			env, 'user-d1-chat-headroom', 'subscribed', 'claude-sonnet-5', now, 'background',
 		);
@@ -282,7 +329,11 @@ describe('usage reservations against workerd D1', () => {
 
 	it('rejects a request whose own measured shape cannot fit the cash cap', async () => {
 		const now = new Date('2026-07-14T12:00:00.000Z');
-		env.MAX_DAILY_SUBSCRIBED_TEXT_COST = '0.50';
+		const shapedHoldUsd = getCostReservationMicroUsd('claude-sonnet-5', {
+			inputTokens: 200_000,
+			maxOutputTokens: 16_000,
+		}) / 1_000_000;
+		env.MAX_DAILY_BUSINESS_TEXT_COST = String(shapedHoldUsd / 2);
 		const result = await reserveDailyCostCap(
 			env,
 			'user-d1-large-shape',
@@ -306,7 +357,8 @@ describe('usage reservations against workerd D1', () => {
 	it('releases only the settled request while a sibling hold remains active', async () => {
 		const now = new Date('2026-07-14T12:00:00.000Z');
 		const model = 'gemini-2.5-flash';
-		env.MAX_DAILY_SUBSCRIBED_TEXT_COST = '0.15';
+		const holdUsd = getCostReservationMicroUsd(model) / 1_000_000;
+		env.MAX_DAILY_BUSINESS_TEXT_COST = String(holdUsd * 4);
 		const background = await reserveDailyCostCap(
 			env, 'user-d1-cost-settle', 'subscribed', model, now, 'background',
 		);
@@ -333,10 +385,86 @@ describe('usage reservations against workerd D1', () => {
 		expect(rows?.count).toBe(2);
 	});
 
+	it('charges the full hold and aborts upstream when a stream is cancelled before usage', async () => {
+		const deviceId = 'user-d1-cancelled-fable';
+		const model = 'claude-fable-5';
+		const reservation = await reserveDailyCostCap(
+			env,
+			deviceId,
+			'subscribed',
+			model,
+			new Date(),
+			'interactive',
+			{},
+			'business',
+		);
+		if (!reservation.allowed || !reservation.reservation) {
+			throw new Error('expected Fable reservation');
+		}
+		const costReservation = reservation.reservation;
+
+		let upstreamCancelled = false;
+		const upstream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode(
+					`data: ${JSON.stringify({ choices: [{ delta: { content: 'partial' } }] })}\n\n`,
+				));
+			},
+			cancel() {
+				upstreamCancelled = true;
+			},
+		});
+		const tracked = trackResponseUsage(new Response(upstream), 'openai');
+		const settlement = tracked.usage.then((usage) => logCost(env, {
+			device_id: deviceId,
+			tier: 'subscribed',
+			provider: 'anthropic',
+			model,
+			input_tokens: usage.input_tokens,
+			output_tokens: usage.output_tokens,
+			cache_read_tokens: usage.cache_read_input_tokens,
+			cache_creation_tokens: usage.cache_creation_input_tokens,
+			estimated_cost_usd: getStreamSettlementCost(model, {
+				input_tokens: usage.input_tokens,
+				output_tokens: usage.output_tokens,
+				cache_read_tokens: usage.cache_read_input_tokens,
+				cache_creation_tokens: usage.cache_creation_input_tokens,
+				usage_complete: usage.usage_complete,
+			}, costReservation.reservedMicroUsd),
+			endpoint: '/v1/chat/completions',
+			stream: true,
+		}));
+		const response = withDailyCostSettlement(
+			tracked.response,
+			env,
+			costReservation,
+			settlement,
+		);
+		const reader = response.body!.getReader();
+		await reader.read();
+		await reader.cancel('client disconnected');
+
+		expect(upstreamCancelled).toBe(true);
+		const expectedCost = costReservation.reservedMicroUsd / 1_000_000;
+		const accountRow = await env.DB.prepare(
+			'SELECT daily_cost_usd FROM usage WHERE device_id = ?',
+		).bind(deviceId).first<{ daily_cost_usd: number }>();
+		expect(accountRow?.daily_cost_usd).toBeCloseTo(expectedCost, 8);
+		const globalRow = await env.DB.prepare(
+			'SELECT daily_cost_usd FROM usage WHERE device_id = ?',
+		).bind(GLOBAL_DAILY_COST_KEY).first<{ daily_cost_usd: number }>();
+		expect(globalRow?.daily_cost_usd).toBeCloseTo(expectedCost, 8);
+		const hold = await env.DB.prepare(
+			'SELECT device_id FROM usage WHERE device_id = ?',
+		).bind(costReservation.key).first();
+		expect(hold).toBeNull();
+	});
+
 	it('reclaims an expired priced-request reservation without accepting its stale release', async () => {
 		const start = new Date('2026-07-14T12:00:00.000Z');
 		const model = 'gemini-2.5-flash';
-		env.MAX_DAILY_SUBSCRIBED_TEXT_COST = '0.05';
+		const holdUsd = getCostReservationMicroUsd(model) / 1_000_000;
+		env.MAX_DAILY_BUSINESS_TEXT_COST = String(holdUsd * 1.5);
 		const first = await reserveDailyCostCap(env, 'user-d1-cost-expired', 'subscribed', model, start);
 		expect(first.allowed).toBe(true);
 		expect((await reserveDailyCostCap(
@@ -369,16 +497,192 @@ describe('usage reservations against workerd D1', () => {
 		}
 	});
 
+	it('atomically enforces a Basic monthly allowance across parallel requests', async () => {
+		const now = new Date('2026-07-14T12:00:00.000Z');
+		const hold = getCostReservationMicroUsd('gpt-5.6-luna');
+		env.MAX_DAILY_BASIC_TEXT_COST = '1';
+		env.MAX_MONTHLY_BASIC_TEXT_COST = String((hold * 2 + 1) / 1_000_000);
+		env.MAX_REQUEST_BASIC_TEXT_COST = '1';
+		const results = await Promise.all(Array.from({ length: 8 }, () =>
+			reserveDailyCostCap(
+				env,
+				'user-d1-monthly-basic',
+				'logged_in',
+				'gpt-5.6-luna',
+				now,
+				'interactive',
+				{},
+				'basic',
+			),
+		));
+
+		expect(results.filter((result) => result.allowed)).toHaveLength(2);
+		for (const result of results) {
+			if (result.allowed && result.reservation) {
+				await releaseDailyCostReservation(env, result.reservation);
+			}
+		}
+	});
+
+	it('atomically stops different accounts at the global hourly breaker', async () => {
+		const now = new Date('2026-07-14T12:00:00.000Z');
+		const hold = getCostReservationMicroUsd('claude-sonnet-5');
+		env.MAX_DAILY_BUSINESS_TEXT_COST = '10';
+		env.MAX_MONTHLY_BUSINESS_TEXT_COST = '10';
+		env.MAX_REQUEST_BUSINESS_TEXT_COST = '2';
+		env.MAX_GLOBAL_HOURLY_TEXT_COST = String((hold * 2 + 1) / 1_000_000);
+		env.MAX_GLOBAL_DAILY_TEXT_COST = '10';
+		const results = await Promise.all(Array.from({ length: 8 }, (_, index) =>
+			reserveDailyCostCap(
+				env,
+				`user-d1-global-${index}`,
+				'subscribed',
+				'claude-sonnet-5',
+				now,
+				'interactive',
+				{},
+				'business',
+			),
+		));
+
+		expect(results.filter((result) => result.allowed)).toHaveLength(2);
+		for (const result of results.filter((value) => !value.allowed)) {
+			if (!result.allowed) {
+				expect(result.response.status).toBe(503);
+				expect(await result.response.text()).toContain('hosted_ai_global_spend_limit');
+			}
+		}
+		for (const result of results) {
+			if (result.allowed && result.reservation) {
+				await releaseDailyCostReservation(env, result.reservation);
+			}
+		}
+	});
+
+	it('atomically stops different accounts at the global daily breaker', async () => {
+		const now = new Date('2026-07-14T12:00:00.000Z');
+		const hold = getCostReservationMicroUsd('claude-sonnet-5');
+		env.MAX_DAILY_BUSINESS_TEXT_COST = '10';
+		env.MAX_MONTHLY_BUSINESS_TEXT_COST = '10';
+		env.MAX_REQUEST_BUSINESS_TEXT_COST = '2';
+		env.MAX_GLOBAL_HOURLY_TEXT_COST = '10';
+		env.MAX_GLOBAL_DAILY_TEXT_COST = String((hold * 2 + 1) / 1_000_000);
+		const results = await Promise.all(Array.from({ length: 8 }, (_, index) =>
+			reserveDailyCostCap(
+				env,
+				`user-d1-global-daily-${index}`,
+				'subscribed',
+				'claude-sonnet-5',
+				now,
+				'interactive',
+				{},
+				'business',
+			),
+		));
+
+		expect(results.filter((result) => result.allowed)).toHaveLength(2);
+		for (const result of results.filter((value) => !value.allowed)) {
+			if (!result.allowed) {
+				expect(result.response.status).toBe(503);
+				expect(await result.response.text()).toContain('hosted_ai_global_spend_limit');
+			}
+		}
+		for (const result of results) {
+			if (result.allowed && result.reservation) {
+				await releaseDailyCostReservation(env, result.reservation);
+			}
+		}
+	});
+
+	it('records account-month and global day/hour spend with the account daily row', async () => {
+		const deviceId = 'user-d1-budget-ledgers';
+		const recorded = await logCost(env, {
+			device_id: deviceId,
+			tier: 'business',
+			provider: 'anthropic',
+			model: 'claude-sonnet-5',
+			input_tokens: 1_000,
+			output_tokens: 100,
+			estimated_cost_usd: 0.123,
+			endpoint: '/v1/chat/completions',
+			stream: false,
+		});
+		expect(recorded).toBe(true);
+
+		for (const [key, period] of [
+			[deviceId, new Date().toISOString().slice(0, 10)],
+			[monthlyCostKey(deviceId), utcMonth()],
+			[GLOBAL_DAILY_COST_KEY, new Date().toISOString().slice(0, 10)],
+			[GLOBAL_HOURLY_COST_KEY, utcHour()],
+		] as const) {
+			const row = await env.DB.prepare(
+				'SELECT cost_day, daily_cost_usd FROM usage WHERE device_id = ?',
+			).bind(key).first<{ cost_day: string; daily_cost_usd: number }>();
+			expect(row).toEqual({ cost_day: period, daily_cost_usd: 0.123 });
+		}
+	});
+
+	it('keeps trial spend in a non-resetting allowance instead of a calendar month', async () => {
+		const deviceId = 'user-d1-trial-budget';
+		const trialHoldUsd = getCostReservationMicroUsd('claude-sonnet-5') / 1_000_000;
+		env.MAX_TRIAL_TEXT_COST = String(0.9 + trialHoldUsd / 2);
+		const recorded = await logCost(env, {
+			device_id: deviceId,
+			tier: 'subscribed',
+			hosted_ai_trial: true,
+			provider: 'anthropic',
+			model: 'claude-sonnet-5',
+			input_tokens: 1_000,
+			output_tokens: 100,
+			estimated_cost_usd: 0.9,
+			endpoint: '/v1/chat/completions',
+			stream: false,
+		});
+		expect(recorded).toBe(true);
+
+		const trialRow = await env.DB.prepare(
+			'SELECT cost_day, daily_cost_usd FROM usage WHERE device_id = ?',
+		).bind(trialCostKey(deviceId)).first<{ cost_day: string; daily_cost_usd: number }>();
+		expect(trialRow).toEqual({ cost_day: 'trial', daily_cost_usd: 0.9 });
+		expect(await env.DB.prepare(
+			'SELECT device_id FROM usage WHERE device_id = ?',
+		).bind(monthlyCostKey(deviceId)).first()).toBeNull();
+
+		// Move the daily row out of today's window. The permanent trial ledger must
+		// still reject a hold that would cross the test-only configured allowance.
+		await env.DB.prepare('UPDATE usage SET cost_day = ? WHERE device_id = ?')
+			.bind('2026-01-01', deviceId).run();
+		const result = await reserveDailyCostCap(
+			env,
+			deviceId,
+			'subscribed',
+			'claude-sonnet-5',
+			new Date(),
+			'interactive',
+			{},
+			'business',
+			true,
+		);
+		expect(result.allowed).toBe(false);
+		if (!result.allowed) {
+			expect(result.response.status).toBe(429);
+			expect(await result.response.text()).toContain('trial_cost_limit_exceeded');
+		}
+	});
+
 	it('preserves incident spend while enforcing a fresh post-epoch cash budget', async () => {
 		const deviceId = 'user-d1-cost-epoch';
 		const day = new Date().toISOString().slice(0, 10);
 		const now = new Date();
-		env.COST_CAP_EPOCH = 'incident-v2';
-		env.MAX_DAILY_TEXT_COST_PER_USER = '0.5'; // subscribed cap = $3.50
+		const holdUsd = getCostReservationMicroUsd('claude-sonnet-5') / 1_000_000;
+		const postEpochCap = holdUsd * 3;
+		const incidentSpend = 40;
+		env.PRIVATE_COST_CAP_EPOCH = 'incident-v2';
+		env.MAX_DAILY_BUSINESS_TEXT_COST = String(postEpochCap);
 		await env.DB.prepare(`
 			INSERT INTO usage (device_id, last_reset, tier, cost_day, daily_cost_usd)
-			VALUES (?, ?, 'subscribed', ?, 40)
-		`).bind(deviceId, day, day).run();
+			VALUES (?, ?, 'subscribed', ?, ?)
+		`).bind(deviceId, day, day, incidentSpend).run();
 
 		const first = await reserveDailyCostCap(env, deviceId, 'subscribed', 'claude-sonnet-5', now);
 		expect(first.allowed).toBe(true);
@@ -389,19 +693,20 @@ describe('usage reservations against workerd D1', () => {
 			SELECT daily_cost_usd, cost_day FROM usage
 			WHERE tier = 'daily_cost_baseline_v1' AND user_id = ?
 		`).bind(deviceId).first<{ daily_cost_usd: number; cost_day: string }>();
-		expect(baseline).toEqual({ daily_cost_usd: 40, cost_day: day });
+		expect(baseline).toEqual({ daily_cost_usd: incidentSpend, cost_day: day });
 
-		// Leave room for the request-sized $0.12144 default Sonnet hold.
-		await env.DB.prepare(`UPDATE usage SET daily_cost_usd = 43.37 WHERE device_id = ?`)
-			.bind(deviceId).run();
+		const underCapSpend = incidentSpend + postEpochCap - holdUsd * 1.1;
+		await env.DB.prepare('UPDATE usage SET daily_cost_usd = ? WHERE device_id = ?')
+			.bind(underCapSpend, deviceId).run();
 		const underCap = await reserveDailyCostCap(env, deviceId, 'subscribed', 'claude-sonnet-5', now);
 		expect(underCap.allowed).toBe(true);
 		if (underCap.allowed && underCap.reservation) {
 			await releaseDailyCostReservation(env, underCap.reservation);
 		}
 
-		await env.DB.prepare(`UPDATE usage SET daily_cost_usd = 43.5 WHERE device_id = ?`)
-			.bind(deviceId).run();
+		const atCapSpend = incidentSpend + postEpochCap;
+		await env.DB.prepare('UPDATE usage SET daily_cost_usd = ? WHERE device_id = ?')
+			.bind(atCapSpend, deviceId).run();
 		const atCap = await reserveDailyCostCap(env, deviceId, 'subscribed', 'claude-sonnet-5', now);
 		expect(atCap.allowed).toBe(false);
 		if (!atCap.allowed) expect(await atCap.response.text()).toContain('daily_cost_limit_exceeded');
@@ -411,11 +716,11 @@ describe('usage reservations against workerd D1', () => {
 		const preserved = await env.DB.prepare(`
 			SELECT daily_cost_usd FROM usage WHERE device_id = ?
 		`).bind(deviceId).first<{ daily_cost_usd: number }>();
-		expect(preserved?.daily_cost_usd).toBe(43.5);
+		expect(preserved?.daily_cost_usd).toBe(atCapSpend);
 
 		// A deliberately changed epoch starts a new reversible budget without
 		// deleting either the incident ledger or the previous baseline.
-		env.COST_CAP_EPOCH = 'incident-v3';
+		env.PRIVATE_COST_CAP_EPOCH = 'incident-v3';
 		const nextEpoch = await reserveDailyCostCap(env, deviceId, 'subscribed', 'claude-sonnet-5', now);
 		expect(nextEpoch.allowed).toBe(true);
 		if (nextEpoch.allowed && nextEpoch.reservation) {

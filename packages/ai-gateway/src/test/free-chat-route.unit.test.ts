@@ -23,6 +23,25 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		CLERK_SECRET_KEY: 'clerk-test-secret',
 		SUPABASE_URL: 'https://supabase.test',
 		SUPABASE_ANON_KEY: 'supabase-test-key',
+		FREE_CHAT_COST_RESERVATION_MICRO_USD: '100',
+		FREE_CHAT_DAILY_BUDGET_MICRO_USD: '1600',
+		MAX_DAILY_FREE_TRANSCRIPTION_COST: '101',
+		MAX_DAILY_BASIC_TRANSCRIPTION_COST: '102',
+		MAX_DAILY_BUSINESS_TRANSCRIPTION_COST: '103',
+		MAX_DAILY_FREE_TEXT_COST: '101',
+		MAX_DAILY_BASIC_TEXT_COST: '102',
+		MAX_DAILY_BUSINESS_TEXT_COST: '103',
+		MAX_MONTHLY_FREE_TEXT_COST: '201',
+		MAX_MONTHLY_BASIC_TEXT_COST: '202',
+		MAX_MONTHLY_BUSINESS_TEXT_COST: '203',
+		MAX_REQUEST_FREE_TEXT_COST: '51',
+		MAX_REQUEST_BASIC_TEXT_COST: '52',
+		MAX_REQUEST_BUSINESS_TEXT_COST: '53',
+		MAX_TRIAL_TEXT_COST: '301',
+		MAX_DAILY_TRIAL_TEXT_COST: '104',
+		MAX_REQUEST_TRIAL_TEXT_COST: '54',
+		MAX_GLOBAL_HOURLY_TEXT_COST: '401',
+		MAX_GLOBAL_DAILY_TEXT_COST: '402',
 		RATE_LIMITER: {
 			idFromName: (name: string) => name,
 			get: () => ({
@@ -286,6 +305,126 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(response.status).toBe(503);
 		const body = await response.json() as { error: string };
 		expect(body.error).toContain('tinfoil proxy not configured');
+	});
+
+	it('admits reviewed Business frontier models and rejects unpriced provider names', async () => {
+		globalThis.fetch = mock(async () => new Response(JSON.stringify({
+			success: true,
+			user: {
+				clerk_id: 'user_business_catalog',
+				cloud_subscribed: true,
+				app_entitled: true,
+				subscription_plan: 'pro',
+				entitlement: { active: true, plan: 'pro', features: { app: true, cloud: true } },
+			},
+		}), { status: 200 })) as typeof fetch;
+
+		const unpriced = await handleRequest(
+			request(
+				{ Authorization: 'Bearer eyJ.business.catalog' },
+				'/v1/chat/completions',
+				'claude-future-unpriced',
+			),
+			env,
+			ctx,
+		);
+		expect(unpriced.status).toBe(403);
+		expect(await errorCode(unpriced)).toBe('model_not_allowed');
+
+		const reviewed = await handleRequest(
+			request(
+				{ Authorization: 'Bearer eyJ.business.catalog.reviewed' },
+				'/v1/chat/completions',
+				'claude-fable-5',
+			),
+			env,
+			ctx,
+		);
+		// Missing test provider credentials yield 503 only after plan/model/cost
+		// admission, proving the reviewed Fable path reached provider setup.
+		expect(reviewed.status).toBe(503);
+		expect(await reviewed.text()).not.toContain('model_not_allowed');
+	});
+
+	it('propagates the website trial contract into the usage product response', async () => {
+		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url === 'https://screenpipe.com/api/user') {
+				return new Response(JSON.stringify({
+					success: true,
+					user: {
+						clerk_id: 'user_trial_contract',
+						cloud_subscribed: true,
+						app_entitled: true,
+						subscription_plan: 'pro',
+						hosted_ai_trial: true,
+						entitlement: { active: true, plan: 'pro', features: { app: true, cloud: true } },
+					},
+				}), { status: 200 });
+			}
+			if (url.startsWith('https://supabase.test/rest/v1/user_credits')) {
+				return new Response('[]', { status: 200 });
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		}) as typeof fetch;
+
+		const response = await handleRequest(new Request('https://gateway.test/v1/usage', {
+			method: 'GET',
+			headers: { Authorization: 'Bearer eyJ.trial.contract' },
+		}), env, ctx);
+		const result = await response.json() as {
+			hosted_ai: {
+				plan: string;
+				trial: boolean;
+				included_credits: number;
+				model_access: string[];
+			};
+		};
+
+		expect(response.status).toBe(200);
+		expect(result.hosted_ai).toMatchObject({
+			plan: 'business',
+			trial: true,
+			included_credits: 400,
+		});
+		expect(result.hosted_ai.model_access).toContain('claude-fable-5');
+		expect(result.hosted_ai.model_access).not.toContain('*');
+	});
+
+	it('fails the usage endpoint closed when private controls are missing', async () => {
+		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url === 'https://screenpipe.com/api/user') {
+				return new Response(JSON.stringify({
+					success: true,
+					user: {
+						clerk_id: 'user_missing_private_controls',
+						cloud_subscribed: true,
+						app_entitled: true,
+						subscription_plan: 'pro',
+						entitlement: { active: true, plan: 'pro', features: { app: true, cloud: true } },
+					},
+				}), { status: 200 });
+			}
+			if (url.startsWith('https://supabase.test/rest/v1/user_credits')) {
+				return new Response('[]', { status: 200 });
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		}) as typeof fetch;
+
+		const missingControlsEnv = { ...env } as Record<string, unknown>;
+		for (const key of Object.keys(missingControlsEnv)) {
+			if (key.startsWith('MAX_') && key.endsWith('_TEXT_COST')) {
+				delete missingControlsEnv[key];
+			}
+		}
+		const response = await handleRequest(new Request('https://gateway.test/v1/usage', {
+			method: 'GET',
+			headers: { Authorization: 'Bearer eyJ.missing.private.controls' },
+		}), missingControlsEnv as unknown as Env, ctx);
+
+		expect(response.status).toBe(503);
+		expect(await errorCode(response)).toBe('cost_control_unavailable');
 	});
 
 	it('normalizes a removed model before gating and reaches the fallback provider', async () => {

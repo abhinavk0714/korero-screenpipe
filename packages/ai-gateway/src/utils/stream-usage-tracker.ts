@@ -15,6 +15,9 @@ export interface StreamUsage {
   cache_read_input_tokens: number;
   /** Prompt tokens written to the cache this request (Anthropic write premium). */
   cache_creation_input_tokens: number;
+	/** True only after the provider emitted its terminal usage counters. */
+	usage_complete: boolean;
+	termination: 'complete' | 'cancelled' | 'error';
 }
 
 /**
@@ -36,11 +39,12 @@ export function trackStreamUsage(
   let outputTokens = 0;
   let cacheReadTokens = 0;
   let cacheCreationTokens = 0;
+	let usageComplete = false;
   const decoder = new TextDecoder();
   const reader = body.getReader();
   let completed = false;
 
-  const completeOnce = () => {
+  const completeOnce = (termination: StreamUsage['termination']) => {
     if (completed) return;
     completed = true;
     onComplete({
@@ -48,6 +52,8 @@ export function trackStreamUsage(
       output_tokens: outputTokens,
       cache_read_input_tokens: cacheReadTokens,
       cache_creation_input_tokens: cacheCreationTokens,
+			usage_complete: usageComplete,
+			termination,
     });
   };
 
@@ -70,6 +76,7 @@ export function trackStreamUsage(
             }
             if (data.type === 'message_delta' && data.usage) {
               outputTokens = data.usage.output_tokens || 0;
+							usageComplete = true;
             }
           } else {
             // OpenAI format: usage in final chunk; prompt_tokens already
@@ -80,6 +87,7 @@ export function trackStreamUsage(
               cacheReadTokens = data.usage.prompt_tokens_details?.cached_tokens || 0;
               // Non-standard field our Anthropic→OpenAI conversion emits
               cacheCreationTokens = data.usage.cache_creation_input_tokens || 0;
+							usageComplete = true;
             }
           }
         } catch {
@@ -93,14 +101,14 @@ export function trackStreamUsage(
       try {
         const { done, value } = await reader.read();
         if (done) {
-          completeOnce();
+          completeOnce('complete');
           controller.close();
           return;
         }
         inspect(value);
         controller.enqueue(value);
       } catch (error) {
-        completeOnce();
+        completeOnce('error');
         controller.error(error);
       }
     },
@@ -111,7 +119,7 @@ export function trackStreamUsage(
         // Resolve the usage promise with the tokens observed so far. Cost
         // settlement can then record a conservative partial/fallback estimate
         // and release its account lease instead of hanging until TTL expiry.
-        completeOnce();
+        completeOnce('cancelled');
       }
     },
   });
@@ -134,6 +142,8 @@ export function trackResponseUsage(
         output_tokens: 0,
         cache_read_input_tokens: 0,
         cache_creation_input_tokens: 0,
+				usage_complete: false,
+				termination: 'complete',
       }),
     };
   }
