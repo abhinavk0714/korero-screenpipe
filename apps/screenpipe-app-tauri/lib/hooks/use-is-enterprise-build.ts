@@ -39,24 +39,30 @@ async function withTimeout<T>(
 export const E2E_FORCE_ENTERPRISE_BUILD_KEY =
   "screenpipe_e2e_force_enterprise_build";
 
-function isE2eEnterpriseForced(): boolean {
+function getE2eEnterpriseBuildOverride(): boolean | null {
   if (
     process.env.NEXT_PUBLIC_SCREENPIPE_E2E !== "true" ||
     typeof window === "undefined"
   ) {
-    return false;
+    return null;
   }
   try {
+    // E2E builds are consumer builds by default. Dedicated enterprise specs
+    // opt in before reloading the webview; no test build should depend on a
+    // startup IPC round trip merely to render its first page.
     return window.localStorage?.getItem(E2E_FORCE_ENTERPRISE_BUILD_KEY) === "1";
   } catch {
+    // The E2E-only override is compiled out of production bundles. If a test
+    // webview cannot access storage, keep the documented consumer default.
     return false;
   }
 }
 
 async function resolveEnterpriseBuild(): Promise<boolean> {
-  if (isE2eEnterpriseForced()) {
-    cachedResult = true;
-    return true;
+  const e2eOverride = getE2eEnterpriseBuildOverride();
+  if (e2eOverride !== null) {
+    cachedResult = e2eOverride;
+    return e2eOverride;
   }
   if (cachedResult !== null) return cachedResult;
   if (pendingPromise) return pendingPromise;
