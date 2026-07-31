@@ -19,11 +19,13 @@ import { localFetch } from "@/lib/api";
 import { Bell, Check, Copy, ExternalLink } from "lucide-react";
 import {
   executeNotificationAction,
+  partitionNotificationActions,
   type NotificationAction,
 } from "@/lib/notifications/actions";
 import { notificationAnalyticsProperties } from "@/lib/notification-analytics";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { NotificationActionButton } from "@/components/notification-action-button";
+import { NotificationActionMenu } from "@/components/notification-action-menu";
 
 interface NotificationPayload {
   id: string;
@@ -95,6 +97,7 @@ export default function NotificationPanelPage() {
   const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoDismissMsRef = useRef(20000);
   const hoveredRef = useRef(false);
+  const actionMenuOpenRef = useRef(false);
   const pausedProgressRef = useRef<number | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -378,7 +381,7 @@ export default function NotificationPanelPage() {
     }
     let elapsedBeforePause = 0;
     let resumedAt = Date.now();
-    let wasHovered = false;
+    let wasPaused = false;
     let dismissed = false;
 
     const doHide = () => {
@@ -388,18 +391,19 @@ export default function NotificationPanelPage() {
     };
 
     intervalRef.current = setInterval(() => {
-      if (hoveredRef.current) {
-        if (!wasHovered) {
-          // Just entered hover — snapshot elapsed time
+      const isPaused = hoveredRef.current || actionMenuOpenRef.current;
+      if (isPaused) {
+        if (!wasPaused) {
+          // Just hovered or opened an action menu — snapshot elapsed time.
           elapsedBeforePause += Date.now() - resumedAt;
-          wasHovered = true;
+          wasPaused = true;
         }
         return;
       }
-      if (wasHovered) {
-        // Just left hover — restart the clock
+      if (wasPaused) {
+        // Interaction ended — restart the clock.
         resumedAt = Date.now();
-        wasHovered = false;
+        wasPaused = false;
       }
       const elapsed = elapsedBeforePause + (Date.now() - resumedAt);
       const remaining = Math.max(0, 100 - (elapsed / totalMs) * 100);
@@ -414,7 +418,7 @@ export default function NotificationPanelPage() {
     // Windows where unfocused webview timers can be throttled to ~1s.
     // This ensures the notification always dismisses even if setInterval stalls.
     const safetyTimeout = setTimeout(() => {
-      if (!hoveredRef.current) {
+      if (!hoveredRef.current && !actionMenuOpenRef.current) {
         doHide();
       }
     }, totalMs + 2000);
@@ -432,6 +436,14 @@ export default function NotificationPanelPage() {
   if (!payload || !visible) {
     return null;
   }
+
+  // The toast always supplies its own dismiss affordance. Do not render a
+  // second dismiss button when an agent included type=dismiss in the payload.
+  const actionPresentation = partitionNotificationActions(
+    payload.actions.filter((action) => action.type !== "dismiss"),
+  );
+  const presentedActionCount =
+    actionPresentation.menus.length + actionPresentation.standalone.length;
 
   return (
     <div
@@ -669,7 +681,7 @@ export default function NotificationPanelPage() {
         </div>
 
         {/* Actions */}
-        {payload.actions.length > 0 && (
+        {presentedActionCount > 0 && (
           <div
             style={{
               display: "flex",
@@ -714,30 +726,45 @@ export default function NotificationPanelPage() {
                 restart failed{restartError ? `: ${restartError}` : ""}
               </span>
             ) : (
-              payload.actions.map((action, index) => {
-                const actionLabel =
-                  action.label ||
-                  (action.type === "copy"
-                    ? copied
-                      ? "copied"
-                      : "copy"
-                    : undefined) ||
-                  (action.type === "source" ? "source" : undefined) ||
-                  action.action ||
-                  action.type ||
-                  "action";
-                return (
-                  <NotificationActionButton
-                    key={action.id || action.action || action.type || index}
-                    onClick={() =>
-                      handleAction(action.type ? action : action.action || "")
-                    }
-                    label={actionLabel}
-                    primary={action.primary}
-                    shareAvailableWidth={payload.actions.length > 1}
+              <>
+                {actionPresentation.menus.map((menu) => (
+                  <NotificationActionMenu
+                    key={`menu-${menu.label}`}
+                    label={menu.label}
+                    actions={menu.actions}
+                    onSelect={handleAction}
+                    shareAvailableWidth={presentedActionCount > 1}
+                    testId={`notification-action-menu-${menu.label}`}
+                    onOpenChange={(open) => {
+                      actionMenuOpenRef.current = open;
+                    }}
                   />
-                );
-              })
+                ))}
+                {actionPresentation.standalone.map((action, index) => {
+                  const actionLabel =
+                    action.label ||
+                    (action.type === "copy"
+                      ? copied
+                        ? "copied"
+                        : "copy"
+                      : undefined) ||
+                    (action.type === "source" ? "source" : undefined) ||
+                    action.action ||
+                    action.type ||
+                    "action";
+                  return (
+                    <NotificationActionButton
+                      key={action.id || action.action || action.type || index}
+                      onClick={() =>
+                        handleAction(action.type ? action : action.action || "")
+                      }
+                      label={actionLabel}
+                      primary={action.primary}
+                      shareAvailableWidth={presentedActionCount > 1}
+                    />
+                  );
+                })}
+              </>
             )}
           </div>
         )}

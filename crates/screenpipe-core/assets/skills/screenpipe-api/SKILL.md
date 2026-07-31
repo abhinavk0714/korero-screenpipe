@@ -347,6 +347,11 @@ curl -X POST http://localhost:11435/notify -H "Content-Type: application/json" \
 curl -X POST http://localhost:11435/notify -H "Content-Type: application/json" \
   -d '{"title":"Meeting summary","body":"**Q3 Planning** saved\n\nopen [notes](~/Documents/q3.md)","actions":[{"id":"view","label":"view","type":"deeplink","url":"screenpipe://timeline"},{"id":"skip","label":"skip","type":"dismiss"}]}'
 
+# Neutral chooser: two or more actions with the same `menu` label collapse into
+# one dropdown. Opening it never acts; only the option the user selects runs.
+curl -X POST http://localhost:11435/notify -H "Content-Type: application/json" \
+  -d '{"title":"Q3 planning summarized","body":"summary saved — share it?","actions":[{"id":"notion","label":"Notion","menu":"send somewhere","type":"chat","prompt":"prepare this meeting summary for Notion and ask me to choose the page","auto_send":false,"context":{"meeting_id":42}},{"id":"slack","label":"Slack","menu":"send somewhere","type":"chat","prompt":"prepare this meeting summary for Slack and ask me to choose the channel","auto_send":false,"context":{"meeting_id":42}},{"id":"review","label":"review in chat","type":"pipe","pipe":"meeting-summary","open_in_chat":true,"context":{"meeting_id":42}}]}'
+
 # Ask permission, then run a pipe on approval — the opt-in flow. `type:"pipe"`
 # runs the TARGET pipe when clicked; `context` is injected into that pipe's
 # prompt. Set `pipe` explicitly (omit it and it falls back to the sender = no-op).
@@ -361,7 +366,7 @@ curl -X POST http://localhost:11435/notify -H "Content-Type: application/json" \
   -d '{"title":"summarize this call into a CRM note?","body":"approve to draft it","actions":[{"id":"go","label":"draft it","type":"chat","primary":true,"prompt":"summarize meeting 274 into a short CRM follow-up note and save it to output/","context":{"meeting_id":274}},{"id":"no","label":"no","type":"dismiss"}]}'
 ```
 
-Action types: `link` (web URL), `deeplink` (`screenpipe://`), `pipe` (run an installed pipe — needs `pipe`, optional `context`, optional `open_in_chat`), `chat` (run an inline `prompt` in a fresh chat session, no installed pipe needed — optional `context`, optional `auto_send`), `api` (POST a local endpoint — needs `url`, optional `method`/`body`), `dismiss`. Fields: `title`* , `body`* (markdown), `type` (default "pipe"), `timeout`/`autoDismissMs` (ms, default 20000), `actions` (buttons; up to 5, each needs `id`/`label`/`type`). Body links: web URL → browser, file path (`~/notes.md`, `/var/log/app.log`) → default app, `screenpipe://...` → in-app. Returns `{"success":true}`.
+Action types: `link` (web URL), `deeplink` (`screenpipe://`), `pipe` (run an installed pipe — needs `pipe`, optional `context`, optional `open_in_chat`), `chat` (run an inline `prompt` in a fresh chat session, no installed pipe needed — optional `context`, optional `auto_send`), `api` (POST a local endpoint — needs `url`, optional `method`/`body`), `dismiss`. Fields: `title`* , `body`* (markdown), `type` (default "pipe"), `timeout`/`autoDismissMs` (ms, default 20000), `actions` (up to 5, each needs `id`/`label`/`type`; two or more with the same non-empty `menu` render in one neutral chooser). Do not mark a grouped destination `primary` merely because it is connected. Body links: web URL → browser, file path (`~/notes.md`, `/var/log/app.log`) → default app, `screenpipe://...` → in-app. Returns `{"success":true}`.
 
 ---
 

@@ -15,8 +15,10 @@ import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
 import {
   executeNotificationAction,
+  partitionNotificationActions,
   type NotificationAction,
 } from "@/lib/notifications/actions";
+import { NotificationActionMenu } from "@/components/notification-action-menu";
 import {
   Popover,
   PopoverContent,
@@ -327,6 +329,8 @@ export function NotificationInboxPanel({
           displayed.map((entry, idx) => {
             const isExpanded = expandedId === entry.id;
             const rowActions = actionsFor(entry);
+            const rowActionPresentation =
+              partitionNotificationActions(rowActions);
             return (
               <Fragment key={entry.id}>
                 {idx === 0 && needsYou.length > 0 && (
@@ -440,13 +444,23 @@ export function NotificationInboxPanel({
                       className="flex flex-wrap items-center gap-1 mt-1.5 pl-4"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {rowActions.map((action, i) => (
+                      {rowActionPresentation.menus.map((menu) => (
+                        <NotificationActionMenu
+                          key={`menu-${menu.label}`}
+                          label={menu.label}
+                          actions={menu.actions}
+                          onSelect={(action) => runAction(entry, action)}
+                          surface="bell"
+                          testId={`notification-bell-menu-${entry.id}-${menu.label}`}
+                        />
+                      ))}
+                      {rowActionPresentation.standalone.map((action, i) => (
                         <button
                           key={action.id ?? action.action ?? i}
                           data-testid={`notification-bell-action-${entry.id}-${i}`}
                           onClick={() => runAction(entry, action)}
                           className={cn(
-                            "text-[10px] px-2 py-0.5 rounded transition-colors",
+                            "rounded-none px-2 py-0.5 text-[10px] transition-colors",
                             action.primary
                               ? "bg-foreground text-background hover:bg-foreground/90"
                               : "border border-border text-muted-foreground hover:text-foreground hover:bg-muted/40",

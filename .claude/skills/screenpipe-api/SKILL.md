@@ -552,6 +552,13 @@ curl -X POST http://localhost:11435/notify \
   -H "Content-Type: application/json" \
   -d '{"title": "PR ready for review", "body": "nice work", "actions": [{"id": "open", "label": "open pr", "type": "link", "url": "https://github.com/screenpipe/screenpipe/pull/1234"}]}'
 
+# Several options without forcing a default. Give two or more actions the same
+# `menu` label and the macOS + Windows/Linux renderers collapse them into one
+# chooser. Opening the chooser does nothing; only selecting an option acts.
+curl -X POST http://localhost:11435/notify \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Q3 planning summarized", "body": "summary saved — share it?", "actions": [{"id":"notion","label":"Notion","menu":"send somewhere","type":"chat","prompt":"prepare this meeting summary for Notion and ask me to choose the page","auto_send":false,"context":{"meeting_id":42}},{"id":"slack","label":"Slack","menu":"send somewhere","type":"chat","prompt":"prepare this meeting summary for Slack and ask me to choose the channel","auto_send":false,"context":{"meeting_id":42}},{"id":"review","label":"review in chat","type":"pipe","pipe":"meeting-summary","open_in_chat":true,"context":{"meeting_id":42}}]}'
+
 # Ask permission, then run a pipe on approval — the opt-in / agent-gated flow.
 # `type: "pipe"` runs the TARGET pipe when clicked (POST /pipes/<pipe>/run); the
 # `context` is injected into that pipe's prompt as the notification action
@@ -591,7 +598,7 @@ curl -X POST http://localhost:11435/notify \
 | `type` | string | No | Category (default "pipe") |
 | `timeout` | integer | No | Auto-dismiss in ms (default 20000) |
 | `autoDismissMs` | integer | No | Alias for timeout |
-| `actions` | array | No | Action buttons (up to 5; each needs `id`, `label`, `type`) |
+| `actions` | array | No | Actions (up to 5; each needs `id`, `label`, `type`; two or more sharing `menu` render in one chooser) |
 
 **Action button `type`s:**
 - `link` — open a web URL in the browser (`url`)
@@ -601,6 +608,7 @@ curl -X POST http://localhost:11435/notify \
 - `api` — POST a local endpoint (`url`, optional `method`, optional `body`)
 - `dismiss` — close the notification, no side effect
 - `primary: true` renders the button filled (the recommended action). Actions persist into the notification bell, so a missed toast can still be acted on.
+- `menu: "send somewhere"` groups two or more actions under one neutral chooser. Do not set `primary` on grouped choices or infer that connection availability makes one destination preferred.
 
 **Supported link types in body markdown:**
 - Web URLs: `[docs](https://docs.screenpi.pe)` — opens in browser

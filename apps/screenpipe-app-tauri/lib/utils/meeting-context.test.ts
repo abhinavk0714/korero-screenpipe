@@ -41,6 +41,19 @@ describe("meeting summary pipe prompt", () => {
     expect(prompt).not.toContain("export the meeting");
     expect(prompt).not.toContain("ffmpeg-sample");
   });
+
+  it("offers several neutral connected destinations for follow-up", () => {
+    const prompt = buildMeetingSummarizeInstructions(42, {
+      followUpAsk: true,
+    });
+
+    expect(prompt).toContain("offer 2-3 useful options");
+    expect(prompt).toContain(
+      "connection availability alone is not evidence that the user prefers that app",
+    );
+    expect(prompt).toContain("otherwise order options alphabetically");
+    expect(prompt).toContain("confirm the exact channel, chat, or parent page");
+  });
 });
 
 describe("meeting-context image notes", () => {

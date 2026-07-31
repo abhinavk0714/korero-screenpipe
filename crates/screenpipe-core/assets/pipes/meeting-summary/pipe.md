@@ -73,18 +73,18 @@ step 3 — if your summary is worth saving, append it to the meeting note (and r
 
 replace `<EXISTING_NOTE>` with the meeting's current `note` field (empty string if none) so you don't overwrite the user's work; just append your summary under a `## Summary` heading. for the title: if the current title is missing, generic ("untitled", "meeting", just the app name) or doesn't capture what actually happened, replace it with a 5-8 word plain-english title (no quotes, no "meeting about…" prefix) — otherwise omit the field so a user-set title is left alone. if there's nothing useful to summarize (empty transcript, irrelevant audio), say so out loud and skip the PUT — don't write a placeholder.
 
-step 4 — offer to push the summary into one of the user's connected apps (ask, never push on your own). list what's actually connected, then let them pick with one click:
+step 4 — offer an optional, neutral share chooser (ask, never push on your own). list what's actually connected, then let the user choose; connection availability alone is not evidence that Telegram or any other app is the preferred destination:
 
   curl -s -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/connections"   # keep only "connected": true
 
-rank the connected targets by relevance — an app used during the meeting first (Notion, Slack, Linear, …). then post a desktop notification whose action buttons are those targets, so the ask renders as buttons in the UI:
+choose 2-3 genuinely useful connected targets when available. rank an app used during the meeting or an exact destination the user previously chose first; otherwise order the choices alphabetically. never mark a destination `primary` just because it is connected. give every destination action the same `"menu": "send somewhere"` value so macOS and Windows/Linux render one chooser instead of a row that appears to recommend the first app:
 
   curl -s -X POST "http://localhost:11435/notify" \
     -H "Content-Type: application/json" \
-    -d '{"title": "<TITLE> summarized", "body": "<one-line recap> — push it somewhere?", "actions": [
-          {"label": "push to notion", "type": "api", "method": "POST", "url": "http://localhost:3030/connections/notion/proxy/v1/pages", "body": { /* page payload built from the summary */ }},
-          {"label": "review in chat", "type": "pipe", "pipe": "meeting-summary", "open_in_chat": true, "context": {"meeting_id": <ID>}},
-          {"label": "dismiss", "type": "dismiss"}
+    -d '{"title": "<TITLE> summarized", "body": "<one-line recap> — share it?", "actions": [
+          {"id": "notion", "label": "Notion", "menu": "send somewhere", "type": "chat", "prompt": "prepare this summary for Notion and ask me to choose the page", "auto_send": false, "context": {"meeting_id": <ID>}},
+          {"id": "slack", "label": "Slack", "menu": "send somewhere", "type": "chat", "prompt": "prepare this summary for Slack and ask me to choose the channel", "auto_send": false, "context": {"meeting_id": <ID>}},
+          {"id": "review", "label": "review in chat", "type": "pipe", "pipe": "meeting-summary", "open_in_chat": true, "context": {"meeting_id": <ID>}}
         ]}'
 
-each button maps to a connection's endpoint from its `/connections` `description` (`POST /connections/<id>/send` for slack/telegram/discord, `POST /connections/<id>/proxy/...` for notion/linear/etc.). when a target needs a destination you can't infer (a Notion parent page, a Slack channel), make that button `"review in chat"` so the user confirms specifics before anything leaves the machine. if nothing is connected, skip the notification and just say that connecting an app would let you push summaries next time.
+the example destinations are illustrative: include only apps that `/connections` reports as connected. a direct-send option may map to the credential-safe endpoint from the connection's description (`POST /connections/<id>/send`) only when its exact destination is already configured. when a target still needs a page, channel, team, or other destination, make that menu option a `type: "chat"` action with `"auto_send": false` so the user supplies it before anything leaves the machine. keep `review in chat` outside the menu. do not add a dismiss action; the notification already renders one. if fewer than two useful destinations are connected, the single choice safely falls back to a normal button. if nothing is connected, skip the notification and just say that connecting an app would let you share summaries next time.

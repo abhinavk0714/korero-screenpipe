@@ -18,6 +18,7 @@ struct NotificationAction: Codable {
     // without breaking the legacy callers that still send it.
     var action: String?
     var primary: Bool?
+    var menu: String?
     var id: String?
     var type: String?
     var pipe: String?
@@ -32,6 +33,64 @@ struct NotificationAction: Codable {
     var body: [String: AnyCodable]?
     var toast: String?
     var open_in_chat: Bool?
+}
+
+private struct NotificationActionMenuGroup: Identifiable {
+    let id: String
+    let label: String
+    let actions: [NotificationAction]
+}
+
+private struct NotificationActionPresentation {
+    let standalone: [NotificationAction]
+    let menus: [NotificationActionMenuGroup]
+
+    var count: Int { standalone.count + menus.count }
+}
+
+private func normalizedMenuLabel(_ action: NotificationAction) -> String? {
+    guard let label = action.menu?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !label.isEmpty else {
+        return nil
+    }
+    return label
+}
+
+/// Keep the notification wire format flat while rendering two or more actions
+/// with the same `menu` label inside one neutral chooser. A single option falls
+/// back to a button so malformed or partially generated payloads stay usable.
+private func presentNotificationActions(_ actions: [NotificationAction]) -> NotificationActionPresentation {
+    var grouped: [String: (label: String, actions: [NotificationAction])] = [:]
+    for action in actions {
+        guard let label = normalizedMenuLabel(action) else { continue }
+        let key = label.lowercased()
+        if var group = grouped[key] {
+            group.actions.append(action)
+            grouped[key] = group
+        } else {
+            grouped[key] = (label, [action])
+        }
+    }
+
+    var standalone: [NotificationAction] = []
+    var menus: [NotificationActionMenuGroup] = []
+    var emittedMenus = Set<String>()
+    for action in actions {
+        guard let label = normalizedMenuLabel(action) else {
+            standalone.append(action)
+            continue
+        }
+        let key = label.lowercased()
+        guard let group = grouped[key], group.actions.count >= 2 else {
+            standalone.append(action)
+            continue
+        }
+        if emittedMenus.insert(key).inserted {
+            menus.append(NotificationActionMenuGroup(id: key, label: group.label, actions: group.actions))
+        }
+    }
+
+    return NotificationActionPresentation(standalone: standalone, menus: menus)
 }
 
 struct NotificationPayload: Codable {
@@ -199,6 +258,55 @@ struct BrandButton: View {
     }
 }
 
+/// A neutral action chooser. Opening the menu has no side effect; the callback
+/// receives only the exact option the user selected.
+@available(macOS 13.0, *)
+private struct BrandActionMenu: View {
+    let label: String
+    let actions: [NotificationAction]
+    let fontSize: CGFloat
+    let fillsAvailableWidth: Bool
+    let actionLabel: (NotificationAction) -> String
+    let onSelect: (NotificationAction) -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Menu {
+            ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
+                Button(actionLabel(action)) {
+                    onSelect(action)
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(label.uppercased())
+                    .font(Brand.swiftUIMonoFont(size: fontSize, weight: .medium))
+                    .tracking(0.5)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: max(7, fontSize - 2), weight: .medium))
+            }
+            .frame(maxWidth: fillsAvailableWidth ? .infinity : nil)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(maxWidth: fillsAvailableWidth ? .infinity : nil)
+        .foregroundColor(isHovered ? Color(nsColor: .windowBackgroundColor) : .primary.opacity(0.75))
+        .background(Rectangle().fill(isHovered ? Color.primary : Color.clear))
+        .overlay(Rectangle().stroke(Color.primary.opacity(0.12), lineWidth: 1))
+        .contentShape(Rectangle())
+        .accessibilityLabel(Text(label))
+        .onHover { hovering in
+            withAnimation(.linear(duration: Brand.animDuration)) {
+                isHovered = hovering
+            }
+        }
+    }
+}
+
 /// Pointer-transparent full label for a truncated native action button.
 /// Kept inside the panel because AppKit help tags do not reliably appear on
 /// non-activating NSPanel windows.
@@ -295,6 +403,12 @@ struct NotificationContentView: View {
     @State private var copied = false
     @State private var hoveredActionLabel: String?
 
+    private var actionPresentation: NotificationActionPresentation {
+        // The toast already has a persistent dismiss affordance on the right.
+        // Avoid rendering a second dismiss button from agent-authored payloads.
+        presentNotificationActions(payload.actions.filter { $0.type != "dismiss" })
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header
@@ -357,32 +471,25 @@ struct NotificationContentView: View {
             .frame(maxHeight: 200)
 
             // Action buttons
-            if !payload.actions.isEmpty {
+            if actionPresentation.count > 0 {
                 HStack(spacing: 8) {
-                    ForEach(Array(payload.actions.enumerated()), id: \.offset) { _, action in
+                    ForEach(actionPresentation.menus) { menu in
+                        BrandActionMenu(
+                            label: menu.label,
+                            actions: menu.actions,
+                            fontSize: 10,
+                            fillsAvailableWidth: actionPresentation.count > 1,
+                            actionLabel: actionLabel,
+                            onSelect: performAction
+                        )
+                    }
+                    ForEach(Array(actionPresentation.standalone.enumerated()), id: \.offset) { _, action in
                         let label = actionLabel(action)
                         BrandButton(
                             label: label,
                             isPrimary: action.primary == true,
-                            fillsAvailableWidth: payload.actions.count > 1,
-                            action: {
-                                if action.type == "copy" {
-                                    var copyAction = action
-                                    if copyAction.value == nil {
-                                        copyAction.value = payload.body
-                                    }
-                                    copyActionText(copyAction)
-                                    copied = true
-                                    sendAction(copyAction)
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
-                                        copied = false
-                                    }
-                                } else if action.type == "source" {
-                                    onAction(sourceActionWithFallback(action))
-                                } else {
-                                    onAction(action)
-                                }
-                            },
+                            fillsAvailableWidth: actionPresentation.count > 1,
+                            action: { performAction(action) },
                             onTruncatedHoverChange: { show in
                                 if show {
                                     hoveredActionLabel = label
@@ -483,6 +590,25 @@ struct NotificationContentView: View {
             NSWorkspace.shared.open(url)
             return .handled
         })
+    }
+
+    private func performAction(_ action: NotificationAction) {
+        if action.type == "copy" {
+            var copyAction = action
+            if copyAction.value == nil {
+                copyAction.value = payload.body
+            }
+            copyActionText(copyAction)
+            copied = true
+            sendAction(copyAction)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+                copied = false
+            }
+        } else if action.type == "source" {
+            onAction(sourceActionWithFallback(action))
+        } else {
+            onAction(action)
+        }
     }
 
     private func sendActionJson(_ json: String) {
@@ -1243,6 +1369,10 @@ private struct InboxRowView: View {
     @State private var hovered = false
     @State private var copied = false
 
+    private var actionPresentation: NotificationActionPresentation {
+        presentNotificationActions(inboxRowActions(entry))
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 0) {
@@ -1306,7 +1436,17 @@ private struct InboxRowView: View {
                             .foregroundColor(.secondary.opacity(0.7))
                     }
                     HStack(spacing: 6) {
-                        ForEach(Array(inboxRowActions(entry).enumerated()), id: \.offset) { _, action in
+                        ForEach(actionPresentation.menus) { menu in
+                            BrandActionMenu(
+                                label: menu.label,
+                                actions: menu.actions,
+                                fontSize: 9,
+                                fillsAvailableWidth: false,
+                                actionLabel: { $0.label ?? $0.action ?? $0.type ?? "action" },
+                                onSelect: onRunAction
+                            )
+                        }
+                        ForEach(Array(actionPresentation.standalone.enumerated()), id: \.offset) { _, action in
                             BrandTextButton(label: action.label ?? "action", fontSize: 9) {
                                 onRunAction(action)
                             }

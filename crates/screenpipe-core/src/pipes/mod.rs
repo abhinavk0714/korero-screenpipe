@@ -6214,6 +6214,11 @@ pub fn parse_frontmatter(content: &str) -> Result<(PipeConfig, String)> {
 /// Returns the rewritten content only when a migration actually applied, so the
 /// caller can skip the disk write otherwise. Idempotent: running it on
 /// already-fixed content is a no-op.
+const MEETING_SUMMARY_LEGACY_SHARE_START: &str = "step 4 — offer to push the summary into one of the user's connected apps (ask, never push on your own). list what's actually connected, then let them pick with one click:";
+const MEETING_SUMMARY_LEGACY_SHARE_END: &str = "each button maps to a connection's endpoint from its `/connections` `description` (`POST /connections/<id>/send` for slack/telegram/discord, `POST /connections/<id>/proxy/...` for notion/linear/etc.). when a target needs a destination you can't infer (a Notion parent page, a Slack channel), make that button `\"review in chat\"` so the user confirms specifics before anything leaves the machine. if nothing is connected, skip the notification and just say that connecting an app would let you push summaries next time.";
+const MEETING_SUMMARY_CURRENT_SHARE_START: &str =
+    "step 4 — offer an optional, neutral share chooser";
+
 fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<String> {
     if name == "automate-my-work" {
         let replacement = BUNDLED_BUILTIN_PIPES
@@ -6283,6 +6288,37 @@ fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<String> {
     let mut updated = original.to_string();
     for (old, new) in replacements {
         updated = updated.replace(old, new);
+    }
+
+    // Existing meeting-summary installs retain their local prompt across app
+    // upgrades. Replace only the exact legacy share section, preserving all
+    // user-authored text before and after it. The current bundled section is
+    // the source of truth so the prompt and notification menu contract cannot
+    // silently drift apart.
+    if name == "meeting-summary" {
+        let legacy_range = updated
+            .find(MEETING_SUMMARY_LEGACY_SHARE_START)
+            .and_then(|start| {
+                updated[start..]
+                    .find(MEETING_SUMMARY_LEGACY_SHARE_END)
+                    .map(|end_offset| {
+                        let end = start + end_offset + MEETING_SUMMARY_LEGACY_SHARE_END.len();
+                        start..end
+                    })
+            });
+        if let Some(range) = legacy_range {
+            if let Some(bundled) =
+                BUNDLED_BUILTIN_PIPES
+                    .iter()
+                    .find_map(|(builtin_name, content)| {
+                        (*builtin_name == "meeting-summary").then_some(*content)
+                    })
+            {
+                if let Some(current_start) = bundled.find(MEETING_SUMMARY_CURRENT_SHARE_START) {
+                    updated.replace_range(range, bundled[current_start..].trim_end());
+                }
+            }
+        }
     }
 
     (updated != original).then_some(updated)
@@ -7987,6 +8023,25 @@ mod tests {
         assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
     }
 
+    #[test]
+    fn migrate_builtin_pipe_replaces_legacy_share_buttons_with_neutral_menu() {
+        let stale = format!(
+            "custom intro\n\n{}\nlegacy share instructions\n{}\n\nuser appendix",
+            MEETING_SUMMARY_LEGACY_SHARE_START, MEETING_SUMMARY_LEGACY_SHARE_END
+        );
+
+        let fixed = migrate_builtin_pipe_text("meeting-summary", &stale)
+            .expect("legacy share section should migrate");
+
+        assert!(fixed.starts_with("custom intro"));
+        assert!(fixed.ends_with("user appendix"));
+        assert!(fixed.contains("neutral share chooser"));
+        assert!(fixed.contains("\"menu\": \"send somewhere\""));
+        assert!(fixed.contains("connection availability alone is not evidence"));
+        assert!(!fixed.contains(MEETING_SUMMARY_LEGACY_SHARE_START));
+        assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
+    }
+
     /// The shipped prompt must already be in its migrated form, or every fresh
     /// install would be rewritten on the next startup.
     #[test]
@@ -8001,6 +8056,9 @@ mod tests {
         assert!(!body.contains("buildMeetingSummarizeInstructions"));
         assert!(body.contains("screenpipe API search is required"));
         assert!(body.contains("never run recursive `find` or `grep`"));
+        assert!(body.contains("\"menu\": \"send somewhere\""));
+        assert!(!body.contains("\"label\": \"dismiss\""));
+        assert!(!body.contains("\"id\": \"telegram\""));
     }
 
     #[test]
