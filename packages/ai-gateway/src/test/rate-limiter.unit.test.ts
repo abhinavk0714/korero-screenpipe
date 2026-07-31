@@ -116,6 +116,12 @@ describe('getTierConfig — freeRpm bucket', () => {
 		expect(cfg.business_ultra.dailyQueries).toBe(6200);
 		expect(cfg.business_ultra.freeRpm).toBe(999);
 	});
+
+	it('fails closed to safe defaults for malformed or non-positive overrides', () => {
+		const cfg = getTierConfig({ LIMIT_BUSINESS_MAX_DAILY: '-1', LIMIT_BUSINESS_MAX_RPM: '0', LIMIT_BUSINESS_MAX_FREE_RPM: '120rpm', LIMIT_BUSINESS_ULTRA_DAILY: '1.5', LIMIT_BUSINESS_ULTRA_RPM: '9007199254740993' } as unknown as Env);
+		expect(cfg.business_max).toMatchObject({ dailyQueries: 3000, rpm: 120, freeRpm: 480 });
+		expect(cfg.business_ultra).toMatchObject({ dailyQueries: 6000, rpm: 240 });
+	});
 });
 
 describe('checkRateLimit — capacity tier separation', () => {

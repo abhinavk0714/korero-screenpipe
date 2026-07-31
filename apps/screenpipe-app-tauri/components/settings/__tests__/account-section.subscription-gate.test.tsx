@@ -209,6 +209,23 @@ describe("AccountSection subscription/login gating", () => {
     expect(screen.queryByTestId("account-capacity-upgrade")).not.toBeInTheDocument();
   });
 
+  it("routes Max to Ultra and never promotes Ultra or org plans", () => {
+    vi.stubEnv("NEXT_PUBLIC_BUSINESS_POWER_PLANS_ENABLED", "true");
+    mocks.state.user = { id: "u1", email: "max@screenpipe.test", token: "tok", cloud_subscribed: true, subscription_plan: "pro_max" };
+
+    const { rerender } = render(<AccountSection />);
+    fireEvent.click(screen.getByTestId("account-capacity-upgrade-button"));
+    expect(mocks.openUrl).toHaveBeenLastCalledWith(
+      "https://screenpipe.com/account/billing?target_plan=pro_ultra&interval=month",
+    );
+
+    for (const plan of ["pro_ultra", "team", "enterprise"]) {
+      mocks.state.user = { ...mocks.state.user, subscription_plan: plan };
+      rerender(<AccountSection />);
+      expect(screen.queryByTestId("account-capacity-upgrade")).not.toBeInTheDocument();
+    }
+  });
+
   it("opens website billing before a profile-granted Business plan expires", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-21T12:00:00.000Z"));

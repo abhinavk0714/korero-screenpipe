@@ -14,7 +14,17 @@ mock.module('@clerk/backend', () => ({
   verifyToken: verifyTokenMock,
 }));
 
-const { validateAuth, __resetAuthEntitlementCacheForTests } = await import('./auth');
+const { validateAuth, __resetAuthEntitlementCacheForTests, resolveUsageTier } = await import('./auth');
+
+describe('resolveUsageTier', () => {
+	it('grants power capacity only when the authenticated model tier is subscribed', () => {
+		expect(resolveUsageTier('business_max', 'subscribed')).toBe('business_max');
+		expect(resolveUsageTier('business_ultra', 'subscribed')).toBe('business_ultra');
+		expect(resolveUsageTier('business_max', 'logged_in')).toBe('logged_in');
+		expect(resolveUsageTier('business_ultra', 'anonymous')).toBe('anonymous');
+		expect(resolveUsageTier('business', 'subscribed')).toBe('subscribed');
+	});
+});
 
 // Canceling a subscription must not strip Pro access before the paid period
 // ends. Stripe stamps canceled_at / flips status to canceled the moment a

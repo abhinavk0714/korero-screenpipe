@@ -235,44 +235,50 @@ const DEFAULT_TIER_CONFIG: Record<UsageTier, TierLimits> = {
 };
 
 /** Resolve tier config with env var overrides (LIMIT_SUBSCRIBED_DAILY, etc.) */
+function positiveIntegerOverride(value: string | undefined, fallback: number): number {
+  if (!value || !/^[1-9]\d*$/.test(value)) return fallback;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : fallback;
+}
+
 export function getTierConfig(env?: Env): Record<UsageTier, TierLimits> {
   if (!env) return DEFAULT_TIER_CONFIG;
   return {
     anonymous: {
       ...DEFAULT_TIER_CONFIG.anonymous,
-      dailyQueries: parseInt(env.LIMIT_ANONYMOUS_DAILY || '') || DEFAULT_TIER_CONFIG.anonymous.dailyQueries,
-      rpm: parseInt(env.LIMIT_ANONYMOUS_RPM || '') || DEFAULT_TIER_CONFIG.anonymous.rpm,
-      freeRpm: parseInt(env.LIMIT_ANONYMOUS_FREE_RPM || '') || DEFAULT_TIER_CONFIG.anonymous.freeRpm,
+      dailyQueries: positiveIntegerOverride(env.LIMIT_ANONYMOUS_DAILY, DEFAULT_TIER_CONFIG.anonymous.dailyQueries),
+      rpm: positiveIntegerOverride(env.LIMIT_ANONYMOUS_RPM, DEFAULT_TIER_CONFIG.anonymous.rpm),
+      freeRpm: positiveIntegerOverride(env.LIMIT_ANONYMOUS_FREE_RPM, DEFAULT_TIER_CONFIG.anonymous.freeRpm),
     },
     logged_in: {
       ...DEFAULT_TIER_CONFIG.logged_in,
-      dailyQueries: parseInt(env.LIMIT_LOGGED_IN_DAILY || '') || DEFAULT_TIER_CONFIG.logged_in.dailyQueries,
-      rpm: parseInt(env.LIMIT_LOGGED_IN_RPM || '') || DEFAULT_TIER_CONFIG.logged_in.rpm,
-      freeRpm: parseInt(env.LIMIT_LOGGED_IN_FREE_RPM || '') || DEFAULT_TIER_CONFIG.logged_in.freeRpm,
+      dailyQueries: positiveIntegerOverride(env.LIMIT_LOGGED_IN_DAILY, DEFAULT_TIER_CONFIG.logged_in.dailyQueries),
+      rpm: positiveIntegerOverride(env.LIMIT_LOGGED_IN_RPM, DEFAULT_TIER_CONFIG.logged_in.rpm),
+      freeRpm: positiveIntegerOverride(env.LIMIT_LOGGED_IN_FREE_RPM, DEFAULT_TIER_CONFIG.logged_in.freeRpm),
     },
     subscribed: {
       ...DEFAULT_TIER_CONFIG.subscribed,
-      dailyQueries: parseInt(env.LIMIT_SUBSCRIBED_DAILY || '') || DEFAULT_TIER_CONFIG.subscribed.dailyQueries,
-      rpm: parseInt(env.LIMIT_SUBSCRIBED_RPM || '') || DEFAULT_TIER_CONFIG.subscribed.rpm,
-      freeRpm: parseInt(env.LIMIT_SUBSCRIBED_FREE_RPM || '') || DEFAULT_TIER_CONFIG.subscribed.freeRpm,
+      dailyQueries: positiveIntegerOverride(env.LIMIT_SUBSCRIBED_DAILY, DEFAULT_TIER_CONFIG.subscribed.dailyQueries),
+      rpm: positiveIntegerOverride(env.LIMIT_SUBSCRIBED_RPM, DEFAULT_TIER_CONFIG.subscribed.rpm),
+      freeRpm: positiveIntegerOverride(env.LIMIT_SUBSCRIBED_FREE_RPM, DEFAULT_TIER_CONFIG.subscribed.freeRpm),
     },
     business_max: {
       ...DEFAULT_TIER_CONFIG.business_max,
-      dailyQueries: parseInt(env.LIMIT_BUSINESS_MAX_DAILY || '') || DEFAULT_TIER_CONFIG.business_max.dailyQueries,
-      rpm: parseInt(env.LIMIT_BUSINESS_MAX_RPM || '') || DEFAULT_TIER_CONFIG.business_max.rpm,
-      freeRpm: parseInt(env.LIMIT_BUSINESS_MAX_FREE_RPM || '') || DEFAULT_TIER_CONFIG.business_max.freeRpm,
+      dailyQueries: positiveIntegerOverride(env.LIMIT_BUSINESS_MAX_DAILY, DEFAULT_TIER_CONFIG.business_max.dailyQueries),
+      rpm: positiveIntegerOverride(env.LIMIT_BUSINESS_MAX_RPM, DEFAULT_TIER_CONFIG.business_max.rpm),
+      freeRpm: positiveIntegerOverride(env.LIMIT_BUSINESS_MAX_FREE_RPM, DEFAULT_TIER_CONFIG.business_max.freeRpm),
     },
     business_ultra: {
       ...DEFAULT_TIER_CONFIG.business_ultra,
-      dailyQueries: parseInt(env.LIMIT_BUSINESS_ULTRA_DAILY || '') || DEFAULT_TIER_CONFIG.business_ultra.dailyQueries,
-      rpm: parseInt(env.LIMIT_BUSINESS_ULTRA_RPM || '') || DEFAULT_TIER_CONFIG.business_ultra.rpm,
-      freeRpm: parseInt(env.LIMIT_BUSINESS_ULTRA_FREE_RPM || '') || DEFAULT_TIER_CONFIG.business_ultra.freeRpm,
+      dailyQueries: positiveIntegerOverride(env.LIMIT_BUSINESS_ULTRA_DAILY, DEFAULT_TIER_CONFIG.business_ultra.dailyQueries),
+      rpm: positiveIntegerOverride(env.LIMIT_BUSINESS_ULTRA_RPM, DEFAULT_TIER_CONFIG.business_ultra.rpm),
+      freeRpm: positiveIntegerOverride(env.LIMIT_BUSINESS_ULTRA_FREE_RPM, DEFAULT_TIER_CONFIG.business_ultra.freeRpm),
     },
   };
 }
 
 export function getIpDailyLimit(env?: Env): number {
-  return parseInt(env?.LIMIT_IP_DAILY || '') || DEFAULT_IP_DAILY_LIMIT;
+  return positiveIntegerOverride(env?.LIMIT_IP_DAILY, DEFAULT_IP_DAILY_LIMIT);
 }
 
 // Keep static export for tests and backward compat
