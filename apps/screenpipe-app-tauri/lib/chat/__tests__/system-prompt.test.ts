@@ -20,8 +20,16 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("# Voice and length");
     expect(prompt).toContain("# Flip to technical mode");
     expect(prompt).toContain("# Activity recaps");
+    expect(prompt).toContain("# Profile memory");
     expect(prompt).toContain("# Connection write policy");
     expect(prompt).toContain("# Tool selection");
+  });
+
+  it("adds concise profile-memory guidance for durable user facts only", () => {
+    expect(prompt).toContain("keep a compact running user profile");
+    expect(prompt).toContain("Save only stable, reusable facts");
+    expect(prompt).toContain("Do not save temporary task details");
+    expect(prompt).toContain("not a diary or scratchpad");
   });
 
   it("does not restate connection-gating guidance already carried by the tools", () => {
