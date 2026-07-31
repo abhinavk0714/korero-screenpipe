@@ -242,6 +242,30 @@ describe('trackUsage power-tier boundaries', () => {
 		expect(row.daily_count).toBe(3000);
 	});
 
+	it('rejects a weighted request that cannot fit without inflating usage', async () => {
+		const { env, row } = usageEnv(2999);
+		expect(await trackUsage(env, 'max-device', 'business_max', undefined, undefined, 'gpt-5.6-sol')).toMatchObject({
+			used: 2999,
+			limit: 3000,
+			remaining: 1,
+			allowed: false,
+		});
+		expect(row.daily_count).toBe(2999);
+	});
+
+	it('rejects an oversized first request after a daily reset without rewriting the stale counter', async () => {
+		const { env, row } = usageEnv(42);
+		row.last_reset = '2000-01-01';
+		env.LIMIT_BUSINESS_MAX_DAILY = '1';
+		expect(await trackUsage(env, 'max-device', 'business_max', undefined, undefined, 'gpt-5.6-sol')).toMatchObject({
+			used: 0,
+			limit: 1,
+			remaining: 1,
+			allowed: false,
+		});
+		expect(row.daily_count).toBe(42);
+	});
+
 	it('uses the independent Ultra boundary', async () => {
 		const { env } = usageEnv(5999);
 		expect(await trackUsage(env, 'ultra-device', 'business_ultra', undefined, undefined, 'gpt-4o')).toMatchObject({ used: 6000, limit: 6000, remaining: 0, allowed: true });

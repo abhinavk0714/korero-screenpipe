@@ -304,6 +304,49 @@ function getNextResetTime(): string {
   return tomorrow.toISOString();
 }
 
+async function resolveDailyLimitExceeded(
+  env: Env,
+  userId: string | undefined,
+  used: number,
+  limit: number,
+): Promise<UsageResult> {
+  if (userId) {
+    const credit = await tryDeductCredit(env, userId, 'ai_query');
+    if (credit.success) {
+      console.log(`credit deducted for ${userId}, remaining: ${credit.remaining}`);
+      if (credit.remaining <= 10 && env.WEBSITE_URL && env.AUTO_RELOAD_SECRET) {
+        fetch(`${env.WEBSITE_URL}/api/billing/auto-reload-check`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${env.AUTO_RELOAD_SECRET}`,
+          },
+          body: JSON.stringify({ clerk_id: await resolveClerkId(env, userId), remaining_balance: credit.remaining }),
+        }).catch(() => {});
+      }
+      return {
+        used,
+        limit,
+        remaining: Math.max(0, limit - used),
+        allowed: true,
+        resetsAt: getNextResetTime(),
+        paidVia: 'credits',
+        creditsRemaining: credit.remaining,
+      };
+    }
+  }
+
+  const balance = userId ? await getCreditBalance(env, userId) : 0;
+  return {
+    used,
+    limit,
+    remaining: Math.max(0, limit - used),
+    allowed: false,
+    resetsAt: getNextResetTime(),
+    creditsRemaining: balance,
+  };
+}
+
 /**
  * Track a request and check if it's within limits
  * Also checks IP-based limits to prevent device ID spoofing abuse
@@ -360,6 +403,11 @@ export async function trackUsage(
       'SELECT daily_count, last_reset FROM usage WHERE device_id = ?'
     ).bind(deviceId).first<{ daily_count: number; last_reset: string }>();
 
+    const currentDailyCount = existing && existing.last_reset >= today ? existing.daily_count : 0;
+    if (weight > 0 && currentDailyCount + weight > limits.dailyQueries) {
+      return resolveDailyLimitExceeded(env, userId, currentDailyCount, limits.dailyQueries);
+    }
+
     let dailyCount = 0;
 
     if (existing) {
@@ -371,47 +419,6 @@ export async function trackUsage(
         ).bind(weight, today, tier, userId || null, deviceId).run();
         dailyCount = weight;
       } else {
-        // Check limit BEFORE incrementing — don't inflate counter on rejected requests
-        // Skip limit check for free models (weight=0) — they never count toward quota
-        if (weight > 0 && existing.daily_count >= limits.dailyQueries) {
-          // Daily free quota exhausted — try credit fallback
-          if (userId) {
-            const credit = await tryDeductCredit(env, userId, 'ai_query');
-            if (credit.success) {
-              console.log(`credit deducted for ${userId}, remaining: ${credit.remaining}`);
-              // Trigger auto-reload check when balance is getting low
-              if (credit.remaining <= 10 && env.WEBSITE_URL && env.AUTO_RELOAD_SECRET) {
-                fetch(`${env.WEBSITE_URL}/api/billing/auto-reload-check`, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${env.AUTO_RELOAD_SECRET}`,
-                  },
-                  body: JSON.stringify({ clerk_id: await resolveClerkId(env, userId), remaining_balance: credit.remaining }),
-                }).catch(() => {}); // fire-and-forget
-              }
-              return {
-                used: existing.daily_count,
-                limit: limits.dailyQueries,
-                remaining: 0,
-                allowed: true,
-                resetsAt: getNextResetTime(),
-                paidVia: 'credits',
-                creditsRemaining: credit.remaining,
-              };
-            }
-          }
-          // No credits available — check balance for error response
-          const balance = userId ? await getCreditBalance(env, userId) : 0;
-          return {
-            used: existing.daily_count,
-            limit: limits.dailyQueries,
-            remaining: 0,
-            allowed: false,
-            resetsAt: getNextResetTime(),
-            creditsRemaining: balance,
-          };
-        }
         // Increment count by model weight
         dailyCount = existing.daily_count + weight;
         await env.DB.prepare(
