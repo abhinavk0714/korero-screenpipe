@@ -284,13 +284,20 @@ impl CaptureSession {
         }
 
         // --- Snapshot compaction ---
-        screenpipe_engine::start_snapshot_compaction(
-            server.db.clone(),
-            config.video_quality.clone(),
-            shutdown_tx.subscribe(),
-            server.power_manager.clone(),
-            Some(server.hot_frame_cache.clone()),
-        );
+        // Same gate as the standalone engine (bin/screenpipe-engine.rs):
+        // without it the managed/enterprise `disableSnapshotCompaction`
+        // setting is silently ignored in the desktop app.
+        if config.disable_snapshot_compaction {
+            info!("snapshot compaction disabled by settings");
+        } else {
+            screenpipe_engine::start_snapshot_compaction(
+                server.db.clone(),
+                config.video_quality.clone(),
+                shutdown_tx.subscribe(),
+                server.power_manager.clone(),
+                Some(server.hot_frame_cache.clone()),
+            );
+        }
 
         info!("Capture session started successfully");
 
