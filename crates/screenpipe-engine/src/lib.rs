@@ -37,6 +37,7 @@ pub mod permission_monitor;
 pub mod piggyback_telemetry;
 pub mod pipe_permissions_middleware;
 pub mod pipe_store;
+pub mod pipe_stream;
 pub mod pipes_api;
 pub mod power;
 pub mod privacy_filter;
