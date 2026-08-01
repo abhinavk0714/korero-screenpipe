@@ -9,8 +9,7 @@ import { motion } from "framer-motion";
 import { Camera, Check, HardDrive, Loader } from "lucide-react";
 import posthog from "posthog-js";
 import { useSettings } from "@/lib/hooks/use-settings";
-import { commands } from "@/lib/utils/tauri";
-import { localFetch } from "@/lib/api";
+import { requestOnboardingEngineRestart } from "@/lib/onboarding-engine-restart";
 
 interface TimelineChoiceProps {
   handleNextSlide: () => void;
@@ -137,46 +136,6 @@ const COSTS = [
   },
 ];
 
-/**
- * Restart screenpipe if it is already running, so a choice made on an
- * onboarding replay reaches the live recorder.
- *
- * Both flags are read at spawn, and engine-startup skips spawning when /health
- * already reports a live engine (tray → "Reset Onboarding" while recording).
- * Without this, a replayed choice would change storage and UI while the running
- * recorder kept its old behaviour until some later restart. Mirrors the
- * stop → wait → spawn sequence in components/settings/display-section.tsx.
- *
- * Deliberately NOT awaited by the caller. A full cycle measured ~28s on a
- * populated install (audio shutdown alone hit its 15s timeout, and a
- * `PRAGMA quick_check` took 73s), and WKWebView terminated its content process
- * partway through — which destroys the pending promise, so an awaiting click
- * handler never resumes and the button spins forever. The next slide is
- * engine-startup, which polls /health and owns the "engine is coming up" UI,
- * so it absorbs this window properly.
- */
-function restartRunningEngine(): void {
-  void (async () => {
-    try {
-      await localFetch("/health", { signal: AbortSignal.timeout(3000) });
-    } catch {
-      // Nothing listening: first-run onboarding, engine not spawned yet, and
-      // the upcoming engine-startup slide will spawn it with the new flags.
-      return;
-    }
-
-    try {
-      await commands.stopScreenpipe();
-      await new Promise((r) => setTimeout(r, 500));
-      await commands.spawnScreenpipe(null);
-    } catch (e) {
-      // Surfaced by engine-startup's own health UI rather than blocking here.
-      console.error("failed to restart screenpipe after timeline choice:", e);
-      posthog.capture("onboarding_timeline_restart_failed");
-    }
-  })();
-}
-
 // ─── Main ────────────────────────────────────────────────────────────────────
 //
 // Pure UI apart from the persist/restart the buttons trigger. When either
@@ -238,9 +197,11 @@ export default function TimelineChoice({
       return;
     }
 
-    // Kick the restart off and advance immediately — see restartRunningEngine
-    // for why awaiting it wedged the step.
-    restartRunningEngine();
+    // The next slide owns the stop → spawn cycle. Starting it here in the
+    // background races that slide's health check: it can observe the old
+    // engine, advance, and then leave onboarding while the restart is still in
+    // flight. Persist the handoff so a WebView reload cannot lose it.
+    requestOnboardingEngineRestart();
 
     hasAdvanced.current = true;
     handleNextSlide();

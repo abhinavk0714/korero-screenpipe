@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   localFetch: vi.fn(),
+  stopScreenpipe: vi.fn(),
   spawnScreenpipe: vi.fn(),
   getBootPhase: vi.fn(),
   handleNextSlide: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("@/lib/utils/tauri", () => ({
   commands: {
     getAppIdentifier: vi.fn(async () => "com.screenpipe.app"),
     getBootPhase: mocks.getBootPhase,
+    stopScreenpipe: mocks.stopScreenpipe,
     spawnScreenpipe: mocks.spawnScreenpipe,
   },
 }));
@@ -47,10 +49,7 @@ vi.mock("@tauri-apps/plugin-os", () => ({
 vi.mock("posthog-js", () => ({ default: { capture: mocks.capture } }));
 vi.mock("framer-motion", () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
-  motion: new Proxy(
-    {},
-    { get: (_target, element: string) => element },
-  ),
+  motion: new Proxy({}, { get: (_target, element: string) => element }),
 }));
 vi.mock("./particle-stream", () => ({
   ParticleStream: () => <div />,
@@ -58,6 +57,11 @@ vi.mock("./particle-stream", () => ({
 }));
 
 import EngineStartup from "./engine-startup";
+import {
+  clearOnboardingEngineRestart,
+  isOnboardingEngineRestartRequired,
+  requestOnboardingEngineRestart,
+} from "@/lib/onboarding-engine-restart";
 
 const pendingBootPhase = {
   phase: "building_audio",
@@ -69,30 +73,35 @@ const pendingBootPhase = {
 describe("onboarding engine startup", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearOnboardingEngineRestart();
     mocks.getBootPhase.mockResolvedValue(pendingBootPhase);
+    mocks.stopScreenpipe.mockResolvedValue({ status: "ok", data: null });
     mocks.spawnScreenpipe.mockResolvedValue({ status: "ok", data: null });
     mocks.handleNextSlide.mockReset();
   });
 
   it("advances when meetings-only audio is intentionally waiting for a meeting", async () => {
-    mocks.localFetch.mockImplementation(async () =>
-      new Response(
-        JSON.stringify({
-          status: "degraded",
-          status_code: 503,
-          frame_status: "ok",
-          audio_status: "not_started",
-        }),
-        { status: 503 },
-      ),
+    mocks.localFetch.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "degraded",
+            status_code: 503,
+            frame_status: "ok",
+            audio_status: "not_started",
+          }),
+          { status: 503 },
+        ),
     );
 
     render(<EngineStartup handleNextSlide={mocks.handleNextSlide} />);
 
-    await waitFor(() => expect(mocks.localFetch).toHaveBeenCalledWith(
-      "/health",
-      expect.any(Object),
-    ));
+    await waitFor(() =>
+      expect(mocks.localFetch).toHaveBeenCalledWith(
+        "/health",
+        expect.any(Object),
+      ),
+    );
     expect(mocks.spawnScreenpipe).not.toHaveBeenCalled();
 
     await waitFor(
@@ -106,24 +115,74 @@ describe("onboarding engine startup", () => {
 
     render(<EngineStartup handleNextSlide={mocks.handleNextSlide} />);
 
-    await waitFor(() => expect(mocks.spawnScreenpipe).toHaveBeenCalledWith(null));
+    await waitFor(() =>
+      expect(mocks.spawnScreenpipe).toHaveBeenCalledWith(null),
+    );
     await waitFor(
       () => expect(mocks.handleNextSlide).toHaveBeenCalledTimes(1),
       { timeout: 2000 },
     );
   });
 
+  it("restarts before accepting health after the timeline choice changes", async () => {
+    requestOnboardingEngineRestart();
+    mocks.localFetch.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "healthy",
+            frame_status: "ok",
+            audio_status: "ok",
+          }),
+          { status: 200 },
+        ),
+    );
+
+    render(<EngineStartup handleNextSlide={mocks.handleNextSlide} />);
+
+    await waitFor(() => expect(mocks.stopScreenpipe).toHaveBeenCalledTimes(1));
+    expect(mocks.spawnScreenpipe).toHaveBeenCalledWith(null);
+    expect(mocks.localFetch).not.toHaveBeenCalled();
+    expect(isOnboardingEngineRestartRequired()).toBe(false);
+    await waitFor(
+      () => expect(mocks.handleNextSlide).toHaveBeenCalledTimes(1),
+      { timeout: 2000 },
+    );
+  });
+
+  it("keeps the restart marker and does not advance when restart fails", async () => {
+    requestOnboardingEngineRestart();
+    mocks.spawnScreenpipe.mockResolvedValue({
+      status: "error",
+      error: "spawn failed",
+    });
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+
+    render(<EngineStartup handleNextSlide={mocks.handleNextSlide} />);
+
+    await waitFor(() =>
+      expect(mocks.spawnScreenpipe).toHaveBeenCalledWith(null),
+    );
+    expect(mocks.stopScreenpipe).toHaveBeenCalledTimes(1);
+    expect(isOnboardingEngineRestartRequired()).toBe(true);
+    expect(mocks.handleNextSlide).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
   it("reschedules the advance when dependencies change during the ready delay", async () => {
-    mocks.localFetch.mockImplementation(async () =>
-      new Response(
-        JSON.stringify({
-          status: "healthy",
-          status_code: 200,
-          frame_status: "ok",
-          audio_status: "ok",
-        }),
-        { status: 200 },
-      ),
+    mocks.localFetch.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "healthy",
+            status_code: 200,
+            frame_status: "ok",
+            audio_status: "ok",
+          }),
+          { status: 200 },
+        ),
     );
     const initialNextSlide = vi.fn();
     const replacementNextSlide = vi.fn();
@@ -144,10 +203,9 @@ describe("onboarding engine startup", () => {
     // the replacement effect must still be allowed to schedule another one.
     rerender(<EngineStartup handleNextSlide={replacementNextSlide} />);
 
-    await waitFor(
-      () => expect(replacementNextSlide).toHaveBeenCalledTimes(1),
-      { timeout: 2000 },
-    );
+    await waitFor(() => expect(replacementNextSlide).toHaveBeenCalledTimes(1), {
+      timeout: 2000,
+    });
     expect(initialNextSlide).not.toHaveBeenCalled();
   });
 
@@ -160,7 +218,9 @@ describe("onboarding engine startup", () => {
 
     render(<EngineStartup handleNextSlide={mocks.handleNextSlide} />);
 
-    await waitFor(() => expect(mocks.spawnScreenpipe).toHaveBeenCalledWith(null));
+    await waitFor(() =>
+      expect(mocks.spawnScreenpipe).toHaveBeenCalledWith(null),
+    );
     expect(mocks.handleNextSlide).not.toHaveBeenCalled();
   });
 });

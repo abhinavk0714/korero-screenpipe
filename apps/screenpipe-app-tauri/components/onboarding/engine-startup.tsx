@@ -25,6 +25,10 @@ import {
 import { ParticleStream, ProgressSteps } from "./particle-stream";
 import { screenpipeWebBase } from "@/lib/web-url";
 import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
+import {
+  clearOnboardingEngineRestart,
+  isOnboardingEngineRestartRequired,
+} from "@/lib/onboarding-engine-restart";
 
 interface EngineStartupProps {
   handleNextSlide: () => void;
@@ -114,6 +118,8 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
 
   const hasAdvancedRef = useRef(false);
   const hasReportedReadyRef = useRef(false);
+  const startupInFlightRef = useRef(false);
+  const restartRequiredRef = useRef(false);
   const mountTimeRef = useRef(Date.now());
 
   // The preceding permissions screen checks macOS TCC directly before it
@@ -152,22 +158,37 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
   // Spawn screenpipe on mount
   useEffect(() => {
     const start = async () => {
-      try {
-        const healthCheck = await localFetch("/health", {
-          signal: AbortSignal.timeout(3000),
-        }).catch(() => null);
+      if (startupInFlightRef.current) return;
+      startupInFlightRef.current = true;
+      restartRequiredRef.current = isOnboardingEngineRestartRequired();
 
-        if (
-          healthCheck &&
-          (await isEngineHealthResponse(healthCheck))
-        ) {
-          markEngineReady();
-          return;
+      try {
+        if (!restartRequiredRef.current) {
+          const healthCheck = await localFetch("/health", {
+            signal: AbortSignal.timeout(3000),
+          }).catch(() => null);
+
+          if (healthCheck && (await isEngineHealthResponse(healthCheck))) {
+            markEngineReady();
+            return;
+          }
+        } else {
+          // Timeline capture flags are read at spawn. Never accept the old
+          // engine's /health response after the user changes that choice.
+          const stopResult = await commands.stopScreenpipe();
+          if (stopResult.status === "error") {
+            throw new Error(stopResult.error);
+          }
         }
 
         const result = await commands.spawnScreenpipe(null);
         if (result.status === "error") {
           throw new Error(result.error);
+        }
+
+        if (restartRequiredRef.current) {
+          clearOnboardingEngineRestart();
+          restartRequiredRef.current = false;
         }
 
         // spawn_screenpipe resolves only after ServerCore and CaptureSession
@@ -207,6 +228,10 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
     if (state === "running") return;
 
     const poll = async () => {
+      // During a requested restart, the old generation can remain healthy
+      // until stop_screenpipe finishes. Only spawn_screenpipe may declare the
+      // replacement generation ready.
+      if (restartRequiredRef.current) return;
       try {
         const res = await localFetch("/health", {
           signal: AbortSignal.timeout(2000),
