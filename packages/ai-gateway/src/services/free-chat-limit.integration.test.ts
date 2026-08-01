@@ -71,6 +71,15 @@ const USAGE_SCHEMA = [
 		updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 		PRIMARY KEY (date, tier, provider, model, endpoint, stream, router_tier)
 	) WITHOUT ROWID`,
+	`CREATE TABLE hosted_ai_settlements (
+		settlement_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
+		cost_micro_cents INTEGER NOT NULL CHECK (cost_micro_cents >= 0),
+		day TEXT NOT NULL, month_period TEXT NOT NULL, hour TEXT NOT NULL,
+		lane TEXT NOT NULL CHECK (lane IN ('interactive', 'background')),
+		hosted_ai_trial INTEGER NOT NULL CHECK (hosted_ai_trial IN (0, 1)),
+		ledger_epoch TEXT NOT NULL, applied_at TEXT,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	) WITHOUT ROWID`,
 ];
 
 function metered(
