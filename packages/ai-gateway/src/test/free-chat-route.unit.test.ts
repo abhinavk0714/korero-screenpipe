@@ -402,7 +402,7 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(result.hosted_ai).toMatchObject({
 			plan: 'business',
 			trial: true,
-			included_credits: 400,
+			included_credits: 600,
 		});
 		expect(result.hosted_ai.model_access).toContain('claude-fable-5');
 		expect(result.hosted_ai.model_access).not.toContain('*');

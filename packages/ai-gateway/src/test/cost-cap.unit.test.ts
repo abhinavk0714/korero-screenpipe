@@ -44,7 +44,7 @@ describe('enforceDailyCostCap', () => {
 
 	it('caps a weight-zero but priced model once over the ceiling', async () => {
 		const response = await enforceDailyCostCap(
-			dbEnv(5), 'dev', 'subscribed', 'gemini-3.5-flash',
+			dbEnv(7), 'dev', 'subscribed', 'gemini-3.5-flash',
 		);
 		expect(response?.status).toBe(429);
 		expect(await response!.text()).toContain('daily_cost_limit_exceeded');
@@ -94,13 +94,13 @@ describe('enforceDailyCostCap', () => {
 
 	it('uses lower anonymous and logged-in ceilings than the subscribed tier', async () => {
 		expect(
-			(await enforceDailyCostCap(dbEnv(2), 'dev', 'anonymous', 'gemini-3.5-flash'))?.status,
+			(await enforceDailyCostCap(dbEnv(3), 'dev', 'anonymous', 'gemini-3.5-flash'))?.status,
 		).toBe(429);
 		expect(
-			(await enforceDailyCostCap(dbEnv(2), 'dev', 'logged_in', 'gemini-3.5-flash'))?.status,
+			(await enforceDailyCostCap(dbEnv(3), 'dev', 'logged_in', 'gemini-3.5-flash'))?.status,
 		).toBe(429);
 		expect(
-			await enforceDailyCostCap(dbEnv(2), 'dev', 'subscribed', 'gemini-3.5-flash'),
+			await enforceDailyCostCap(dbEnv(3), 'dev', 'subscribed', 'gemini-3.5-flash'),
 		).toBeNull();
 	});
 

@@ -66,16 +66,16 @@ describe('private hosted AI cost controls', () => {
 
 	it('keeps permissive private controls inside the public credit allowance', () => {
 		expect(resolveHostedAiTextCostLimits('basic', privateCostControls())).toEqual({
-			daily: 1.5,
-			monthly: 1.5,
-			request: 1.5,
+			daily: 2.5,
+			monthly: 2.5,
+			request: 2.5,
 			globalHourly: 401,
 			globalDaily: 402,
 		});
 		expect(resolveHostedAiTextCostLimits('business', privateCostControls(), true)).toEqual({
-			daily: 4,
-			monthly: 4,
-			request: 4,
+			daily: 6,
+			monthly: 6,
+			request: 6,
 			globalHourly: 401,
 			globalDaily: 402,
 		});
