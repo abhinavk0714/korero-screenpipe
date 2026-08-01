@@ -860,9 +860,7 @@ describe("BrainOverview", () => {
 
     const controls = await screen.findByTestId("overview-header-controls");
     expect(controls.className).toContain("flex-wrap");
-    expect(controls.parentElement?.className).toContain(
-      "xl:grid-cols-[minmax(0,1fr)_auto]",
-    );
+    expect(controls.parentElement?.className).toContain("lg:flex-row");
     expect(screen.getByTestId("overview-time-range").className).toContain(
       "h-9",
     );
@@ -871,6 +869,12 @@ describe("BrainOverview", () => {
     );
     expect(screen.getByTestId("overview-refresh-data").textContent).toBe("");
     expect(screen.queryByTestId("overview-edit")).toBeNull();
+    expect(screen.getByTestId("brain-overview-scroll").className).toContain(
+      "pb-24",
+    );
+    expect(
+      screen.getByTestId("overview-floating-composer").className,
+    ).toContain("absolute");
     const prompt = screen.getByTestId(
       "live-view-ai-prompt",
     ) as HTMLTextAreaElement;

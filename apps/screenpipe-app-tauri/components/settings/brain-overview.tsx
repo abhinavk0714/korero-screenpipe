@@ -2593,12 +2593,16 @@ export function BrainOverview({
   );
   const onboardingColdStart = showOnboardingActivation && !onboardingHasResult;
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto pb-8 pr-4 [scrollbar-gutter:stable]">
+    <div className="relative min-h-0 flex-1 overflow-hidden">
       <div
-        data-onboarding-guide-target="dashboard"
-        className="mb-5 grid gap-4 border-b border-border pb-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end"
+        data-testid="brain-overview-scroll"
+        className="h-full overflow-y-auto pb-24 pr-2 [scrollbar-gutter:stable]"
       >
-        <div className="min-w-0">
+        <div
+          data-onboarding-guide-target="dashboard"
+          className="mb-3 flex flex-col gap-2 border-b border-border pb-2 lg:flex-row lg:items-center lg:justify-between"
+        >
+          <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
           <LiveViewDashboardSwitcher
             views={views}
             current={view}
@@ -2629,7 +2633,7 @@ export function BrainOverview({
           />
           <p
             data-testid="overview-data-status"
-            className="mt-2 text-xs text-muted-foreground"
+            className="shrink-0 font-mono text-[9px] text-muted-foreground"
           >
             {onboardingColdStart
               ? "This view will appear when Screenpipe has enough real activity for your outcome."
@@ -2637,11 +2641,11 @@ export function BrainOverview({
                 ? `Updated ${new Date(latestDataTimestamp).toLocaleString()}`
                 : "No data yet"}
           </p>
-        </div>
-        <div
-          data-testid="overview-header-controls"
-          className="flex w-full flex-wrap items-center gap-2 xl:w-auto xl:justify-end"
-        >
+          </div>
+          <div
+            data-testid="overview-header-controls"
+            className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end"
+          >
           {!onboardingColdStart && (
             <div
               data-testid="overview-display-mode"
@@ -2733,8 +2737,8 @@ export function BrainOverview({
               />
             </Button>
           )}
+          </div>
         </div>
-      </div>
       {canvasError && (
         <div
           data-testid="live-view-canvas-error"
@@ -2766,18 +2770,6 @@ export function BrainOverview({
             kits={templateKits}
             installedPipeNames={installedPipeNames}
             onPreview={previewTemplate}
-          />
-        </div>
-      )}
-      {!onboardingColdStart && (
-        <div className="mb-5">
-          <LiveViewAiComposer
-            busy={generating}
-            compact
-            currentViewTitle={view.title}
-            selectedPresetId={selectedAiPreset?.id ?? null}
-            onSelectedPresetIdChange={selectAiPreset}
-            onGenerate={generateFromComposer}
           />
         </div>
       )}
@@ -2891,6 +2883,24 @@ export function BrainOverview({
               onItemHandoff={(item) => void handoffItem(slot, item)}
             />
           ))}
+        </div>
+      )}
+      </div>
+      {!onboardingColdStart && (
+        <div
+          data-testid="overview-floating-composer"
+          className="pointer-events-none absolute inset-x-4 bottom-4 z-40 flex justify-center"
+        >
+          <div className="pointer-events-auto w-full max-w-2xl shadow-lg shadow-black/5">
+            <LiveViewAiComposer
+              busy={generating}
+              compact
+              currentViewTitle={view.title}
+              selectedPresetId={selectedAiPreset?.id ?? null}
+              onSelectedPresetIdChange={selectAiPreset}
+              onGenerate={generateFromComposer}
+            />
+          </div>
         </div>
       )}
     </div>
