@@ -176,6 +176,7 @@ async function handleMeteredTinfoilRequest(
 	}
 	const usage = parseTinfoilUsageMetrics(response);
 	const settlement = response.ok ? logCost(env, {
+		settlement_id: reservation.reservation?.key,
 		device_id: auth.deviceId,
 		user_id: auth.userId,
 		tier: auth.tier,
@@ -235,6 +236,7 @@ async function handleMeteredVoiceAiRequest(
 		throw error;
 	}
 	const settlement = response.ok ? logCost(env, {
+		settlement_id: reservation.reservation?.key,
 		device_id: auth.deviceId,
 		user_id: auth.userId,
 		tier: auth.tier,
@@ -663,6 +665,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					const { response: trackedResponse, usage: usagePromise } = trackResponseUsage(response, 'openai');
 					response = trackedResponse;
 					costSettlement = usagePromise.then(u => logCost(env, {
+						settlement_id: dailyCostReservation?.key,
 						device_id: authResult.deviceId,
 						user_id: authResult.userId,
 						tier: authResult.tier,
@@ -709,6 +712,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 							const cacheRead = json?.usage?.prompt_tokens_details?.cached_tokens ?? null;
 							const cacheCreation = json?.usage?.cache_creation_input_tokens ?? null;
 							return await logCost(env, {
+								settlement_id: dailyCostReservation?.key,
 								device_id: authResult.deviceId,
 								user_id: authResult.userId,
 								tier: authResult.tier,
@@ -804,6 +808,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				throw error;
 			}
 			const settlement = webSearchResponse.ok ? logCost(env, {
+				settlement_id: costReservation.reservation?.key,
 				device_id: authResult.deviceId,
 				user_id: authResult.userId,
 				tier: authResult.tier,
@@ -1038,6 +1043,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				const { response: trackedResponse, usage: usagePromise } = trackResponseUsage(vertexResponse, 'anthropic');
 				vertexResponse = trackedResponse;
 				costSettlement = usagePromise.then(u => logCost(env, {
+					settlement_id: costReservation.reservation?.key,
 					device_id: authResult.deviceId,
 					user_id: authResult.userId,
 					tier: authResult.tier,
@@ -1077,6 +1083,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						const inputTokens = rawInput === null ? null : rawInput + cacheRead + cacheCreation;
 						const outputTokens = json?.usage?.output_tokens ?? null;
 						return await logCost(env, {
+							settlement_id: costReservation.reservation?.key,
 							device_id: authResult.deviceId,
 							user_id: authResult.userId,
 							tier: authResult.tier,
@@ -1192,6 +1199,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				const { response: trackedResponse, usage: usagePromise } = trackResponseUsage(anthropicResponse, 'anthropic');
 				anthropicResponse = trackedResponse;
 				costSettlement = usagePromise.then(u => logCost(env, {
+					settlement_id: costReservation.reservation?.key,
 					device_id: authResult.deviceId,
 					user_id: authResult.userId,
 					tier: authResult.tier,
@@ -1231,6 +1239,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						const inputTokens = rawInput === null ? null : rawInput + cacheRead + cacheCreation;
 						const outputTokens = json?.usage?.output_tokens ?? null;
 						return await logCost(env, {
+							settlement_id: costReservation.reservation?.key,
 							device_id: authResult.deviceId,
 							user_id: authResult.userId,
 							tier: authResult.tier,

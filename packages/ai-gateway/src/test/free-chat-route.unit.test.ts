@@ -40,12 +40,24 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		DB: {
 			prepare: (sql: string) => ({
 				bind: (...values: unknown[]) => ({
+					sql,
+					values,
 					first: async () => sql.includes('INSERT OR IGNORE INTO usage')
 						? { reservation_key: values[0] }
 						: null,
 					run: async () => ({ success: true, meta: { changes: 1 } }),
 				}),
 			}),
+			batch: async (statements: Array<{ sql: string; values: unknown[] }>) => {
+				const last = statements.at(-1);
+				return statements.map((_, index) => ({
+					success: true,
+					meta: { changes: 1 },
+					results: index === statements.length - 1 && last?.sql.includes('hosted_ai_settlements')
+						? [{ settlement_id: last.values[0], applied_at: new Date().toISOString() }]
+						: [],
+				}));
+			},
 		},
 	} as unknown as Env;
 	const ctx = {
