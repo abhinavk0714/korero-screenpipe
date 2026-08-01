@@ -87,6 +87,7 @@ mod pi_command_queue;
 mod power_awake;
 mod process_exit;
 mod recording;
+mod remote_announcement;
 mod remote_support_logs;
 mod remote_sync_commands;
 mod secrets;
