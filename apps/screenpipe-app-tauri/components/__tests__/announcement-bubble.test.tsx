@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AnnouncementBubble,
   getBubbleLayout,
-} from "@/components/announcement-host";
+} from "@/components/announcement-bubble";
 import { parseAnnouncement } from "@/lib/announcements";
 
 const ANNOUNCEMENT = parseAnnouncement({
@@ -75,9 +75,9 @@ describe("announcement bubble", () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
-    document.querySelectorAll("[data-announcement-anchor]").forEach((node) =>
-      node.remove(),
-    );
+    document
+      .querySelectorAll("[data-announcement-anchor]")
+      .forEach((node) => node.remove());
   });
 
   it("waits for an approved anchor, then mounts, reports, and dismisses", async () => {
@@ -100,9 +100,15 @@ describe("announcement bubble", () => {
     });
 
     const bubble = await screen.findByTestId("announcement-bubble");
-    await waitFor(() => expect(bubble).toHaveAttribute("data-position", "bottom"));
+    await waitFor(() =>
+      expect(bubble).toHaveAttribute("data-position", "bottom"),
+    );
     expect(bubble).toHaveAttribute("data-anchor", "sidebar-pipes");
     expect(bubble).toHaveStyle({ top: "132px", left: "12px" });
+    expect(screen.getByTestId("announcement-bubble-content")).toHaveClass(
+      "max-h-[calc(100vh-1.5rem)]",
+      "overflow-y-auto",
+    );
     expect(onShown).toHaveBeenCalledOnce();
 
     fireEvent.click(screen.getByRole("button", { name: "dismiss" }));

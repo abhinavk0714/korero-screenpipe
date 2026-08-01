@@ -172,7 +172,16 @@ describe("parseAnnouncement", () => {
       surface: "bubble",
       anchor: "sidebar-pipes",
       position: "bottom",
+      dismissible: true,
     });
+    expect(
+      parseAnnouncement({
+        ...VALID,
+        surface: "bubble",
+        anchor: "sidebar-pipes",
+        dismissible: false,
+      })!.dismissible,
+    ).toBe(true);
     expect(parseAnnouncement({ ...VALID, surface: "bubble" })).toBeNull();
     expect(
       parseAnnouncement({

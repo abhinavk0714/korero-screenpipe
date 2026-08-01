@@ -95,7 +95,8 @@ export interface Announcement {
    *  payloads cannot supply arbitrary CSS selectors. */
   anchor?: string;
   title: string;
-  /** markdown. rendered with the same sanitizing transform as notifications. */
+  /** Markdown. HTML and embedded media are disabled; links use the same
+   *  first-party HTTPS allowlist as CTA destinations. */
   body: string;
   cta?: AnnouncementCta;
   survey?: AnnouncementSurvey;
@@ -105,7 +106,7 @@ export interface Announcement {
   /** ISO-8601 instant. once passed, the announcement is never shown again. */
   expiresAt?: string;
   /** when false the user must act on the cta — no X / overlay-close.
-   *  default true. */
+   *  default true. Bubbles and surveys always normalize this to true. */
   dismissible: boolean;
 }
 
@@ -227,7 +228,7 @@ function safeInternalRoute(raw: unknown): string | null {
   return route;
 }
 
-function safeExternalUrl(raw: unknown): string | null {
+export function safeAnnouncementExternalUrl(raw: unknown): string | null {
   const value = boundedString(raw, 2048);
   if (!value) return null;
   try {
@@ -255,7 +256,7 @@ function normalizeCta(raw: unknown): AnnouncementCta | undefined {
   const label = boundedString(r.label, 40);
   if (!label) return undefined;
   const cta: AnnouncementCta = { label };
-  const url = safeExternalUrl(r.url);
+  const url = safeAnnouncementExternalUrl(r.url);
   const route = safeInternalRoute(r.route);
   if (url) cta.url = url;
   if (route) cta.route = route;
@@ -378,6 +379,10 @@ export function parseAnnouncement(raw: unknown): Announcement | null {
     const anchor = boundedIdentifier(r.anchor, 80);
     if (!anchor) return null;
     announcement.anchor = anchor;
+    // Anchored callouts must never trap the user next to an app control. Unlike
+    // a modal, a bubble is contextual and can contain enough copy to scroll, so
+    // remote configuration cannot remove its close affordance.
+    announcement.dismissible = true;
   }
 
   const cta = normalizeCta(r.cta);

@@ -140,7 +140,7 @@ pub async fn send_notification(
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     // Announcement mode: when the payload names an announcement `surface`,
-    // push it to the app UI (modal / banner / card / bubble) instead of the
+    // push it to the app UI (modal / banner / card) instead of the
     // notification panel, then return. Lets pipes, agents, or a plain curl
     // trigger a one-off announcement on demand — the same surfaces the
     // PostHog `app-announcement` flag drives. First-party product comms, so
@@ -531,7 +531,7 @@ pub struct NotifyPayload {
     pub source_url: Option<String>,
 
     // ── announcement mode ────────────────────────────────────────────
-    // When `surface` names an announcement surface (modal/banner/card/bubble),
+    // When `surface` names an announcement surface (modal/banner/card),
     // `/notify` pushes an in-app announcement instead of a notification
     // panel — the on-demand counterpart to the PostHog `app-announcement`
     // flag. These fields mirror the announcement payload; validation /
@@ -543,8 +543,6 @@ pub struct NotifyPayload {
     #[serde(default)]
     pub position: Option<String>,
     #[serde(default)]
-    pub anchor: Option<String>,
-    #[serde(default)]
     pub cta: Option<serde_json::Value>,
     #[serde(default)]
     pub dismissible: Option<bool>,
@@ -553,7 +551,7 @@ pub struct NotifyPayload {
 }
 
 /// Surfaces that turn a `/notify` call into an announcement push.
-const ANNOUNCEMENT_SURFACES: [&str; 4] = ["modal", "banner", "card", "bubble"];
+const ANNOUNCEMENT_SURFACES: [&str; 3] = ["modal", "banner", "card"];
 
 /// When the `/notify` payload carries an announcement `surface`, build the
 /// announcement object to hand to the frontend. Returns `None` for ordinary
@@ -569,7 +567,6 @@ fn announcement_from_payload(payload: &NotifyPayload, id: &str) -> Option<serde_
         "kind": payload.kind,
         "surface": surface,
         "position": payload.position,
-        "anchor": payload.anchor,
         "title": payload.title,
         "body": payload.body,
         "cta": payload.cta,
@@ -713,7 +710,6 @@ mod tests {
             surface: surface.map(ToOwned::to_owned),
             kind: Some("news".to_string()),
             position: Some("bottom-right".to_string()),
-            anchor: None,
             cta: Some(json!({ "label": "open settings", "route": "/settings" })),
             dismissible: Some(true),
             expires_at: None,
@@ -749,18 +745,6 @@ mod tests {
     }
 
     #[test]
-    fn announcement_accepts_anchored_bubble() {
-        let mut payload = notify_payload(Some("bubble"));
-        payload.position = Some("right".to_string());
-        payload.anchor = Some("sidebar-pipes".to_string());
-        let ann = announcement_from_payload(&payload, "x")
-            .expect("bubble surface should produce an announcement");
-        assert_eq!(ann["surface"], "bubble");
-        assert_eq!(ann["position"], "right");
-        assert_eq!(ann["anchor"], "sidebar-pipes");
-    }
-
-    #[test]
     fn parses_pipe_name_from_session_id_with_colons() {
         assert_eq!(
             pipe_name_from_session_id("pipe:daily:research:42"),
@@ -793,7 +777,6 @@ mod tests {
             surface: None,
             kind: None,
             position: None,
-            anchor: None,
             cta: None,
             dismissible: None,
             expires_at: None,

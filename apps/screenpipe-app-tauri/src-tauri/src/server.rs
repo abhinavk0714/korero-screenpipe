@@ -714,11 +714,10 @@ curl -X POST http://localhost:11435/notify \
   -H "Content-Type: application/json" \
   -d '{"title": "Saved", "body": "Note saved to Obsidian", "timeout": 5000}'
 
-# Announcement push (modal / banner / card / bubble) instead of a notification panel.
+# Announcement push (modal / banner / card) instead of a notification panel.
 # Triggered by adding a `surface` field — the on-demand counterpart to the
 # PostHog `app-announcement` flag. kind = news|tip|reminder; position =
-# top|bottom (banner), {top,bottom}-{left,right} (card), or top|right|bottom|left
-# plus an `anchor` matching data-announcement-anchor (bubble).
+# top|bottom (banner) or {top,bottom}-{left,right} (card).
 curl -X POST http://localhost:11435/notify \
   -H "Content-Type: application/json" \
   -d '{

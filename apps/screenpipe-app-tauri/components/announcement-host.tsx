@@ -4,12 +4,16 @@
 
 "use client";
 
-import { Clock, Lightbulb, Megaphone, X, type LucideIcon } from "lucide-react";
+import { X } from "lucide-react";
 import { createPortal } from "react-dom";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { AnnouncementBody } from "@/components/announcement-body";
+import { AnnouncementBubble } from "@/components/announcement-bubble";
+import {
+  ANNOUNCEMENT_KIND_META,
+  AnnouncementKindChip,
+} from "@/components/announcement-kind-chip";
 import { Button } from "@/components/ui/button";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -18,198 +22,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { notificationUrlTransform } from "@/components/markdown";
 import { cn } from "@/lib/utils";
-import {
-  type Announcement,
-  type AnnouncementKind,
-  type BubblePosition,
-  type SurveyAnswers,
-} from "@/lib/announcements";
+import { type Announcement, type SurveyAnswers } from "@/lib/announcements";
 import { useAnnouncement } from "@/lib/hooks/use-announcement";
 import { isPrimaryWindow } from "@/lib/utils/is-primary-window";
 
-const KIND_META: Record<AnnouncementKind, { icon: LucideIcon; label: string }> =
-  {
-    // grayscale, differentiated by shape not color (DESIGN.md).
-    news: { icon: Megaphone, label: "news" },
-    tip: { icon: Lightbulb, label: "tip" },
-    reminder: { icon: Clock, label: "reminder" },
-  };
-
-function openExternal(url: string) {
-  import("@tauri-apps/plugin-shell")
-    .then((m) => m.open(url))
-    .catch((err) => console.error("failed to open url:", url, err));
-}
-
-/** Markdown body with sanitized, externally-opened links — matches the
- *  notification surface so authors get the same affordances. */
-function AnnouncementBody({
-  body,
-  className,
-}: {
-  body: string;
-  className?: string;
-}) {
-  return (
-    <div
-      className={cn(
-        "text-sm leading-relaxed text-muted-foreground [&_p]:mb-2 [&_p:last-child]:mb-0 [&_strong]:text-foreground [&_a]:text-foreground [&_a]:underline [&_code]:bg-muted [&_code]:px-1 [&_code]:text-xs [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:my-1 [&_li]:my-0.5",
-        className,
-      )}
-    >
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        urlTransform={notificationUrlTransform}
-        components={{
-          a: ({ href, children }) => (
-            <a
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (href) openExternal(href);
-              }}
-              style={{ cursor: "pointer" }}
-            >
-              {children}
-            </a>
-          ),
-        }}
-      >
-        {body}
-      </ReactMarkdown>
-    </div>
-  );
-}
-
-/** Auto-close the surface after `ms`, if set. Used by banner/card/bubble (not modal).
+/** Auto-close the surface after `ms`, if set. Used by banner/card (not modal).
  *  Re-arms only when the announcement id or the duration changes. */
-function useAutoDismiss(
-  ms: number | undefined,
-  onDismiss: () => void,
-  enabled = true,
-) {
+function useAutoDismiss(ms: number | undefined, onDismiss: () => void) {
   useEffect(() => {
-    if (!ms || !enabled) return;
+    if (!ms) return;
     const t = setTimeout(onDismiss, ms);
     return () => clearTimeout(t);
-  }, [enabled, ms, onDismiss]);
-}
-
-type RectLike = Pick<
-  DOMRect,
-  "top" | "right" | "bottom" | "left" | "width" | "height"
->;
-
-export interface BubbleLayout {
-  side: BubblePosition;
-  top: number;
-  left: number;
-  /** Pixel offset from the bubble's left edge (top/bottom) or top edge
-   *  (left/right), used to keep the pointer aimed at the target. */
-  arrowOffset: number;
-}
-
-const BUBBLE_WIDTH = 340;
-const BUBBLE_TARGET_GAP = 12;
-const BUBBLE_VIEWPORT_GAP = 12;
-const BUBBLE_ARROW_INSET = 18;
-
-const BUBBLE_SIDE_ORDER: Record<BubblePosition, BubblePosition[]> = {
-  top: ["top", "bottom", "right", "left"],
-  right: ["right", "left", "bottom", "top"],
-  bottom: ["bottom", "top", "right", "left"],
-  left: ["left", "right", "bottom", "top"],
-};
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), Math.max(min, max));
-}
-
-/** Position an anchored bubble inside the viewport. The preferred side wins
- *  when it fits; otherwise we flip to the first side with room, then use the
- *  side with the most available space. Pure so geometry stays testable. */
-export function getBubbleLayout(
-  target: RectLike,
-  bubble: { width: number; height: number },
-  preferredSide: BubblePosition,
-  viewport: { width: number; height: number },
-): BubbleLayout {
-  const spaces: Record<BubblePosition, number> = {
-    top: target.top - BUBBLE_TARGET_GAP,
-    right: viewport.width - target.right - BUBBLE_TARGET_GAP,
-    bottom: viewport.height - target.bottom - BUBBLE_TARGET_GAP,
-    left: target.left - BUBBLE_TARGET_GAP,
-  };
-  const required: Record<BubblePosition, number> = {
-    top: bubble.height + BUBBLE_VIEWPORT_GAP,
-    right: bubble.width + BUBBLE_VIEWPORT_GAP,
-    bottom: bubble.height + BUBBLE_VIEWPORT_GAP,
-    left: bubble.width + BUBBLE_VIEWPORT_GAP,
-  };
-  const candidates = BUBBLE_SIDE_ORDER[preferredSide];
-  const side =
-    candidates.find((candidate) => spaces[candidate] >= required[candidate]) ??
-    candidates.reduce((best, candidate) =>
-      spaces[candidate] > spaces[best] ? candidate : best,
-    );
-
-  const targetCenterX = target.left + target.width / 2;
-  const targetCenterY = target.top + target.height / 2;
-  const maxLeft = viewport.width - bubble.width - BUBBLE_VIEWPORT_GAP;
-  const maxTop = viewport.height - bubble.height - BUBBLE_VIEWPORT_GAP;
-
-  let left: number;
-  let top: number;
-  if (side === "top" || side === "bottom") {
-    left = clamp(
-      targetCenterX - bubble.width / 2,
-      BUBBLE_VIEWPORT_GAP,
-      maxLeft,
-    );
-    top =
-      side === "top"
-        ? target.top - bubble.height - BUBBLE_TARGET_GAP
-        : target.bottom + BUBBLE_TARGET_GAP;
-    top = clamp(top, BUBBLE_VIEWPORT_GAP, maxTop);
-  } else {
-    left =
-      side === "left"
-        ? target.left - bubble.width - BUBBLE_TARGET_GAP
-        : target.right + BUBBLE_TARGET_GAP;
-    left = clamp(left, BUBBLE_VIEWPORT_GAP, maxLeft);
-    top = clamp(
-      targetCenterY - bubble.height / 2,
-      BUBBLE_VIEWPORT_GAP,
-      maxTop,
-    );
-  }
-
-  const arrowOffset =
-    side === "top" || side === "bottom"
-      ? clamp(
-          targetCenterX - left,
-          BUBBLE_ARROW_INSET,
-          bubble.width - BUBBLE_ARROW_INSET,
-        )
-      : clamp(
-          targetCenterY - top,
-          BUBBLE_ARROW_INSET,
-          bubble.height - BUBBLE_ARROW_INSET,
-        );
-
-  return { side, top, left, arrowOffset };
-}
-
-function KindChip({ kind }: { kind: AnnouncementKind }) {
-  const { icon: Icon, label } = KIND_META[kind];
-  return (
-    <span className="inline-flex w-fit items-center gap-1.5 border border-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-      <Icon className="h-3 w-3" />
-      {label}
-    </span>
-  );
+  }, [ms, onDismiss]);
 }
 
 function AnnouncementModal({
@@ -248,7 +73,7 @@ function AnnouncementModal({
         }}
       >
         <DialogHeader className="space-y-3 text-left">
-          <KindChip kind={announcement.kind} />
+          <AnnouncementKindChip kind={announcement.kind} />
           <DialogTitle>{announcement.title}</DialogTitle>
         </DialogHeader>
         {/* screen-reader description (and silences radix's missing-description
@@ -443,7 +268,7 @@ function AnnouncementBanner({
   onDismiss: () => void;
   onCta: () => void;
 }) {
-  const { icon: Icon, label } = KIND_META[announcement.kind];
+  const { icon: Icon, label } = ANNOUNCEMENT_KIND_META[announcement.kind];
   const { dismissible, cta } = announcement;
   // never trap the user: keep the close affordance unless there's a cta to act on.
   const showClose = dismissible || !cta;
@@ -539,7 +364,7 @@ function AnnouncementCard({
       )}
     >
       <div className="mb-2 flex items-start justify-between gap-2">
-        <KindChip kind={announcement.kind} />
+        <AnnouncementKindChip kind={announcement.kind} />
         {showClose && (
           <button
             type="button"
@@ -569,239 +394,6 @@ function AnnouncementCard({
         </div>
       )}
     </div>
-  );
-}
-
-const BUBBLE_ARROW_CLASS: Record<BubblePosition, string> = {
-  // `side` describes where the bubble sits relative to the target, so the
-  // pointer lives on the opposite edge.
-  top: "-bottom-[7px] border-b border-r",
-  right: "-left-[7px] border-b border-l",
-  bottom: "-top-[7px] border-l border-t",
-  left: "-right-[7px] border-r border-t",
-};
-
-function findAnnouncementAnchor(anchor: string): HTMLElement | null {
-  // `anchor` is restricted to bounded identifiers by parseAnnouncement, so it
-  // is safe inside this quoted attribute selector. UI code must explicitly
-  // opt in with data-announcement-anchor; remote payloads cannot query the DOM.
-  return document.querySelector<HTMLElement>(
-    `[data-announcement-anchor="${anchor}"]`,
-  );
-}
-
-/** Anchored, non-modal callout. It follows its target during scroll/resize and
- *  waits quietly across route changes until the requested anchor exists. */
-export function AnnouncementBubble({
-  announcement,
-  onDismiss,
-  onCta,
-  onShown,
-}: {
-  announcement: Announcement;
-  onDismiss: () => void;
-  onCta: () => void;
-  onShown: () => void;
-}) {
-  const anchor = announcement.anchor;
-  const [target, setTarget] = useState<HTMLElement | null>(null);
-
-  useEffect(() => {
-    if (!anchor) {
-      setTarget(null);
-      return;
-    }
-    const locate = () => {
-      const next = findAnnouncementAnchor(anchor);
-      setTarget((current) => (current === next ? current : next));
-    };
-    locate();
-    const observer = new MutationObserver(locate);
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["data-announcement-anchor"],
-    });
-    return () => observer.disconnect();
-  }, [anchor]);
-
-  if (!anchor || !target) return null;
-  return (
-    <AnnouncementBubbleVisible
-      announcement={announcement}
-      target={target}
-      onDismiss={onDismiss}
-      onCta={onCta}
-      onShown={onShown}
-    />
-  );
-}
-
-function AnnouncementBubbleVisible({
-  announcement,
-  target,
-  onDismiss,
-  onCta,
-  onShown,
-}: {
-  announcement: Announcement;
-  target: HTMLElement;
-  onDismiss: () => void;
-  onCta: () => void;
-  onShown: () => void;
-}) {
-  const bubbleRef = useRef<HTMLDivElement>(null);
-  const frameRef = useRef<number | null>(null);
-  const shownRef = useRef(false);
-  const [layout, setLayout] = useState<BubbleLayout | null>(null);
-  const preferredSide = (announcement.position ?? "bottom") as BubblePosition;
-
-  const measure = useCallback(() => {
-    if (!target.isConnected || !bubbleRef.current) {
-      setLayout(null);
-      return;
-    }
-    const targetRect = target.getBoundingClientRect();
-    const targetIsVisible =
-      targetRect.width > 0 &&
-      targetRect.height > 0 &&
-      targetRect.right > 0 &&
-      targetRect.bottom > 0 &&
-      targetRect.left < window.innerWidth &&
-      targetRect.top < window.innerHeight;
-    if (!targetIsVisible) {
-      setLayout(null);
-      return;
-    }
-
-    const measured = bubbleRef.current.getBoundingClientRect();
-    const bubbleSize = {
-      width:
-        measured.width ||
-        Math.min(BUBBLE_WIDTH, window.innerWidth - BUBBLE_VIEWPORT_GAP * 2),
-      height: measured.height || 160,
-    };
-    const next = getBubbleLayout(targetRect, bubbleSize, preferredSide, {
-      width: window.innerWidth,
-      height: window.innerHeight,
-    });
-    setLayout((current) =>
-      current &&
-      current.side === next.side &&
-      current.top === next.top &&
-      current.left === next.left &&
-      current.arrowOffset === next.arrowOffset
-        ? current
-        : next,
-    );
-  }, [preferredSide, target]);
-
-  const scheduleMeasure = useCallback(() => {
-    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
-    frameRef.current = requestAnimationFrame(() => {
-      frameRef.current = null;
-      measure();
-    });
-  }, [measure]);
-
-  useEffect(() => {
-    scheduleMeasure();
-    window.addEventListener("resize", scheduleMeasure);
-    window.addEventListener("scroll", scheduleMeasure, true);
-    const observer =
-      typeof ResizeObserver === "undefined"
-        ? null
-        : new ResizeObserver(scheduleMeasure);
-    observer?.observe(target);
-    if (bubbleRef.current) observer?.observe(bubbleRef.current);
-    return () => {
-      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
-      observer?.disconnect();
-      window.removeEventListener("resize", scheduleMeasure);
-      window.removeEventListener("scroll", scheduleMeasure, true);
-    };
-  }, [scheduleMeasure, target]);
-
-  useEffect(() => {
-    shownRef.current = false;
-  }, [announcement.id]);
-  useEffect(() => {
-    if (!layout || shownRef.current) return;
-    shownRef.current = true;
-    onShown();
-  }, [layout, onShown]);
-  useAutoDismiss(announcement.autoDismissMs, onDismiss, Boolean(layout));
-
-  const { dismissible, cta } = announcement;
-  const showClose = dismissible || !cta;
-  const arrowStyle = layout
-    ? layout.side === "top" || layout.side === "bottom"
-      ? { left: layout.arrowOffset - 6 }
-      : { top: layout.arrowOffset - 6 }
-    : undefined;
-
-  return createPortal(
-    <div
-      ref={bubbleRef}
-      data-testid="announcement-bubble"
-      data-anchor={announcement.anchor}
-      data-position={layout?.side}
-      role="region"
-      aria-live="polite"
-      aria-label={announcement.title}
-      aria-hidden={!layout}
-      className="fixed z-[65] w-[340px] max-w-[calc(100vw-1.5rem)] animate-in border border-foreground bg-background p-4 shadow-lg shadow-black/10 fade-in-0 zoom-in-95 duration-150"
-      style={
-        layout
-          ? { top: layout.top, left: layout.left }
-          : { top: 0, left: 0, visibility: "hidden" }
-      }
-    >
-      {layout && (
-        <span
-          aria-hidden
-          className={cn(
-            "pointer-events-none absolute z-0 h-3 w-3 rotate-45 bg-background",
-            BUBBLE_ARROW_CLASS[layout.side],
-          )}
-          style={arrowStyle}
-        />
-      )}
-      <div className="relative z-10">
-        <div className="mb-2 flex items-start justify-between gap-2">
-          <KindChip kind={announcement.kind} />
-          {showClose && (
-            <button
-              type="button"
-              aria-label="dismiss"
-              data-testid="announcement-dismiss"
-              onClick={onDismiss}
-              className="-mr-1 -mt-1 p-1 text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-        <div className="mb-1 text-sm font-semibold lowercase">
-          {announcement.title}
-        </div>
-        <AnnouncementBody body={announcement.body} className="text-[13px]" />
-        {cta && (
-          <div className="mt-3">
-            <Button
-              size="sm"
-              className="h-7"
-              data-testid="announcement-cta"
-              onClick={onCta}
-            >
-              {cta.label}
-            </Button>
-          </div>
-        )}
-      </div>
-    </div>,
-    document.body,
   );
 }
 
