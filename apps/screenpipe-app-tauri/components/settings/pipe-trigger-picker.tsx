@@ -12,23 +12,15 @@ import { IntegrationIcon } from "@/components/settings/connections-section";
 import { PipeScheduleBuilder } from "./pipe-schedule-builder";
 import type { ScheduleConfig } from "@/lib/utils/schedule-builder";
 import type { AvailableConnection } from "@/lib/pipe-connections";
+import type { PipeTrigger, PipeTriggerSource } from "@/lib/pipe-creator";
 import { Plus, Search, Clock, CalendarClock, Workflow, Loader2, Check } from "lucide-react";
+import posthog from "posthog-js";
 
-export interface TriggerSource {
-  app: string;
-  kind?: string;
-  instance?: string;
-  path?: string;
-  filter?: Record<string, string>;
-}
-export interface Trigger {
-  events?: string[];
-  custom?: string[];
-  sources?: TriggerSource[];
-}
+export type TriggerSource = PipeTriggerSource;
+export type Trigger = PipeTrigger;
 
 interface PickerProps {
-  pipeName: string;
+  pipeName?: string;
   trigger?: Trigger;
   apiBase: string;
   scheduleConfig: ScheduleConfig | null;
@@ -36,9 +28,11 @@ interface PickerProps {
   otherPipes: { name: string }[];
   availableConnections: AvailableConnection[];
   refreshConnections: () => Promise<AvailableConnection[]>;
-  fetchPipes: () => void;
-  applyOptimistic: (trigger: Trigger | undefined) => void;
+  fetchPipes?: () => void;
+  applyOptimistic?: (trigger: Trigger | undefined) => void;
+  onTriggerChange?: (trigger: Trigger | undefined) => void;
   onSaveSchedule: (cfg: ScheduleConfig | null) => void;
+  analyticsContext?: "create" | "edit";
 }
 
 // ── shared brand-aligned classes (DESIGN.md: sharp corners, grayscale only) ───
@@ -99,8 +93,9 @@ function sourceLabel(s: TriggerSource): string {
 // ── main ─────────────────────────────────────────────────────────────────────
 
 export function PipeTriggerPicker(props: PickerProps) {
-  const { pipeName, trigger, fetchPipes, applyOptimistic } = props;
+  const { pipeName, trigger, fetchPipes, applyOptimistic, onTriggerChange } = props;
   const [open, setOpen] = useState(false);
+  const analyticsContext = props.analyticsContext ?? (pipeName ? "edit" : "create");
 
   const events = trigger?.events ?? [];
   const custom = trigger?.custom ?? [];
@@ -109,7 +104,14 @@ export function PipeTriggerPicker(props: PickerProps) {
   function persistTrigger(next: Trigger) {
     const isEmpty = !(next.events?.length || next.custom?.length || next.sources?.length);
     const cleaned = isEmpty ? undefined : next;
-    applyOptimistic(cleaned);
+    applyOptimistic?.(cleaned);
+    onTriggerChange?.(cleaned);
+    posthog.capture("pipe_trigger_updated", {
+      context: analyticsContext,
+      event_trigger_count: cleaned?.events?.length ?? 0,
+      source_trigger_count: cleaned?.sources?.length ?? 0,
+    });
+    if (onTriggerChange || !pipeName || !fetchPipes) return;
     localFetch(`/pipes/${pipeName}/config`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -151,7 +153,10 @@ export function PipeTriggerPicker(props: PickerProps) {
           </div>
         ))}
         <button
-          onClick={() => setOpen(true)}
+          onClick={() => {
+            posthog.capture("pipe_trigger_picker_opened", { context: analyticsContext });
+            setOpen(true);
+          }}
           className="w-full h-8 text-[11px] uppercase tracking-wide border rounded-none px-2 flex items-center gap-1.5 text-muted-foreground hover:bg-foreground hover:text-background hover:border-foreground transition-colors"
         >
           <Plus className="h-3.5 w-3.5" /> add trigger
@@ -163,6 +168,14 @@ export function PipeTriggerPicker(props: PickerProps) {
           <TriggerModal
             {...props}
             onClose={() => setOpen(false)}
+            onSaveSchedule={(cfg) => {
+              posthog.capture("pipe_schedule_updated", {
+                context: analyticsContext,
+                scheduled: Boolean(cfg),
+                frequency: cfg?.frequency ?? "manual",
+              });
+              props.onSaveSchedule(cfg);
+            }}
             onAddSource={(src) => {
               persistTrigger({ ...trigger, sources: [...sources, src] });
               setOpen(false);

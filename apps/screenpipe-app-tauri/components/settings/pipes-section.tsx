@@ -53,6 +53,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { PipeTriggerPicker } from "./pipe-trigger-picker";
+import { PipeCreatorDialog } from "./pipe-creator-dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Select,
@@ -138,6 +139,10 @@ import { MemoizedReactMarkdown } from "@/components/markdown";
 import { useDeviceMonitor } from "@/lib/hooks/use-device-monitor";
 import { Monitor, Wifi, WifiOff, ScanSearch, Lock } from "lucide-react";
 import { requestPipeStop } from "@/lib/pipe-stop";
+import {
+  pipeCreatorAnalytics,
+  type PipeCreatorDraft,
+} from "@/lib/pipe-creator";
 
 const PIPE_EXECUTIONS_PAGE_LIMIT = 10;
 
@@ -279,17 +284,17 @@ function buildCreatePipeDisplayLabel(prompt: string): string {
 // Each `prompt` is sent straight into the create flow (autoSend).
 const PIPE_EXAMPLES: { label: string; prompt: string }[] = [
   {
-    label: "📋 daily recap",
+    label: "daily recap",
     prompt:
       "every day at 6pm, summarize what i worked on today and send me a notification",
   },
   {
-    label: "🧠 track people i meet",
+    label: "track people i meet",
     prompt:
       "keep a running note of the people i talk to and what we discussed, updated every hour",
   },
   {
-    label: "⏱ where my time goes",
+    label: "where my time goes",
     prompt:
       "every evening, break down how i spent my time across apps and projects today",
   },
@@ -1074,6 +1079,9 @@ export function PipesSection() {
   const [selectMode, setSelectMode] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
+  const [pipeCreatorOpen, setPipeCreatorOpen] = useState(false);
+  const [pipeCreatorInitialPrompt, setPipeCreatorInitialPrompt] = useState<string | undefined>();
+  const [pipeCreatorSource, setPipeCreatorSource] = useState("toolbar");
   const [updateDialog, setUpdateDialog] = useState<{
     pipeName: string;
     slug: string;
@@ -1123,6 +1131,21 @@ export function PipesSection() {
       autoSend: true,
     });
   };
+
+  const openPipeCreator = (source: string, prompt?: string) => {
+    setPipeCreatorSource(source);
+    setPipeCreatorInitialPrompt(prompt);
+    setPipeCreatorOpen(true);
+    posthog.capture("pipe_creator_opened", {
+      source,
+      prefilled: Boolean(prompt?.trim()),
+    });
+  };
+
+  const existingPipeNames = React.useMemo(
+    () => pipes.map((pipe) => pipe.config.name),
+    [pipes],
+  );
 
   const filteredPipes = React.useMemo(
     () =>
@@ -1277,6 +1300,43 @@ export function PipesSection() {
       setAvailableConnections(next);
     } catch { /* server may not be running */ }
   }, [apiBase, availableConnections]);
+
+  const createPipeFromDraft = async (draft: PipeCreatorDraft, content: string) => {
+    if (isRemote) {
+      throw new Error("switch to this device before creating a local Pipe");
+    }
+    if (!isSafePipeName(draft.name)) {
+      throw new Error("use letters, numbers, hyphens, or underscores for the Pipe name");
+    }
+
+    const home = await homeDir();
+    const pipesDir = await join(home, ".screenpipe", "pipes");
+    const pipeDir = await join(pipesDir, draft.name);
+    if (await exists(pipeDir)) {
+      throw new Error(`a Pipe named "${draft.name}" already exists`);
+    }
+
+    await mkdir(pipeDir, { recursive: true });
+    await writeTextFile(await join(pipeDir, "pipe.md"), content);
+
+    posthog.capture("pipe_creator_completed", {
+      source: pipeCreatorSource,
+      ...pipeCreatorAnalytics(draft),
+    });
+    toast({
+      title: `created "${draft.name}"`,
+      description: draft.enabled
+        ? "the Pipe is enabled and ready to run"
+        : "review it below, then enable it when you're ready",
+    });
+
+    setPipeTypeFilter("local");
+    setSearchQuery("");
+    setExpanded(draft.name);
+    expandedRef.current = draft.name;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    await fetchPipes();
+  };
 
   const checkForUpdates = useCallback(async () => {
     try {
@@ -2171,6 +2231,17 @@ export function PipesSection() {
             </DropdownMenu>
           )}
           <Button
+            variant="default"
+            size="icon"
+            className="h-8 w-8 rounded-none"
+            disabled={isRemote}
+            onClick={() => openPipeCreator("toolbar")}
+            title={isRemote ? "switch to this device to create a Pipe" : "create a Pipe"}
+            aria-label="create a Pipe"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+          <Button
             variant="outline"
             size="icon"
             className="h-8 w-8"
@@ -2295,7 +2366,7 @@ export function PipesSection() {
                     {PIPE_EXAMPLES.map((ex) => (
                       <button
                         key={ex.label}
-                        onClick={() => startPipeGeneration(ex.prompt, "empty_state_example")}
+                        onClick={() => openPipeCreator("empty_state_example", ex.prompt)}
                         className="inline-flex items-center gap-1.5 px-2.5 py-1.5 border border-border bg-muted/50 text-xs hover:bg-muted transition-colors"
                       >
                         {ex.label}
@@ -3454,7 +3525,7 @@ export function PipesSection() {
             const value = input?.value?.trim();
             if (!value) return;
             input.value = "";
-            startPipeGeneration(value, "create_box");
+            openPipeCreator("create_box", value);
           }}
         >
           <div className="flex items-center gap-2">
@@ -3472,6 +3543,25 @@ export function PipesSection() {
           </div>
         </form>
       </div>
+
+      <PipeCreatorDialog
+        open={pipeCreatorOpen}
+        onOpenChange={setPipeCreatorOpen}
+        initialPrompt={pipeCreatorInitialPrompt}
+        apiBase={apiBase}
+        existingPipeNames={existingPipeNames}
+        otherPipes={pipes
+          .filter((pipe) => pipe.config.enabled)
+          .map((pipe) => ({ name: pipe.config.name }))}
+        availableConnections={availableConnections}
+        refreshConnections={async () => {
+          const next = await fetchAvailablePipeConnections(apiBase, availableConnections);
+          setAvailableConnections(next);
+          return next;
+        }}
+        onCreate={createPipeFromDraft}
+        onBuildWithAi={(prompt) => startPipeGeneration(prompt, pipeCreatorSource)}
+      />
 
       {connectionModal && (
         <PostInstallConnectionsModal
