@@ -4,7 +4,7 @@
 
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowLeft,
@@ -165,17 +165,25 @@ export function PipeCreatorDialog({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const existingPipeNamesRef = useRef(existingPipeNames);
+
+  useEffect(() => {
+    existingPipeNamesRef.current = existingPipeNames;
+  }, [existingPipeNames]);
 
   useEffect(() => {
     if (!open) return;
     const prompt = initialPrompt?.trim() ?? "";
+    const pipeNames = existingPipeNamesRef.current;
     setIntent(prompt);
-    setDraft(prompt ? draftFromIntent(prompt, existingPipeNames) : blankDraft(existingPipeNames));
+    setDraft(
+      prompt ? draftFromIntent(prompt, pipeNames) : blankDraft(pipeNames),
+    );
     setStage(prompt ? "configure" : "intent");
     setAdvancedOpen(false);
     setCreating(false);
     setError(null);
-  }, [open, initialPrompt, existingPipeNames]);
+  }, [open, initialPrompt]);
 
   const normalizedName = slugifyPipeName(draft.name);
   const duplicateName = existingPipeNames.some(
