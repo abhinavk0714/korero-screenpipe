@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "test": "bun test --timeout=10000",
+    "test:local-gateway": "bun test src/test/local-gateway-harness.integration.test.ts --timeout=30000",
     "deploy": "bash scripts/deploy.sh",
     "deploy:no-sourcemaps": "wrangler deploy",
     "dev": "wrangler dev",
