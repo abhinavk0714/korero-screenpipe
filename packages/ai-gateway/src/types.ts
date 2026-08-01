@@ -219,6 +219,11 @@ export interface Env {
 	 * the new cap only on spend incurred after that snapshot.
 	 */
 	PRIVATE_COST_CAP_EPOCH?: string;
+	PRIVATE_COST_RESERVATION_TTL_SECONDS?: string;
+	PRIVATE_CAPACITY_ACTIVITY_SECONDS?: string;
+	PRIVATE_MAX_ACTIVE_INTERACTIVE_RESERVATIONS?: string;
+	PRIVATE_MAX_ACTIVE_BACKGROUND_RESERVATIONS?: string;
+	PRIVATE_MAX_BACKGROUND_RESERVED_FRACTION?: string;
 	MAX_DAILY_FREE_TEXT_COST?: string;
 	MAX_DAILY_BASIC_TEXT_COST?: string;
 	MAX_DAILY_BUSINESS_TEXT_COST?: string;
@@ -250,10 +255,9 @@ export interface Env {
 // User tier for rate limiting and model access
 export type UserTier = 'anonymous' | 'logged_in' | 'subscribed';
 
-// Capacity is deliberately separate from model access. All Business plans use
-// the subscribed model policy; Max and Ultra only receive larger usage/RPM
-// buckets. Cash-cost admission remains keyed to UserTier as another independent
-// safety boundary.
+// Capacity is deliberately separate from model access and provider-cost credit.
+// All Business variants use the same reviewed model catalog and included-credit
+// policy; Max and Ultra receive larger usage/RPM buckets only.
 export type UsageTier = UserTier | 'business_max' | 'business_ultra';
 
 // Server-verified commercial plan. This is intentionally separate from

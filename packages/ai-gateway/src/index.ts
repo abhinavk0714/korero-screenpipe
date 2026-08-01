@@ -32,9 +32,8 @@ import {
 	type CostReservationShape,
 } from './services/cost-tracker';
 import {
-	getPlanDailyCostCap,
-	getPlanMonthlyCostCap,
 	getTranscriptionDailyCostCap,
+	resolveHostedAiTextCostLimits,
 } from './services/hosted-ai-cost-controls';
 import { trackResponseUsage } from './utils/stream-usage-tracker';
 import { pruneRuntimeState } from './services/runtime-state-maintenance';
@@ -294,12 +293,20 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 
 		// Usage status endpoint - returns current usage without incrementing
 		if (path === '/v1/usage' && request.method === 'GET') {
+			// Anonymous auth results deliberately carry an `unknown` account plan:
+			// there is no server-verified customer record. The usage endpoint still
+			// represents anonymous traffic as the Free product, so resolve that one
+			// safe fallback explicitly. Keep every authenticated unknown plan
+			// fail-closed instead of accidentally granting paid capacity.
+			const usageAccountPlan = authResult.tier === 'anonymous' && authResult.accountPlan === 'unknown'
+				? 'free'
+				: authResult.accountPlan;
 			const status = await getUsageStatus(
 				env,
 				authResult.deviceId,
 				usageTier,
 				authResult.userId,
-				authResult.accountPlan,
+				usageAccountPlan,
 			);
 			// Enrich with cost-based limit flag (NOT the raw $ numbers — those
 			// are our internal margin and shouldn't leak to any client/user).
@@ -309,16 +316,13 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			let maxCost: number;
 			let monthlyCap: number;
 			try {
-				maxCost = getPlanDailyCostCap(
-					authResult.accountPlan,
+				const limits = resolveHostedAiTextCostLimits(
+					usageAccountPlan,
 					env,
 					authResult.hostedAiTrial === true,
 				);
-				monthlyCap = getPlanMonthlyCostCap(
-					authResult.accountPlan,
-					env,
-					authResult.hostedAiTrial === true,
-				);
+				maxCost = limits.daily;
+				monthlyCap = limits.monthly;
 			} catch (error) {
 				console.error('usage cost control configuration unavailable', error);
 				return addCorsHeaders(createErrorResponse(503, JSON.stringify({
@@ -339,7 +343,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				// Admission still fails closed. The status route stays available but
 				// marks usage unknown instead of pretending the customer spent zero.
 			}
-			const includedCredits = getHostedAiIncludedCredits(authResult.accountPlan);
+			const includedCredits = getHostedAiIncludedCredits(usageAccountPlan);
 			const usedCredits = monthlyCost === null ? null : Math.ceil(monthlyCost * 100);
 			const enriched = {
 				...status,
@@ -347,14 +351,14 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				upgrade_eligible: isHostedAiUpgradeEligible(authResult),
 				upsell_banner: status.upsell_banner === true && isHostedAiUpgradeEligible(authResult),
 				hosted_ai: {
-					plan: getHostedAiPlan(authResult.accountPlan) ?? 'unknown',
+					plan: getHostedAiPlan(usageAccountPlan) ?? 'unknown',
 					trial: authResult.hostedAiTrial === true,
 					included_credits: includedCredits,
 					used_credits: usedCredits,
 					remaining_credits: usedCredits === null
 						? null
 						: Math.max(0, includedCredits - usedCredits),
-					model_access: [...getHostedAiAllowedModels(authResult.accountPlan)],
+					model_access: [...getHostedAiAllowedModels(usageAccountPlan)],
 					upgrade_url: isHostedAiUpgradeEligible(authResult)
 						? 'https://screenpi.pe/account/billing'
 						: null,
@@ -494,6 +498,11 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				freeModel: isFreeModel(body.model),
 			});
 			if (!rateLimit.allowed && rateLimit.response) {
+				console.warn('hosted AI admission rejected', {
+					gate: 'per_minute',
+					tier: authResult.tier,
+					accountPlan: authResult.accountPlan,
+				});
 				return rateLimit.response;
 			}
 
@@ -501,6 +510,11 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
 			const usage = await trackUsage(env, authResult.deviceId, usageTier, authResult.userId, ipAddress, body.model);
 			if (!usage.allowed) {
+				console.warn('hosted AI admission rejected', {
+					gate: 'daily_query',
+					tier: authResult.tier,
+					accountPlan: authResult.accountPlan,
+				});
 				const creditsExhausted = (usage.creditsRemaining ?? 0) <= 0;
 				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 					error: creditsExhausted ? 'credits_exhausted' : 'daily_limit_exceeded',
@@ -553,6 +567,13 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				authResult.hostedAiTrial === true,
 			);
 			if (!costReservation.allowed) {
+				console.warn('hosted AI admission rejected', {
+					gate: 'cost_reservation',
+					tier: authResult.tier,
+					accountPlan: authResult.accountPlan,
+					hostedAiTrial: authResult.hostedAiTrial === true,
+					status: costReservation.response.status,
+				});
 				if (freeChatLease) await releaseFreeChatLease(env, freeChatLease);
 				return costReservation.response;
 			}
