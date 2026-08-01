@@ -4,8 +4,10 @@
   "private": true,
   "scripts": {
     "test": "bun test --timeout=10000",
+    "db:migrate:required": "bash scripts/apply-required-migrations.sh --remote",
+    "db:migrate:required:local": "bash scripts/apply-required-migrations.sh --local",
     "deploy": "bash scripts/deploy.sh",
-    "deploy:no-sourcemaps": "wrangler deploy",
+    "deploy:no-sourcemaps": "bun run db:migrate:required && wrangler deploy",
     "dev": "wrangler dev",
     "start": "wrangler dev",
     "cf-typegen": "wrangler types"

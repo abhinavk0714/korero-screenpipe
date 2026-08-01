@@ -44,6 +44,12 @@ if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
   exit 1
 fi
 
+# Settlement writes require the additive idempotency ledger. Apply and verify
+# it after local prerequisites pass but before creating a Sentry release or
+# changing Worker traffic. Re-running this migration is safe, and an old Worker
+# remains compatible with the table.
+bun run db:migrate:required
+
 # 1. Build into dist/ (wrangler.toml has upload_source_maps=true so .map
 # files are emitted alongside index.js). Same flags wrangler deploy uses.
 echo "→ building worker bundle to dist/…"
