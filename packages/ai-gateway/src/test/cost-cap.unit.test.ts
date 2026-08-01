@@ -65,8 +65,12 @@ describe('enforceDailyCostCap', () => {
 		});
 	});
 
-	it('does not offer a false upgrade when Business, Max, or Ultra reaches its cost budget', async () => {
-		for (const plan of ['business', 'business_max', 'business_ultra'] as const) {
+	it('offers the next real power plan without inventing an upgrade above Ultra', async () => {
+		for (const [plan, requiredPlan, upgradeUrl] of [
+			['business', 'business_max', 'https://screenpi.pe/account/billing?target_plan=pro_max&interval=month'],
+			['business_max', 'business_ultra', 'https://screenpi.pe/account/billing?target_plan=pro_ultra&interval=month'],
+			['business_ultra', null, null],
+		] as const) {
 			const response = await enforceDailyCostCap(
 				dbEnv(200), 'dev', 'subscribed', 'gemini-3.5-flash', plan,
 			);
@@ -75,8 +79,8 @@ describe('enforceDailyCostCap', () => {
 			expect(JSON.parse(wireBody.error)).toMatchObject({
 				error: 'daily_cost_limit_exceeded',
 				plan,
-				required_plan: null,
-				upgrade_url: null,
+				required_plan: requiredPlan,
+				upgrade_url: upgradeUrl,
 				can_buy_credits: false,
 			});
 		}
@@ -138,6 +142,7 @@ describe('reserveDailyCostCap policy edges', () => {
 		expect(result.allowed).toBe(false);
 		if (!result.allowed) {
 			expect(result.response.status).toBe(503);
+			expect(result.reason).toBe('cost_control_unavailable');
 			expect(await result.response.text()).toContain('cost_control_unavailable');
 		}
 	});

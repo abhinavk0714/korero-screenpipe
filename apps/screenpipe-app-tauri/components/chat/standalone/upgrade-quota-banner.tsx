@@ -7,6 +7,7 @@ import { useState } from "react";
 import { X, Zap } from "lucide-react";
 import { useRouter } from "next/navigation";
 import posthog from "posthog-js";
+import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { Button } from "@/components/ui/button";
 import { useUsageStatus, formatResetTime } from "@/lib/hooks/use-usage-status";
 import { useModelUpsellGating } from "@/lib/hooks/use-model-upsell-gating";
@@ -14,12 +15,10 @@ import { clearQuotaUpgrade, useQuotaUpgrade } from "@/lib/chat/quota-upgrade";
 import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
 
 /**
- * At-the-cap upgrade prompt (the "intensity" lever). Appears in the composer
- * only when a non-Business user has spent their full daily premium-message
- * budget (`remaining <= 0`). Free models keep working, so this is a soft,
- * dismissible nudge — not a wall. One click opens the native Business offer so
- * price and billing cadence are reviewed before sign-in or checkout. Hidden for Business (`subscribed`) and BYOK users
- * (usage is null when the worker is bypassed).
+ * Recovery prompt for either proactive query exhaustion or a structured hosted
+ * AI cost-limit response. The proactive prompt stays hidden for paid and BYOK
+ * users. A server-selected cost recovery may also offer Business Max/Ultra and
+ * opens only the exact allow-listed billing target parsed by quota-errors.ts.
  *
  * To reproduce the exhausted state on demand without burning real quota, see
  * the dev force-flag in use-usage-status.tsx.
@@ -62,10 +61,18 @@ export function UpgradeQuotaBanner() {
     try {
       posthog.capture("desktop_upgrade_entry_clicked", {
         source,
+        required_plan: blockedUpgrade?.requiredPlan ?? "business",
       });
-      await openBusinessUpgradeSurface(source);
+      if (
+        blockedUpgrade &&
+        blockedUpgrade.requiredPlan !== "business"
+      ) {
+        await openUrl(blockedUpgrade.upgradeUrl);
+      } else {
+        await openBusinessUpgradeSurface(source);
+      }
     } catch (e) {
-      console.error("failed to open Business upgrade:", e);
+      console.error("failed to open hosted AI upgrade:", e);
     } finally {
       setBusy(false);
     }
@@ -79,9 +86,29 @@ export function UpgradeQuotaBanner() {
     router.push("/?section=pipes");
   };
 
-  const blockedTitle = resets
-    ? `Hosted AI paused until ${resets}`
-    : "Hosted AI is paused for today";
+  const blockedTitle = blockedUpgrade?.reason === "request_cost_limit_exceeded"
+    ? "This request is too large for hosted AI"
+    : blockedUpgrade?.reason === "trial_cost_limit_exceeded"
+      ? "Hosted AI trial allowance reached"
+      : resets
+        ? `Hosted AI paused until ${resets}`
+        : "Hosted AI allowance reached";
+  const blockedDescription = blockedUpgrade?.reason === "request_cost_limit_exceeded"
+    ? "Start a new chat or shorten the context. Local and own-key AI presets keep working."
+    : blockedUpgrade?.reason === "trial_cost_limit_exceeded"
+      ? "Local and own-key AI presets keep working. Upgrade for a larger hosted allowance."
+      : "Background pipes share this allowance. The website message allowance is separate. Local and own-key AI presets keep working.";
+  const upgradeLabel = blockedUpgrade?.requiredPlan === "business_max"
+    ? "Upgrade to Max"
+    : blockedUpgrade?.requiredPlan === "business_ultra"
+      ? "Upgrade to Ultra"
+      : blockedUpgrade
+        ? "Upgrade to Business"
+        : "View Business";
+  const canReviewPipes = blockedUpgrade && (
+    blockedUpgrade.reason === "daily_cost_limit_exceeded" ||
+    blockedUpgrade.reason === "monthly_cost_limit_exceeded"
+  );
 
   return (
     <div
@@ -101,18 +128,14 @@ export function UpgradeQuotaBanner() {
           </div>
           <div className="mt-0.5 text-muted-foreground">
             {blockedUpgrade ? (
-              <>
-                Background pipes share this budget. The website message
-                allowance is separate. Choose a local or own-key AI preset below
-                to keep working.
-              </>
+              <>{blockedDescription}</>
             ) : (
               <>Free models still work{resets ? ` · resets ${resets}` : ""}.</>
             )}
           </div>
         </div>
         <span className="flex shrink-0 items-center gap-1.5">
-          {blockedUpgrade && (
+          {canReviewPipes && (
             <Button
               size="sm"
               variant="ghost"
@@ -128,7 +151,7 @@ export function UpgradeQuotaBanner() {
             onClick={onUpgrade}
             disabled={busy}
           >
-            {blockedUpgrade ? "Upgrade to Business" : "View Business"}
+            {upgradeLabel}
           </Button>
           <button
             type="button"

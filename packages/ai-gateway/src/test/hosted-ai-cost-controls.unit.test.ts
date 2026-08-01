@@ -108,6 +108,34 @@ describe('private hosted AI cost controls', () => {
 		});
 	});
 
+	it('scales reviewed Business windows for Max and Ultra without widening global breakers', () => {
+		const env = privateCostControls({
+			MAX_REQUEST_FREE_TEXT_COST: '0.1',
+			MAX_REQUEST_BASIC_TEXT_COST: '0.25',
+			MAX_REQUEST_BUSINESS_TEXT_COST: '0.5',
+			MAX_DAILY_FREE_TEXT_COST: '0.25',
+			MAX_DAILY_BASIC_TEXT_COST: '0.5',
+			MAX_DAILY_BUSINESS_TEXT_COST: '1',
+			MAX_MONTHLY_FREE_TEXT_COST: '1',
+			MAX_MONTHLY_BASIC_TEXT_COST: '2',
+			MAX_MONTHLY_BUSINESS_TEXT_COST: '4',
+		});
+		expect(resolveHostedAiTextCostLimits('business_max', env)).toEqual({
+			request: 1,
+			daily: 2,
+			monthly: 8,
+			globalHourly: 401,
+			globalDaily: 402,
+		});
+		expect(resolveHostedAiTextCostLimits('business_ultra', env)).toEqual({
+			request: 2,
+			daily: 4,
+			monthly: 16,
+			globalHourly: 401,
+			globalDaily: 402,
+		});
+	});
+
 	it('fails closed for an unrecognized account plan', () => {
 		expect(() => getPlanDailyCostCap(
 			'unknown' as AccountPlan,
