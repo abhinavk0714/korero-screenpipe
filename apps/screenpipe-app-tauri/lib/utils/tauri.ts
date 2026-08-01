@@ -2714,19 +2714,6 @@ async vaultUnlock(password: string) : Promise<Result<null, string>> {
 }
 },
 /**
- * Verify remote announcement content before JavaScript parses or renders it.
- * Reusing the updater trust root means a PostHog editor cannot inject content;
- * the payload also needs the release signing key.
- */
-async verifyRemoteAnnouncement(payload: string, signature: string) : Promise<Result<string, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("verify_remote_announcement", { payload, signature }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
  * Write the exclusion list atomically (write-to-tmp + rename) so the
  * engine's 500 ms mtime poll never observes a half-written file. The
  * engine picks up the new list on the next tick subject to its

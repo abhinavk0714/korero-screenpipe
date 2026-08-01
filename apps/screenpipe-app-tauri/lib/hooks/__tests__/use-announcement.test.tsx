@@ -11,7 +11,6 @@ const {
   captureMock,
   pushMock,
   openMock,
-  invokeMock,
   flagPayload,
   optedOut,
   appName,
@@ -21,9 +20,6 @@ const {
   captureMock: vi.fn(),
   pushMock: vi.fn(),
   openMock: vi.fn(() => Promise.resolve()),
-  invokeMock: vi.fn(async (_command: string, args: { payload: string }) =>
-    Buffer.from(args.payload, "base64").toString("utf8"),
-  ),
   // mutable holder so each test can set the active flag payload
   flagPayload: { current: null as unknown },
   optedOut: { current: false },
@@ -39,8 +35,6 @@ vi.mock("posthog-js", () => ({
     has_opted_out_capturing: vi.fn(() => optedOut.current),
   },
 }));
-
-vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
@@ -86,13 +80,6 @@ const FLAG = {
   body: "your timeline now syncs.",
 };
 
-function signed(payload: unknown) {
-  return {
-    payload: Buffer.from(JSON.stringify(payload)).toString("base64"),
-    signature: "test-signature",
-  };
-}
-
 describe("useAnnouncement", () => {
   beforeEach(() => {
     eventHandlers.clear();
@@ -121,7 +108,7 @@ describe("useAnnouncement", () => {
   });
 
   it("surfaces the PostHog flag announcement and reports it shown once", async () => {
-    flagPayload.current = signed(FLAG);
+    flagPayload.current = FLAG;
     const { result } = renderHook(() => useAnnouncement());
     await flushAnnouncementEffects();
 
@@ -137,28 +124,18 @@ describe("useAnnouncement", () => {
     });
   });
 
-  it("fails closed for unsigned remote payloads", async () => {
+  it("does not load remote prompts after analytics opt-out", async () => {
+    optedOut.current = true;
     flagPayload.current = FLAG;
     const { result } = renderHook(() => useAnnouncement());
     await flushAnnouncementEffects();
 
     expect(result.current.announcement).toBeNull();
-    expect(invokeMock).not.toHaveBeenCalled();
-  });
-
-  it("does not load remote prompts after analytics opt-out", async () => {
-    optedOut.current = true;
-    flagPayload.current = signed(FLAG);
-    const { result } = renderHook(() => useAnnouncement());
-    await flushAnnouncementEffects();
-
-    expect(result.current.announcement).toBeNull();
-    expect(invokeMock).not.toHaveBeenCalled();
   });
 
   it("suppresses remote flag announcements in e2e builds", async () => {
     vi.stubEnv("NEXT_PUBLIC_SCREENPIPE_E2E", "true");
-    flagPayload.current = signed(FLAG);
+    flagPayload.current = FLAG;
 
     const { result } = renderHook(() => useAnnouncement());
     await flushAnnouncementEffects();
@@ -186,7 +163,7 @@ describe("useAnnouncement", () => {
   it("suppresses remote flag announcements in the development app identity", async () => {
     appName.current = "screenpipe - Development";
     appIdentifier.current = "screenpi.pe.dev";
-    flagPayload.current = signed(FLAG);
+    flagPayload.current = FLAG;
 
     const { result } = renderHook(() => useAnnouncement());
     await flushAnnouncementEffects();
@@ -199,7 +176,7 @@ describe("useAnnouncement", () => {
   });
 
   it("dismiss() persists 'seen', clears the announcement, and stays gone", async () => {
-    flagPayload.current = signed(FLAG);
+    flagPayload.current = FLAG;
     const { result } = renderHook(() => useAnnouncement());
     await flushAnnouncementEffects();
 
@@ -218,7 +195,7 @@ describe("useAnnouncement", () => {
 
   it("a /notify push (announcement event) overrides and bypasses dismissal", async () => {
     // flag is present AND already dismissed — the push must still win
-    flagPayload.current = signed(FLAG);
+    flagPayload.current = FLAG;
     window.localStorage.setItem(
       "screenpipe-announcements-dismissed-v1",
       JSON.stringify(["pushed-1"]),
@@ -242,10 +219,10 @@ describe("useAnnouncement", () => {
   });
 
   it("activateCta navigates internal routes, reports the click, and closes", async () => {
-    flagPayload.current = signed({
+    flagPayload.current = {
       ...FLAG,
       cta: { label: "open settings", route: "/settings?section=storage" },
-    });
+    };
     const { result } = renderHook(() => useAnnouncement());
     await flushAnnouncementEffects();
 
@@ -263,10 +240,10 @@ describe("useAnnouncement", () => {
   });
 
   it("activateCta opens external urls in the system browser", async () => {
-    flagPayload.current = signed({
+    flagPayload.current = {
       ...FLAG,
       cta: { label: "read more", url: "https://screenpi.pe/blog" },
-    });
+    };
     const { result } = renderHook(() => useAnnouncement());
     await flushAnnouncementEffects();
 
@@ -279,7 +256,7 @@ describe("useAnnouncement", () => {
   });
 
   it("submits only configured survey option ids and dismisses", async () => {
-    flagPayload.current = signed({
+    flagPayload.current = {
       ...FLAG,
       surface: "sidebar",
       survey: {
@@ -295,7 +272,7 @@ describe("useAnnouncement", () => {
           },
         ],
       },
-    });
+    };
     const { result } = renderHook(() => useAnnouncement());
     await flushAnnouncementEffects();
 

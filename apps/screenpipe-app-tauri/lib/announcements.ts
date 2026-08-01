@@ -46,13 +46,6 @@ export interface AnnouncementSurvey {
 
 export type SurveyAnswers = Record<string, string[]>;
 
-/** Remote flags carry only this signed envelope. The native verifier checks
- * the payload against the app updater public key before JSON is parsed. */
-export interface SignedAnnouncementEnvelope {
-  payload: string;
-  signature: string;
-}
-
 /** Where a `banner` sits. */
 export type BannerPosition = "top" | "bottom";
 /** Which corner a `card` docks in. */
@@ -110,7 +103,6 @@ const QUESTION_TYPES: readonly SurveyQuestionType[] = [
   "multiple-choice",
 ];
 const IDENTIFIER = /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/;
-const MAX_ANNOUNCEMENT_BYTES = 32 * 1024;
 const BANNER_POSITIONS: readonly BannerPosition[] = ["top", "bottom"];
 const CARD_POSITIONS: readonly CardPosition[] = [
   "top-left",
@@ -196,21 +188,6 @@ function boundedString(v: unknown, max: number): string | null {
 function boundedIdentifier(v: unknown, max = 80): string | null {
   const value = boundedString(v, max);
   return value && IDENTIFIER.test(value) ? value : null;
-}
-
-export function isSignedAnnouncementEnvelope(
-  raw: unknown,
-): raw is SignedAnnouncementEnvelope {
-  if (!raw || typeof raw !== "object") return false;
-  const r = raw as Record<string, unknown>;
-  return (
-    typeof r.payload === "string" &&
-    r.payload.length > 0 &&
-    r.payload.length <= MAX_ANNOUNCEMENT_BYTES * 2 &&
-    typeof r.signature === "string" &&
-    r.signature.length > 0 &&
-    r.signature.length <= 4096
-  );
 }
 
 function safeInternalRoute(raw: unknown): string | null {

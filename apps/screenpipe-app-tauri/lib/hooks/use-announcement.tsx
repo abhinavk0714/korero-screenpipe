@@ -8,7 +8,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import posthog from "posthog-js";
 import { useRouter } from "next/navigation";
 import { getIdentifier, getName } from "@tauri-apps/api/app";
-import { invoke } from "@tauri-apps/api/core";
 import { useTauriEvent } from "./use-tauri-event";
 import {
   type Announcement,
@@ -18,7 +17,6 @@ import {
   loadDismissedIds,
   loadPreviewAnnouncement,
   markDismissed,
-  isSignedAnnouncementEnvelope,
   parseAnnouncement,
   pickAnnouncement,
   sanitizeSurveyAnswers,
@@ -27,23 +25,35 @@ import {
 /**
  * PostHog feature-flag key that carries the announcement.
  *
- * Push an announcement: sign the exact JSON bytes with the Tauri release
- * minisign key, base64 the JSON and `.sig` contents, then set the PostHog
- * feature-flag payload to `{ "payload": "...", "signature": "..." }`.
- * The signed JSON may contain:
+ * Edit the PostHog feature-flag payload to remotely choose the content,
+ * questions, answer choices, targeting, and surface without releasing the app:
  *
  *   {
  *     "id": "tip-pipes-2026-06",          // bump to re-show after dismissal
  *     "kind": "tip",                       // news | tip | reminder
  *     "surface": "sidebar",                // modal | banner | card | sidebar
  *     "title": "pipes run on a schedule",
- *     "body": "create a pipe once and it keeps working in the background.",
+ *     "body": "help us understand what brought you to screenpipe.",
+ *     "survey": {
+ *       "submitLabel": "send",
+ *       "questions": [{
+ *         "id": "discovery_source",
+ *         "type": "single-choice",
+ *         "prompt": "where did you first hear about screenpipe?",
+ *         "required": true,
+ *         "choices": [
+ *           { "id": "hacker_news", "label": "Hacker News" },
+ *           { "id": "friend", "label": "A friend or colleague" }
+ *         ]
+ *       }]
+ *     },
  *     "cta": { "label": "create a pipe", "route": "/home?section=pipes" },
  *     "expiresAt": "2026-07-01T00:00:00Z", // optional
  *     "dismissible": true                   // optional, default true
  *   }
  *
- * Targeting stays in PostHog, but unsigned or modified content fails closed.
+ * The payload is declarative and passes strict client-side validation before
+ * rendering; it cannot name code, components, scripts, or arbitrary events.
  */
 export const ANNOUNCEMENT_FLAG_KEY = "app-announcement";
 
@@ -59,19 +69,6 @@ interface UseAnnouncementResult {
   reportOpened: () => void;
   /** submit bounded option ids and dismiss. returns false on invalid input. */
   submitSurvey: (answers: SurveyAnswers) => boolean;
-}
-
-async function verifyRemotePayload(raw: unknown): Promise<unknown> {
-  if (!isSignedAnnouncementEnvelope(raw)) return null;
-  try {
-    const verified = await invoke<string>("verify_remote_announcement", {
-      payload: raw.payload,
-      signature: raw.signature,
-    });
-    return JSON.parse(verified);
-  } catch {
-    return null;
-  }
 }
 
 export function useAnnouncement(): UseAnnouncementResult {
@@ -113,17 +110,16 @@ export function useAnnouncement(): UseAnnouncementResult {
     let cancelled = false;
     let unsubscribe: (() => void) | undefined;
 
-    const read = async () => {
+    const read = () => {
       if (cancelled) return;
       try {
         if (posthog.has_opted_out_capturing?.()) {
           setPayload(null);
           return;
         }
-        const raw =
-          posthog.getFeatureFlagPayload(ANNOUNCEMENT_FLAG_KEY) ?? null;
-        const verified = await verifyRemotePayload(raw);
-        if (!cancelled) setPayload(verified);
+        setPayload(
+          posthog.getFeatureFlagPayload(ANNOUNCEMENT_FLAG_KEY) ?? null,
+        );
       } catch {
         setPayload(null);
       }
@@ -140,16 +136,16 @@ export function useAnnouncement(): UseAnnouncementResult {
         return;
       }
 
-      await read();
+      read();
       try {
-        unsubscribe = posthog.onFeatureFlags(() => void read());
+        unsubscribe = posthog.onFeatureFlags(read);
       } catch {
         // posthog not ready / disabled — the one-shot read above is enough.
       }
     };
 
     start().catch(() => {
-      void read();
+      read();
     });
 
     return () => {
