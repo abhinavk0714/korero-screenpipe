@@ -79,13 +79,15 @@ export function getHostedAiAllowedModels(accountPlan: AccountPlan): readonly str
 export function getHostedAiIncludedCredits(accountPlan: AccountPlan): number {
 	switch (accountPlan) {
 		case 'free': return 10;
-		case 'basic': return 150;
+		// Temporary incident relief: give paid users enough headroom to keep Chat
+		// usable while global breakers and the background-Pipe budget remain hard.
+		case 'basic': return 250;
 		case 'business_max': return 800;
 		case 'business_ultra': return 1_600;
 		case 'business':
 		case 'team':
 		case 'enterprise':
-			return 400;
+			return 600;
 		default: return 0;
 	}
 }

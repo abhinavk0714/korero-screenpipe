@@ -63,12 +63,12 @@ describe('hosted AI model products', () => {
 
 	it.each([
 		['free', 10, 0.1],
-		['basic', 150, 1.5],
-		['business', 400, 4],
+		['basic', 250, 2.5],
+		['business', 600, 6],
 		['business_max', 800, 8],
 		['business_ultra', 1_600, 16],
-		['team', 400, 4],
-		['enterprise', 400, 4],
+		['team', 600, 6],
+		['enterprise', 600, 6],
 	] as const)('keeps %s credits and provider-cost allowance aligned', (plan, credits, costUsd) => {
 		expect(getHostedAiIncludedCredits(plan)).toBe(credits);
 		expect(getHostedAiIncludedProviderCostUsd(plan)).toBe(costUsd);
