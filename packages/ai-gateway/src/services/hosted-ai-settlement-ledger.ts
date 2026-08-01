@@ -144,20 +144,16 @@ export async function recordHostedAiSettlement(
 			latencyMs: safeMetric(input.telemetry.latencyMs, 'latency'),
 			latencySamples: safeMetric(input.telemetry.latencySamples, 'latency samples'),
 		};
+		// A replay can arrive after the clock or private ledger epoch advances. Those
+		// values choose the first write's accumulator rows; they are not part of the
+		// request's identity. Latency is likewise retry-time telemetry. Keeping them
+		// out of the fingerprint lets an ambiguous committed write be retried safely
+		// while still failing closed on changed cost, ownership, lane, or attribution.
 		const settlementFingerprint = await fingerprint([
 			deviceId,
 			microCents,
-			day,
-			monthPeriod,
-			hour,
 			input.lane,
 			input.hostedAiTrial,
-			ledgerEpoch,
-			monthlyKey,
-			backgroundDailyKey,
-			backgroundTotalKey,
-			globalDailyKey,
-			globalHourlyKey,
 			telemetry.tier,
 			telemetry.provider,
 			telemetry.model,
@@ -168,8 +164,6 @@ export async function recordHostedAiSettlement(
 			telemetry.outputTokens,
 			telemetry.cacheReadTokens,
 			telemetry.cacheCreationTokens,
-			telemetry.latencyMs,
-			telemetry.latencySamples,
 		]);
 		const nowIso = new Date().toISOString();
 		const backgroundStatements = input.lane === 'background'

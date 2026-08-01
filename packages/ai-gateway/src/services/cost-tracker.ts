@@ -341,7 +341,7 @@ export function getNonStreamSettlementCost(
 }
 
 export interface CostLogEntry {
-  /** Stable per-provider-call settlement identity from the admission hold. */
+  /** Stable request-settlement identity from the admission hold. */
   settlement_id?: string;
   device_id?: string;
   user_id?: string;

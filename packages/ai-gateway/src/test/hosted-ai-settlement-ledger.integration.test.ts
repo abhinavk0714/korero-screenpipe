@@ -16,6 +16,7 @@ import {
 	utcHour,
 	utcMonth,
 } from '../services/cost-tracker';
+import { recordHostedAiSettlement } from '../services/hosted-ai-settlement-ledger';
 
 const COST_DAILY_SCHEMA = `CREATE TABLE cost_daily (
 	date TEXT NOT NULL, tier TEXT NOT NULL, provider TEXT NOT NULL,
@@ -120,6 +121,93 @@ describe('hosted AI settlement ledger against workerd D1', () => {
 			SELECT applied_at FROM hosted_ai_settlements WHERE settlement_id = ?
 		`).bind(settlementId).first<{ applied_at: string }>();
 		expect(settlement?.applied_at).toBeTruthy();
+	});
+
+	it('treats clock, epoch, derived-key, and latency changes as the same replay', async () => {
+		const first = {
+			settlementId: 'settlement-cross-boundary-replay',
+			deviceId: 'cross-boundary-account',
+			costUsd: 0.25,
+			day: '2026-07-31',
+			monthPeriod: '2026-07',
+			hour: '2026-07-31T23',
+			lane: 'background' as const,
+			hostedAiTrial: false,
+			ledgerEpoch: 'epoch-a',
+			monthlyKey: 'monthly-a',
+			backgroundDailyKey: 'background-daily-a',
+			backgroundTotalKey: 'background-total-a',
+			globalDailyKey: 'global-daily-a',
+			globalHourlyKey: 'global-hourly-a',
+			telemetry: {
+				tier: 'business_max',
+				provider: 'anthropic',
+				model: 'claude-sonnet-5',
+				endpoint: '/v1/chat/completions',
+				stream: true,
+				routerTier: 'normal',
+				inputTokens: 1_000,
+				outputTokens: 100,
+				cacheReadTokens: 50,
+				cacheCreationTokens: 25,
+				latencyMs: 250,
+				latencySamples: 1,
+			},
+		};
+
+		expect(await recordHostedAiSettlement(env, first)).toBe(true);
+		expect(await recordHostedAiSettlement(env, {
+			...first,
+			day: '2026-08-01',
+			monthPeriod: '2026-08',
+			hour: '2026-08-01T00',
+			ledgerEpoch: 'epoch-b',
+			monthlyKey: 'monthly-b',
+			backgroundDailyKey: 'background-daily-b',
+			backgroundTotalKey: 'background-total-b',
+			globalDailyKey: 'global-daily-b',
+			globalHourlyKey: 'global-hourly-b',
+			telemetry: {
+				...first.telemetry,
+				latencyMs: 400,
+			},
+		})).toBe(true);
+
+		const settlement = await env.DB.prepare(`
+			SELECT day, month_period, hour, ledger_epoch
+			FROM hosted_ai_settlements WHERE settlement_id = ?
+		`).bind(first.settlementId).first<{
+			day: string;
+			month_period: string;
+			hour: string;
+			ledger_epoch: string;
+		}>();
+		expect(settlement).toEqual({
+			day: first.day,
+			month_period: first.monthPeriod,
+			hour: first.hour,
+			ledger_epoch: first.ledgerEpoch,
+		});
+
+		for (const key of [
+			first.deviceId,
+			first.monthlyKey,
+			first.backgroundDailyKey,
+			first.backgroundTotalKey,
+			first.globalDailyKey,
+			first.globalHourlyKey,
+		]) {
+			expect((await env.DB.prepare(
+				'SELECT daily_cost_usd FROM usage WHERE device_id = ?',
+			).bind(key).first<{ daily_cost_usd: number }>())?.daily_cost_usd).toBe(0.25);
+		}
+		expect((await env.DB.prepare(
+			"SELECT COUNT(*) AS count FROM usage WHERE device_id LIKE '%-b'",
+		).first<{ count: number }>())?.count).toBe(0);
+		const aggregate = await env.DB.prepare(
+			'SELECT date, requests, latency_ms_sum FROM cost_daily',
+		).first<{ date: string; requests: number; latency_ms_sum: number }>();
+		expect(aggregate).toEqual({ date: first.day, requests: 1, latency_ms_sum: 250 });
 	});
 
 	it('counts different settlement IDs independently', async () => {
