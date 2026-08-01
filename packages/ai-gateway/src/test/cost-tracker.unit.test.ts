@@ -13,7 +13,7 @@
 
 import { describe, it, expect } from 'bun:test';
 import type { Env } from '../types';
-import { getCostReservationMicroUsd, getModelCost, getNonStreamSettlementCost, getStreamModelCost, getStreamSettlementCost, logCost, isZeroCostModel, inferProvider, isFrontierModel } from '../services/cost-tracker';
+import { dailyLaneCostKey, getCostReservationMicroUsd, getModelCost, getNonStreamSettlementCost, getStreamModelCost, getStreamSettlementCost, logCost, isZeroCostModel, inferProvider, isFrontierModel, totalLaneCostKey } from '../services/cost-tracker';
 import { getGlobalDailyCostCap, getGlobalHourlyCostCap, getPlanDailyCostCap, getPlanMonthlyCostCap, getPlanRequestCostCap, loadHostedAiTextCostControls } from '../services/hosted-ai-cost-controls';
 import { TEST_PRIVATE_COST_CONTROLS } from './fixtures/private-cost-controls';
 
@@ -342,7 +342,11 @@ describe('logCost — bounded daily aggregation', () => {
 	it('updates the quota accumulator and one aggregate row', async () => {
 		const { db, calls } = makeMockDB();
 		await logCost({ DB: db } as any, { ...entry, latency_ms: 1234, router_tier: 'hard' } as any);
-		expect(calls.filter((call) => call.sql.includes('INSERT INTO usage')).length).toBe(4);
+		const accumulatorWrites = calls.filter((call) => call.sql.includes('INSERT INTO usage'));
+		expect(accumulatorWrites.length).toBe(4);
+		expect(accumulatorWrites.some((call) =>
+			String(call.bindings[0]).includes('lane-')
+		)).toBe(false);
 		const inserts = costDailyInserts(calls);
 		expect(inserts.length).toBe(1);
 		expect(inserts[0].sql).toContain('ON CONFLICT');
@@ -350,6 +354,19 @@ describe('logCost — bounded daily aggregation', () => {
 		expect(inserts[0].bindings[9]).toBe(800);
 		expect(inserts[0].bindings[12]).toBe(1234);
 		expect(inserts[0].bindings[13]).toBe(1);
+	});
+
+	it('adds bounded lane ledgers only for background work', async () => {
+		const { db, calls } = makeMockDB();
+		await logCost({ DB: db } as any, { ...entry, lane: 'background' } as any);
+		const accumulatorWrites = calls.filter((call) => call.sql.includes('INSERT INTO usage'));
+		expect(accumulatorWrites.length).toBe(6);
+		expect(accumulatorWrites.some((call) =>
+			call.bindings[0] === dailyLaneCostKey('dev1', 'background')
+		)).toBe(true);
+		expect(accumulatorWrites.some((call) =>
+			call.bindings[0] === totalLaneCostKey('dev1', 'background')
+		)).toBe(true);
 	});
 
 	it('does not persist request-level user or device identifiers', async () => {

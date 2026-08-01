@@ -180,7 +180,10 @@ export function classifyQuotaError(errorStr: string): QuotaErrorType {
   // model rate limit: switching models usually does not help, and Pi retries
   // it automatically. Keep it distinct so the UI can explain what is really
   // happening instead of suggesting an unrelated model change.
-  if (normalized.includes("priced_request_in_flight")) {
+  if (
+    normalized.includes("priced_request_in_flight") ||
+    normalized.includes("hosted_ai_capacity_reserved")
+  ) {
     return "hosted_busy";
   }
 

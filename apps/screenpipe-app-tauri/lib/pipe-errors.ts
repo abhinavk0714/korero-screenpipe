@@ -10,6 +10,7 @@
 
 export type PipeErrorType =
   | "daily_limit"
+  | "background_limit"
   | "credits_exhausted"
   | "quota_exhausted"
   | "rate_limit"
@@ -53,6 +54,12 @@ export function parsePipeError(stderr: string): ParsedPipeError {
     if (classified) return classified;
   }
   const normalized = stderr.toLowerCase();
+  if (normalized.includes("background_cost_limit_exceeded")) {
+    return {
+      type: "background_limit",
+      message: "scheduled pipe AI budget reached — chat is still available",
+    };
+  }
   if (
     normalized.includes("daily_cost_limit_exceeded") ||
     normalized.includes("daily_limit_exceeded")
@@ -128,6 +135,15 @@ function classifyStructuredPipeError(value: unknown): ParsedPipeError | null {
     .join(" ")
     .toLowerCase();
 
+  if (combined.includes("background_cost_limit_exceeded")) {
+    return {
+      type: "background_limit",
+      message:
+        message ||
+        "scheduled pipe AI budget reached — chat is still available; switch to Auto or local AI, or wait until tomorrow",
+      resets_at: stringValue(record.resets_at),
+    };
+  }
   if (combined.includes("daily_limit_exceeded")) {
     return {
       type: "daily_limit",
@@ -198,6 +214,7 @@ function numberValue(value: unknown): number | undefined {
 export function isActionablePipeError(type: PipeErrorType): boolean {
   return (
     type === "daily_limit" ||
+    type === "background_limit" ||
     type === "credits_exhausted" ||
     type === "quota_exhausted" ||
     type === "model_not_allowed"
