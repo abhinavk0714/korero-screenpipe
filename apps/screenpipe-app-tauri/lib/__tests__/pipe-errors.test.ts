@@ -21,6 +21,21 @@ describe("parsePipeError", () => {
     expect(parsePipeError(stderr(429, { error: "daily_cost_limit_exceeded" })).type).toBe("daily_limit");
   });
 
+  it("keeps a background budget exhaustion separate from the chat allowance", () => {
+    const r = parsePipeError(stderr(429, {
+      error: "background_cost_limit_exceeded",
+      message: "Scheduled pipes reached their hosted AI budget. Foreground chat remains available.",
+      resets_at: "2026-08-02T00:00:00.000Z",
+    }));
+    expect(r.type).toBe("background_limit");
+    expect(r.message).toContain("chat remains available");
+    expect(r.resets_at).toBe("2026-08-02T00:00:00.000Z");
+  });
+
+  it("classifies the compact background budget code from Pi", () => {
+    expect(parsePipeError(`429 "background_cost_limit_exceeded"`).type).toBe("background_limit");
+  });
+
   it("classifies compact daily limit code from Pi", () => {
     expect(parsePipeError(`429 "daily_cost_limit_exceeded"`).type).toBe("daily_limit");
   });
@@ -99,6 +114,7 @@ describe("parsePipeError", () => {
 describe("isActionablePipeError — what's worth a proactive advisory", () => {
   it("true for the cases a user can act on (budget / plan)", () => {
     expect(isActionablePipeError("daily_limit")).toBe(true);
+    expect(isActionablePipeError("background_limit")).toBe(true);
     expect(isActionablePipeError("credits_exhausted")).toBe(true);
     expect(isActionablePipeError("quota_exhausted")).toBe(true);
     expect(isActionablePipeError("model_not_allowed")).toBe(true);

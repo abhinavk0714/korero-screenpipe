@@ -1892,6 +1892,12 @@ fn parse_error_type(stderr: &str) -> (Option<String>, Option<String>) {
     if let Some(parsed) = parse_structured_llm_error(stderr) {
         return parsed;
     }
+    if lower.contains("background_cost_limit_exceeded") {
+        return (
+            Some("background_limit".to_string()),
+            Some("scheduled pipe AI budget reached; foreground chat remains available".to_string()),
+        );
+    }
     if lower.contains("daily_cost_limit_exceeded") || lower.contains("daily_limit_exceeded") {
         return (
             Some("daily_limit".to_string()),
@@ -2014,6 +2020,14 @@ fn classify_llm_error_value(value: &serde_json::Value) -> Option<(Option<String>
     .join(" ")
     .to_lowercase();
 
+    if combined.contains("background_cost_limit_exceeded") {
+        return Some((
+            Some("background_limit".to_string()),
+            Some(message.unwrap_or_else(|| {
+                "scheduled pipe AI budget reached; foreground chat remains available".to_string()
+            })),
+        ));
+    }
     if combined.contains("daily_cost_limit_exceeded") || combined.contains("daily_limit_exceeded") {
         return Some((
             Some("daily_limit".to_string()),
@@ -2060,6 +2074,7 @@ fn should_try_fallback_preset(error_type: Option<&str>) -> bool {
         Some(
             "auth_failed"
                 | "credits_exhausted"
+                | "background_limit"
                 | "daily_limit"
                 | "model_not_allowed"
                 | "quota_exhausted"
@@ -8409,6 +8424,28 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_error_type_background_cost_limit_json() {
+        let (etype, msg) = parse_error_type(
+            r#"429 {\"error\":\"background_cost_limit_exceeded\",\"message\":\"Scheduled pipes reached their hosted AI budget. Foreground chat remains available.\"}"#,
+        );
+        assert_eq!(etype.as_deref(), Some("background_limit"));
+        assert_eq!(
+            msg.as_deref(),
+            Some("Scheduled pipes reached their hosted AI budget. Foreground chat remains available.")
+        );
+    }
+
+    #[test]
+    fn test_parse_error_type_background_cost_limit_code_string() {
+        let (etype, msg) = parse_error_type(r#"429 "background_cost_limit_exceeded""#);
+        assert_eq!(etype.as_deref(), Some("background_limit"));
+        assert_eq!(
+            msg.as_deref(),
+            Some("scheduled pipe AI budget reached; foreground chat remains available")
+        );
+    }
+
+    #[test]
     fn test_parse_error_type_daily_cost_limit_code_string() {
         let (etype, msg) = parse_error_type(r#"429 "daily_cost_limit_exceeded""#);
         assert_eq!(etype.as_deref(), Some("daily_limit"));
@@ -8479,6 +8516,7 @@ mod tests {
 
     #[test]
     fn test_daily_limit_does_not_try_fallback_preset() {
+        assert!(!should_try_fallback_preset(Some("background_limit")));
         assert!(!should_try_fallback_preset(Some("daily_limit")));
         assert!(!should_try_fallback_preset(Some("credits_exhausted")));
         assert!(!should_try_fallback_preset(Some("quota_exhausted")));

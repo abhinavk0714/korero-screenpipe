@@ -46,6 +46,9 @@ describe("classifyQuotaError", () => {
     expect(classifyQuotaError("HTTP 429: priced_request_in_flight")).toBe(
       "hosted_busy",
     );
+    expect(
+      classifyQuotaError('HTTP 429: {"error":"hosted_ai_capacity_reserved"}'),
+    ).toBe("hosted_busy");
   });
 
   it("returns 'none' for unrelated errors", () => {

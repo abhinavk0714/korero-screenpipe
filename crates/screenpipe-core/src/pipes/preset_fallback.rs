@@ -337,7 +337,8 @@ impl PresetFallbackRegistry {
         // Bare "quota"/"billing" is deliberately avoided here: a transient rate
         // limit that merely mentions those words (checked below) must still fall
         // back rather than being treated as a terminal, non-retryable gate.
-        if combined.contains("daily_cost_limit_exceeded")
+        if combined.contains("background_cost_limit_exceeded")
+            || combined.contains("daily_cost_limit_exceeded")
             || combined.contains("daily_limit_exceeded")
             || combined.contains("credits_exhausted")
             || super::has_quota_exhausted_token(&combined)
@@ -561,6 +562,18 @@ mod tests {
         assert!(!registry.record_failure_from_output(
             "test",
             r#"429 "{\"error\":\"daily_cost_limit_exceeded\",\"message\":\"You've hit today's AI usage limit.\"}""#,
+            ""
+        ));
+        let presets = vec!["test".to_string()];
+        assert_eq!(registry.pick_preset(&presets), Some(("test", 0)));
+    }
+
+    #[test]
+    fn test_background_limit_output_does_not_trip_breaker() {
+        let registry = fresh_registry("background_limit_no_trip");
+        assert!(!registry.record_failure_from_output(
+            "test",
+            r#"429 {\"error\":\"background_cost_limit_exceeded\"}"#,
             ""
         ));
         let presets = vec!["test".to_string()];

@@ -61,6 +61,7 @@ export function logReservedCost(
 		input_tokens: null,
 		output_tokens: null,
 		estimated_cost_usd: reservation.reservedMicroUsd / 1_000_000,
+		lane: reservation.lane,
 		endpoint: attribution.endpoint,
 		stream: attribution.stream,
 		latency_ms: attribution.latencyMs,

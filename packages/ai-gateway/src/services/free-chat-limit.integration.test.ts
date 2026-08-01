@@ -14,10 +14,12 @@ import { loadHostedAiReservationControls } from './hosted-ai-reservation-control
 import {
 	GLOBAL_DAILY_COST_KEY,
 	GLOBAL_HOURLY_COST_KEY,
+	dailyLaneCostKey,
 	getCostReservationMicroUsd,
 	getStreamSettlementCost,
 	logCost,
 	monthlyCostKey,
+	totalLaneCostKey,
 	trialCostKey,
 	utcHour,
 	utcMonth,
@@ -438,7 +440,7 @@ describe('usage reservations against workerd D1', () => {
 		const controls = loadHostedAiReservationControls(env);
 		const holdUsd = getCostReservationMicroUsd('claude-sonnet-5') / 1_000_000;
 		const dailyForOneBackgroundHold = holdUsd * 1.5
-			/ controls.maxBackgroundReservedFraction;
+			/ controls.maxBackgroundBudgetFraction;
 		setUniformTextWindows(env, {
 			request: dailyForOneBackgroundHold,
 			daily: dailyForOneBackgroundHold,
@@ -480,9 +482,206 @@ describe('usage reservations against workerd D1', () => {
 		);
 		expect(largePipe.allowed).toBe(false);
 		if (!largePipe.allowed) {
-			expect(await largePipe.response.text()).toContain('hosted_ai_capacity_reserved');
+			expect(largePipe.reason).toBe('background_cost_limit');
+			expect(await largePipe.response.text()).toContain('background_cost_limit_exceeded');
 		}
 		expect(separateChat.allowed).toBe(true);
+	});
+
+	it('bounds cumulative Pipe spend while preserving foreground Chat headroom', async () => {
+		const now = new Date();
+		const deviceId = 'user-d1-cumulative-pipe-headroom';
+		const controls = loadHostedAiReservationControls(env);
+		const holdUsd = getCostReservationMicroUsd('claude-sonnet-5') / 1_000_000;
+		const dailyCap = 1;
+		const backgroundSpend = dailyCap * controls.maxBackgroundBudgetFraction - holdUsd / 2;
+		setUniformTextWindows(env, {
+			request: holdUsd * 2,
+			daily: dailyCap,
+			monthly: dailyCap * 2,
+		});
+
+		expect(await logCost(env, {
+			device_id: deviceId,
+			tier: 'subscribed',
+			provider: 'anthropic',
+			model: 'claude-sonnet-5',
+			input_tokens: 1_000,
+			output_tokens: 100,
+			estimated_cost_usd: backgroundSpend,
+			endpoint: '/v1/chat/completions',
+			stream: false,
+			lane: 'background',
+		})).toBe(true);
+
+		const pipe = await reserveDailyCostCap(
+			env, deviceId, 'subscribed', 'claude-sonnet-5', now, 'background',
+		);
+		expect(pipe.allowed).toBe(false);
+		if (!pipe.allowed) {
+			expect(pipe.reason).toBe('background_cost_limit');
+			expect(pipe.response.status).toBe(429);
+			expect(await pipe.response.text()).toContain('Foreground chat remains available');
+		}
+
+		const chat = await reserveDailyCostCap(
+			env, deviceId, 'subscribed', 'claude-sonnet-5', now, 'interactive',
+		);
+		expect(chat.allowed).toBe(true);
+		if (chat.allowed && chat.reservation) {
+			await releaseDailyCostReservation(env, chat.reservation);
+		}
+
+		const laneRow = await env.DB.prepare(
+			'SELECT cost_day, daily_cost_usd FROM usage WHERE device_id = ?',
+		).bind(dailyLaneCostKey(deviceId, 'background'))
+			.first<{ cost_day: string; daily_cost_usd: number }>();
+		expect(laneRow).toEqual({
+			cost_day: now.toISOString().slice(0, 10),
+			daily_cost_usd: backgroundSpend,
+		});
+
+		// An authorized incident epoch resets every daily admission view together;
+		// stale lane spend must not strand Pipes after the account baseline resets.
+		env.PRIVATE_COST_CAP_EPOCH = 'cumulative-pipe-recovery-v2';
+		const freshEpochPipe = await reserveDailyCostCap(
+			env, deviceId, 'subscribed', 'claude-sonnet-5', now, 'background',
+		);
+		expect(freshEpochPipe.allowed).toBe(true);
+		if (freshEpochPipe.allowed && freshEpochPipe.reservation) {
+			await releaseDailyCostReservation(env, freshEpochPipe.reservation);
+		}
+
+		const tomorrow = new Date(now);
+		tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+		const nextDayPipe = await reserveDailyCostCap(
+			env, deviceId, 'subscribed', 'claude-sonnet-5', tomorrow, 'background',
+		);
+		expect(nextDayPipe.allowed).toBe(true);
+		if (nextDayPipe.allowed && nextDayPipe.reservation) {
+			await releaseDailyCostReservation(env, nextDayPipe.reservation);
+		}
+	});
+
+	it('preserves foreground headroom across the monthly Pipe allowance', async () => {
+		const now = new Date();
+		const deviceId = 'user-d1-monthly-pipe-headroom';
+		const controls = loadHostedAiReservationControls(env);
+		const holdUsd = getCostReservationMicroUsd('claude-sonnet-5') / 1_000_000;
+		const monthlyCap = 2;
+		const backgroundSpend = monthlyCap * controls.maxBackgroundBudgetFraction - holdUsd / 2;
+		setUniformTextWindows(env, {
+			request: holdUsd * 2,
+			daily: monthlyCap,
+			monthly: monthlyCap,
+		});
+
+		expect(await logCost(env, {
+			device_id: deviceId,
+			tier: 'subscribed',
+			provider: 'anthropic',
+			model: 'claude-sonnet-5',
+			input_tokens: 1_000,
+			output_tokens: 100,
+			estimated_cost_usd: backgroundSpend,
+			endpoint: '/v1/chat/completions',
+			stream: false,
+			lane: 'background',
+		})).toBe(true);
+
+		// Simulate a prior-day settlement without changing the month ledger.
+		await env.DB.prepare(`
+			UPDATE usage SET cost_day = ?
+			WHERE device_id IN (?, ?)
+		`).bind(
+			'2000-01-01',
+			deviceId,
+			dailyLaneCostKey(deviceId, 'background'),
+		).run();
+
+		const pipe = await reserveDailyCostCap(
+			env, deviceId, 'subscribed', 'claude-sonnet-5', now, 'background',
+		);
+		expect(pipe.allowed).toBe(false);
+		if (!pipe.allowed) {
+			expect(pipe.reason).toBe('background_cost_limit');
+			expect(await pipe.response.text()).toContain('monthly hosted AI budget');
+		}
+
+		const chat = await reserveDailyCostCap(
+			env, deviceId, 'subscribed', 'claude-sonnet-5', now, 'interactive',
+		);
+		expect(chat.allowed).toBe(true);
+		if (chat.allowed && chat.reservation) {
+			await releaseDailyCostReservation(env, chat.reservation);
+		}
+
+		const totalLaneRow = await env.DB.prepare(
+			'SELECT cost_day, daily_cost_usd FROM usage WHERE device_id = ?',
+		).bind(totalLaneCostKey(deviceId, 'background'))
+			.first<{ cost_day: string; daily_cost_usd: number }>();
+		expect(totalLaneRow).toEqual({
+			cost_day: utcMonth(),
+			daily_cost_usd: backgroundSpend,
+		});
+	});
+
+	it('bounds the non-resetting trial Pipe allowance without blocking chat', async () => {
+		const now = new Date();
+		const deviceId = 'user-d1-trial-pipe-headroom';
+		const controls = loadHostedAiReservationControls(env);
+		const holdUsd = getCostReservationMicroUsd('claude-sonnet-5') / 1_000_000;
+		const trialCap = 2;
+		const backgroundSpend = trialCap * controls.maxBackgroundBudgetFraction - holdUsd / 2;
+		setTrialTextWindows(env, {
+			request: holdUsd * 2,
+			daily: trialCap,
+			total: trialCap,
+		});
+
+		expect(await logCost(env, {
+			device_id: deviceId,
+			tier: 'subscribed',
+			hosted_ai_trial: true,
+			provider: 'anthropic',
+			model: 'claude-sonnet-5',
+			input_tokens: 1_000,
+			output_tokens: 100,
+			estimated_cost_usd: backgroundSpend,
+			endpoint: '/v1/chat/completions',
+			stream: false,
+			lane: 'background',
+		})).toBe(true);
+
+		// Only the permanent trial ledger should remain relevant to admission.
+		await env.DB.prepare(`
+			UPDATE usage SET cost_day = ?
+			WHERE device_id IN (?, ?)
+		`).bind(
+			'2000-01-01',
+			deviceId,
+			dailyLaneCostKey(deviceId, 'background'),
+		).run();
+
+		const pipe = await reserveDailyCostCap(
+			env, deviceId, 'subscribed', 'claude-sonnet-5', now, 'background', {}, 'business', true,
+		);
+		expect(pipe.allowed).toBe(false);
+		if (!pipe.allowed) {
+			expect(pipe.reason).toBe('background_cost_limit');
+			const body = await pipe.response.text();
+			expect(body).toContain('trial hosted AI budget');
+			const outer = JSON.parse(body) as { error: string };
+			expect(JSON.parse(outer.error).resets_at).toBeNull();
+		}
+
+		const chat = await reserveDailyCostCap(
+			env, deviceId, 'subscribed', 'claude-sonnet-5', now, 'interactive', {}, 'business', true,
+		);
+		expect(chat.allowed).toBe(true);
+		if (chat.allowed && chat.reservation) {
+			await releaseDailyCostReservation(env, chat.reservation);
+		}
 	});
 
 	it('rejects a request whose own measured shape cannot fit the cash cap', async () => {
@@ -759,9 +958,16 @@ describe('usage reservations against workerd D1', () => {
 		});
 		const first = await reserveDailyCostCap(env, 'user-d1-cost-expired', 'subscribed', model, start);
 		expect(first.allowed).toBe(true);
-		expect((await reserveDailyCostCap(
+		const blockedByActiveHold = await reserveDailyCostCap(
 			env, 'user-d1-cost-expired', 'subscribed', model, start,
-		)).allowed).toBe(false);
+		);
+		expect(blockedByActiveHold.allowed).toBe(false);
+		if (!blockedByActiveHold.allowed) {
+			expect(blockedByActiveHold.reason).toBe('capacity');
+			expect(await blockedByActiveHold.response.text()).toContain(
+				'hosted_ai_capacity_reserved',
+			);
+		}
 
 		const afterExpiry = new Date(
 			start.getTime() + (controls.reservationTtlSeconds + 1) * 1000,
@@ -821,6 +1027,10 @@ describe('usage reservations against workerd D1', () => {
 
 		expect(results.filter((result) => result.allowed)).toHaveLength(2);
 		for (const result of results) {
+			if (!result.allowed) {
+				expect(result.reason).toBe('capacity');
+				expect(await result.response.text()).toContain('hosted_ai_capacity_reserved');
+			}
 			if (result.allowed && result.reservation) {
 				await releaseDailyCostReservation(env, result.reservation);
 			}
