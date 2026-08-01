@@ -27,6 +27,9 @@ describe("classifyQuotaError", () => {
     expect(classifyQuotaError("credits_exhausted")).toBe("daily");
     expect(classifyQuotaError("daily_limit_exceeded")).toBe("daily");
     expect(classifyQuotaError("daily_cost_limit_exceeded")).toBe("daily");
+    expect(classifyQuotaError("request_cost_limit_exceeded")).toBe("daily");
+    expect(classifyQuotaError("monthly_cost_limit_exceeded")).toBe("daily");
+    expect(classifyQuotaError("trial_cost_limit_exceeded")).toBe("daily");
     // case-insensitive
     expect(classifyQuotaError("DAILY_LIMIT_EXCEEDED")).toBe("daily");
   });
@@ -122,6 +125,38 @@ describe("buildDailyLimitMessage", () => {
       requiredPlan: "business",
       upgradeUrl: "https://screenpi.pe/account/billing",
       resetsAt: "2026-08-02T00:00:00.000Z",
+      reason: "daily_cost_limit_exceeded",
+    });
+  });
+
+  it("accepts only matching Max and Ultra billing targets", () => {
+    const max = JSON.stringify({
+      error: "monthly_cost_limit_exceeded",
+      required_plan: "business_max",
+      upgrade_url: "https://screenpi.pe/account/billing?target_plan=pro_max&interval=month",
+    });
+    expect(parseQuotaUpgradeAction(max)).toMatchObject({
+      requiredPlan: "business_max",
+      reason: "monthly_cost_limit_exceeded",
+    });
+    expect(parseQuotaUpgradeAction(max.replace("pro_max", "pro_ultra"))).toBeNull();
+    expect(
+      parseQuotaUpgradeAction(
+        max.replace("&interval=month", "&interval=month&redirect=https://example.com"),
+      ),
+    ).toBeNull();
+    expect(
+      parseQuotaUpgradeAction(max.replace("screenpi.pe", "screenpi.pe:8443")),
+    ).toBeNull();
+
+    const ultra = JSON.stringify({
+      error: "daily_cost_limit_exceeded",
+      required_plan: "business_ultra",
+      upgrade_url: "https://screenpipe.com/account/billing?target_plan=pro_ultra&interval=month",
+    });
+    expect(parseQuotaUpgradeAction(ultra)).toMatchObject({
+      requiredPlan: "business_ultra",
+      reason: "daily_cost_limit_exceeded",
     });
   });
 
@@ -147,8 +182,8 @@ describe("buildDailyLimitMessage", () => {
     ).toBeNull();
   });
 
-  it("does not invent an upgrade for Business Max or Ultra cost limits", () => {
-    for (const plan of ["business_max", "business_ultra"]) {
+  it("does not invent an upgrade above Ultra or for an absent server action", () => {
+    for (const plan of ["business_ultra", "enterprise"]) {
       const error = JSON.stringify({
         error: "daily_cost_limit_exceeded",
         plan,

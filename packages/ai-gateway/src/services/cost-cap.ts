@@ -42,9 +42,23 @@ export type DailyCostHold = {
 
 export type DailyCostLane = 'interactive' | 'background';
 
+export type CostReservationRejectionReason =
+	| 'request_cost_limit'
+	| 'daily_cost_limit'
+	| 'trial_cost_limit'
+	| 'monthly_cost_limit'
+	| 'global_hourly_cost_limit'
+	| 'global_daily_cost_limit'
+	| 'capacity'
+	| 'cost_control_unavailable';
+
 export type DailyCostReservation =
 	| { allowed: true; reservation: DailyCostHold | null }
-	| { allowed: false; response: Response };
+	| {
+		allowed: false;
+		response: Response;
+		reason: CostReservationRejectionReason;
+	};
 
 function changed(result: D1Result<unknown>): boolean {
 	return Number(result.meta?.changes ?? 0) > 0;
@@ -127,6 +141,32 @@ export async function getDailyUserCostForCap(env: Env, deviceId: string): Promis
 	}
 }
 
+type CostCapacityUpgradePlan = 'basic' | 'business' | 'business_max' | 'business_ultra';
+
+function nextCostCapacityPlan(accountPlan: AccountPlan): CostCapacityUpgradePlan | null {
+	switch (accountPlan) {
+		case 'free': return 'basic';
+		case 'basic': return 'business';
+		case 'business': return 'business_max';
+		case 'business_max': return 'business_ultra';
+		default: return null;
+	}
+}
+
+function costCapacityUpgradeUrl(requiredPlan: CostCapacityUpgradePlan | null): string | null {
+	switch (requiredPlan) {
+		case 'business_max':
+			return 'https://screenpi.pe/account/billing?target_plan=pro_max&interval=month';
+		case 'business_ultra':
+			return 'https://screenpi.pe/account/billing?target_plan=pro_ultra&interval=month';
+		case 'basic':
+		case 'business':
+			return 'https://screenpi.pe/account/billing';
+		default:
+			return null;
+	}
+}
+
 function capResponse(accountPlan: AccountPlan, period: 'request' | 'day' | 'month' | 'trial'): Response {
 	const resetsAt = new Date();
 	if (period === 'month') {
@@ -135,7 +175,8 @@ function capResponse(accountPlan: AccountPlan, period: 'request' | 'day' | 'mont
 	} else {
 		resetsAt.setUTCHours(24, 0, 0, 0);
 	}
-	const canUpgrade = accountPlan === 'free' || accountPlan === 'basic';
+	const requiredPlan = nextCostCapacityPlan(accountPlan);
+	const upgradeUrl = costCapacityUpgradeUrl(requiredPlan);
 	return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 		error: period === 'request'
 			? 'request_cost_limit_exceeded'
@@ -151,8 +192,8 @@ function capResponse(accountPlan: AccountPlan, period: 'request' | 'day' | 'mont
 				: `You've used your ${period === 'day' ? 'daily' : 'monthly'} hosted AI allowance. Background pipes share this allowance.`,
 		resets_at: period === 'request' || period === 'trial' ? null : resetsAt.toISOString(),
 		plan: accountPlan,
-		required_plan: canUpgrade ? (accountPlan === 'free' ? 'basic' : 'business') : null,
-		upgrade_url: canUpgrade ? 'https://screenpi.pe/account/billing' : null,
+		required_plan: requiredPlan,
+		upgrade_url: upgradeUrl,
 		can_buy_credits: false,
 		byok_supported: true,
 	})));
@@ -479,26 +520,38 @@ export async function reserveDailyCostCap(
 		const accountReservedMicroUsd = Math.max(0, Number(accountHolds?.reserved ?? 0));
 		const globalReservedMicroUsd = Math.max(0, Number(globalHolds?.reserved ?? 0));
 		let response: Response;
+		let reason: CostReservationRejectionReason;
 		if (reservedMicroUsd > requestCapMicroUsd) {
 			response = capResponse(accountPlan, 'request');
+			reason = 'request_cost_limit';
 		} else if (dailyCostMicroUsd + accountReservedMicroUsd + reservedMicroUsd > dailyCapMicroUsd) {
 			response = capResponse(accountPlan, 'day');
+			reason = 'daily_cost_limit';
 		} else if (monthlyCostMicroUsd + accountReservedMicroUsd + reservedMicroUsd > monthlyCapMicroUsd) {
 			response = capResponse(accountPlan, hostedAiTrial ? 'trial' : 'month');
+			reason = hostedAiTrial ? 'trial_cost_limit' : 'monthly_cost_limit';
 		} else if (globalHourlyCostMicroUsd + globalReservedMicroUsd + reservedMicroUsd > globalHourlyCapMicroUsd) {
 			response = globalCapResponse('hour');
+			reason = 'global_hourly_cost_limit';
 		} else if (globalDailyCostMicroUsd + globalReservedMicroUsd + reservedMicroUsd > globalDailyCapMicroUsd) {
 			response = globalCapResponse('day');
+			reason = 'global_daily_cost_limit';
 		} else {
 			response = capacityResponse(accountPlan, lane);
+			reason = 'capacity';
 		}
 		return {
 			allowed: false,
 			response,
+			reason,
 		};
 	} catch (error) {
 		console.error('daily cost reservation unavailable', error);
-		return { allowed: false, response: unavailableResponse() };
+		return {
+			allowed: false,
+			response: unavailableResponse(),
+			reason: 'cost_control_unavailable',
+		};
 	}
 }
 

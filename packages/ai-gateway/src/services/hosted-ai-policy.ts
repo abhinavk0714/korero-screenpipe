@@ -77,10 +77,15 @@ export function getHostedAiAllowedModels(accountPlan: AccountPlan): readonly str
 
 /** Customer-facing credits advertised by the public plan contract. */
 export function getHostedAiIncludedCredits(accountPlan: AccountPlan): number {
-	switch (getHostedAiPlan(accountPlan)) {
+	switch (accountPlan) {
 		case 'free': return 10;
 		case 'basic': return 150;
-		case 'business': return 400;
+		case 'business_max': return 800;
+		case 'business_ultra': return 1_600;
+		case 'business':
+		case 'team':
+		case 'enterprise':
+			return 400;
 		default: return 0;
 	}
 }

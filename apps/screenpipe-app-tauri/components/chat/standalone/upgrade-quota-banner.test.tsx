@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   blockedUpgrade: null as any,
   clearQuotaUpgrade: vi.fn(),
   openBusinessUpgradeSurface: vi.fn(),
+  openUrl: vi.fn(),
   routerPush: vi.fn(),
 }));
 
@@ -55,6 +56,7 @@ vi.mock("@/lib/utils/tauri", () => ({
 vi.mock("@/lib/upgrade-flow", () => ({
   openBusinessUpgradeSurface: mocks.openBusinessUpgradeSurface,
 }));
+vi.mock("@tauri-apps/plugin-shell", () => ({ open: mocks.openUrl }));
 
 describe("UpgradeQuotaBanner", () => {
   beforeEach(() => {
@@ -73,6 +75,8 @@ describe("UpgradeQuotaBanner", () => {
     mocks.clearQuotaUpgrade.mockReset();
     mocks.openBusinessUpgradeSurface.mockReset();
     mocks.openBusinessUpgradeSurface.mockResolvedValue(undefined);
+    mocks.openUrl.mockReset();
+    mocks.openUrl.mockResolvedValue(undefined);
     mocks.routerPush.mockReset();
   });
 
@@ -124,6 +128,7 @@ describe("UpgradeQuotaBanner", () => {
       requiredPlan: "business",
       upgradeUrl: "https://screenpi.pe/account/billing",
       resetsAt: "2026-08-02T00:00:00.000Z",
+      reason: "daily_cost_limit_exceeded",
     };
 
     render(<UpgradeQuotaBanner />);
@@ -151,6 +156,7 @@ describe("UpgradeQuotaBanner", () => {
       requiredPlan: "business",
       upgradeUrl: "https://screenpi.pe/account/billing",
       resetsAt: null,
+      reason: "daily_cost_limit_exceeded",
     };
     render(<UpgradeQuotaBanner />);
 
@@ -158,5 +164,38 @@ describe("UpgradeQuotaBanner", () => {
       screen.getByRole("button", { name: "dismiss AI usage notice" }),
     );
     expect(mocks.clearQuotaUpgrade).toHaveBeenCalledOnce();
+  });
+
+  it("opens the exact server-validated Max billing target", async () => {
+    mocks.blockedUpgrade = {
+      requiredPlan: "business_max",
+      upgradeUrl:
+        "https://screenpi.pe/account/billing?target_plan=pro_max&interval=month",
+      resetsAt: "2026-09-01T00:00:00.000Z",
+      reason: "monthly_cost_limit_exceeded",
+    };
+    render(<UpgradeQuotaBanner />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Upgrade to Max" }));
+    await waitFor(() =>
+      expect(mocks.openUrl).toHaveBeenCalledWith(
+        "https://screenpi.pe/account/billing?target_plan=pro_max&interval=month",
+      ),
+    );
+    expect(mocks.openBusinessUpgradeSurface).not.toHaveBeenCalled();
+  });
+
+  it("does not suggest reviewing pipes for a single oversized request", () => {
+    mocks.blockedUpgrade = {
+      requiredPlan: "business_max",
+      upgradeUrl:
+        "https://screenpi.pe/account/billing?target_plan=pro_max&interval=month",
+      resetsAt: null,
+      reason: "request_cost_limit_exceeded",
+    };
+    render(<UpgradeQuotaBanner />);
+
+    expect(screen.getByText(/request is too large/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Review pipes" })).toBeNull();
   });
 });

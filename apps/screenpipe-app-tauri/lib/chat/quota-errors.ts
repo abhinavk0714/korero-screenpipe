@@ -5,16 +5,20 @@
 // Pure helpers for classifying and presenting AI quota / rate-limit errors.
 
 export type QuotaUpgradeAction = {
-  requiredPlan: "business";
+  requiredPlan: "business" | "business_max" | "business_ultra";
   upgradeUrl: string;
   resetsAt: string | null;
+  reason: CostLimitCode;
 };
 
 const COST_LIMIT_CODES = [
+  "request_cost_limit_exceeded",
   "daily_cost_limit_exceeded",
   "monthly_cost_limit_exceeded",
   "trial_cost_limit_exceeded",
 ] as const;
+
+export type CostLimitCode = (typeof COST_LIMIT_CODES)[number];
 
 function structuredString(errorStr: string, field: string): string | null {
   const normalized = errorStr.replace(/\\\"/g, '"');
@@ -30,20 +34,21 @@ function structuredString(errorStr: string, field: string): string | null {
  * Pi may wrap the JSON body in an HTTP error string, so this deliberately
  * extracts only the small allow-listed contract instead of trying to parse
  * arbitrary nested provider errors. The URL is accepted only for Screenpipe's
- * HTTPS billing page; the desktop still opens its native reviewed offer.
+ * HTTPS billing page. Business uses the native reviewed offer; power plans
+ * open the exact server-selected website target.
  */
 export function parseQuotaUpgradeAction(
   errorStr: string,
 ): QuotaUpgradeAction | null {
   const normalized = errorStr.toLowerCase();
-  if (!COST_LIMIT_CODES.some((code) => normalized.includes(code))) {
-    return null;
-  }
+  const reason = COST_LIMIT_CODES.find((code) => normalized.includes(code));
+  if (!reason) return null;
+  const requiredPlan = structuredString(errorStr, "required_plan")?.toLowerCase();
   if (
-    structuredString(errorStr, "required_plan")?.toLowerCase() !== "business"
-  ) {
-    return null;
-  }
+    requiredPlan !== "business" &&
+    requiredPlan !== "business_max" &&
+    requiredPlan !== "business_ultra"
+  ) return null;
 
   const upgradeUrl = structuredString(errorStr, "upgrade_url");
   if (!upgradeUrl) return null;
@@ -51,19 +56,39 @@ export function parseQuotaUpgradeAction(
     const url = new URL(upgradeUrl);
     if (
       url.protocol !== "https:" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.port !== "" ||
+      url.hash !== "" ||
       !["screenpi.pe", "screenpipe.com"].includes(url.hostname) ||
       url.pathname !== "/account/billing"
     ) {
       return null;
+    }
+    const expectedTarget = requiredPlan === "business_max"
+      ? "pro_max"
+      : requiredPlan === "business_ultra"
+        ? "pro_ultra"
+        : null;
+    if (expectedTarget) {
+      const keys = [...url.searchParams.keys()].sort();
+      if (
+        keys.length !== 2 ||
+        keys[0] !== "interval" ||
+        keys[1] !== "target_plan" ||
+        url.searchParams.get("target_plan") !== expectedTarget ||
+        url.searchParams.get("interval") !== "month"
+      ) return null;
     }
   } catch {
     return null;
   }
 
   return {
-    requiredPlan: "business",
+    requiredPlan,
     upgradeUrl,
     resetsAt: structuredString(errorStr, "resets_at"),
+    reason,
   };
 }
 
@@ -75,7 +100,10 @@ export function buildDailyLimitMessage(errorStr: string): string {
     if (errorStr.includes("free_chat_turn_request_limit_exceeded")) {
       return "This free message reached its 8-step agent limit. Upgrade for longer agent runs, or switch your AI preset to your own provider.";
     }
-    const isCostLimit = errorStr.includes("daily_cost_limit_exceeded");
+    const normalized = errorStr.toLowerCase();
+    const costLimitCode = COST_LIMIT_CODES.find((code) =>
+      normalized.includes(code),
+    );
     const isRateLimit =
       errorStr.includes("rate limit") || errorStr.includes("Rate limit");
 
@@ -83,7 +111,7 @@ export function buildDailyLimitMessage(errorStr: string): string {
       return "This model is temporarily rate-limited. Try again in a few seconds, or switch to a different model.";
     }
 
-    if (isCostLimit) {
+    if (costLimitCode) {
       // Don't leak the raw dollar cap — that's our internal margin. Frame it
       // as an account-wide budget so the user understands why it fired even
       // when they "didn't use much" (background pipes consume it too).
@@ -92,7 +120,25 @@ export function buildDailyLimitMessage(errorStr: string): string {
         // The persistent recovery panel owns the explanation and actions. Keep
         // the transcript entry short so the same technical paragraph is not
         // repeated immediately above it.
+        if (costLimitCode === "request_cost_limit_exceeded") {
+          return "This conversation is too large for the hosted AI request allowance. Choose a recovery option below.";
+        }
+        if (costLimitCode === "trial_cost_limit_exceeded") {
+          return "This trial's hosted AI allowance is used. Choose a recovery option below.";
+        }
+        if (costLimitCode === "monthly_cost_limit_exceeded") {
+          return "This month's hosted AI allowance is used. Choose a recovery option below.";
+        }
         return "Hosted AI didn't run this request because today's account budget is reached. Choose a recovery option below.";
+      }
+      if (costLimitCode === "request_cost_limit_exceeded") {
+        return "This conversation is too large for the hosted AI request allowance. Start a new chat, shorten the context, or use a local model or your own provider key.";
+      }
+      if (costLimitCode === "trial_cost_limit_exceeded") {
+        return "This trial's hosted AI allowance is used. Switch to a local model or your own provider key to keep working.";
+      }
+      if (costLimitCode === "monthly_cost_limit_exceeded") {
+        return "This month's hosted AI allowance is used. Background pipes share this allowance. Switch to a local model or your own provider key to keep working.";
       }
       return "Hosted AI didn't run this request because today's account budget is reached. Background pipes share this budget. Switch to a local model or your own provider key to keep working.";
     }
@@ -125,7 +171,7 @@ export function classifyQuotaError(errorStr: string): QuotaErrorType {
     normalized.includes("free_chat_turn_request_limit_exceeded") ||
     normalized.includes("credits_exhausted") ||
     normalized.includes("daily_limit_exceeded") ||
-    normalized.includes("daily_cost_limit_exceeded");
+    COST_LIMIT_CODES.some((code) => normalized.includes(code));
   if (isDailyLimit) {
     return "daily";
   }

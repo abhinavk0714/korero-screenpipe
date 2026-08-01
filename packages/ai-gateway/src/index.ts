@@ -42,6 +42,7 @@ import {
 	reserveDailyCostCap,
 	withDailyCostSettlement,
 	getDailyUserCostForCap,
+	type DailyCostReservation,
 } from './services/cost-cap';
 import {
 	logReservedCost,
@@ -81,6 +82,26 @@ export { RateLimiter };
 type BoundedJsonRead =
 	| { ok: true; value: unknown; bytes: number }
 	| { ok: false; tooLarge: boolean };
+
+type RejectedCostReservation = Extract<DailyCostReservation, { allowed: false }>;
+
+/** Log only bounded policy dimensions; never identifiers, prompts, or controls. */
+function costReservationRejectionResponse(
+	route: string,
+	auth: AuthResult,
+	reservation: RejectedCostReservation,
+): Response {
+	console.warn('hosted AI admission rejected', {
+		gate: 'cost_reservation',
+		reason: reservation.reason,
+		route,
+		tier: auth.tier,
+		accountPlan: auth.accountPlan,
+		hostedAiTrial: auth.hostedAiTrial === true,
+		status: reservation.response.status,
+	});
+	return reservation.response;
+}
 
 /** Read at most maxBytes instead of trusting a spoofable Content-Length. */
 async function readBoundedJson(request: Request, maxBytes: number): Promise<BoundedJsonRead> {
@@ -148,6 +169,7 @@ async function handleMeteredTinfoilRequest(
 	subPath: '/v1/chat/completions' | '/v1/responses',
 ): Promise<Response> {
 	const model = 'gemma4-31b';
+	const route = new URL(request.url).pathname;
 	const reservation = await reserveDailyCostCap(
 		env,
 		auth.deviceId,
@@ -159,11 +181,13 @@ async function handleMeteredTinfoilRequest(
 		auth.accountPlan,
 		auth.hostedAiTrial === true,
 	);
-	if (!reservation.allowed) return reservation.response;
+	if (!reservation.allowed) {
+		return costReservationRejectionResponse(route, auth, reservation);
+	}
 	const attribution = reservedCostAttribution(
 		auth,
 		model,
-		`/v1/tinfoil${subPath}`,
+		route,
 		false,
 		{ provider: 'tinfoil' },
 	);
@@ -220,7 +244,9 @@ async function handleMeteredVoiceAiRequest(
 		auth.accountPlan,
 		auth.hostedAiTrial === true,
 	);
-	if (!reservation.allowed) return reservation.response;
+	if (!reservation.allowed) {
+		return costReservationRejectionResponse(endpoint, auth, reservation);
+	}
 	const attribution = reservedCostAttribution(auth, model, endpoint, false);
 	let response: Response;
 	try {
@@ -567,15 +593,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				authResult.hostedAiTrial === true,
 			);
 			if (!costReservation.allowed) {
-				console.warn('hosted AI admission rejected', {
-					gate: 'cost_reservation',
-					tier: authResult.tier,
-					accountPlan: authResult.accountPlan,
-					hostedAiTrial: authResult.hostedAiTrial === true,
-					status: costReservation.response.status,
-				});
 				if (freeChatLease) await releaseFreeChatLease(env, freeChatLease);
-				return costReservation.response;
+				return costReservationRejectionResponse('/v1/chat/completions', authResult, costReservation);
 			}
 			const dailyCostReservation = costReservation.reservation;
 
@@ -760,7 +779,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				authResult.accountPlan,
 				authResult.hostedAiTrial === true,
 			);
-			if (!costReservation.allowed) return costReservation.response;
+			if (!costReservation.allowed) {
+				return costReservationRejectionResponse('/v1/web-search', authResult, costReservation);
+			}
 			const attribution = reservedCostAttribution(
 				authResult,
 				'gemini-2.5-flash',
@@ -986,7 +1007,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				authResult.accountPlan,
 				authResult.hostedAiTrial === true,
 			);
-			if (!costReservation.allowed) return costReservation.response;
+			if (!costReservation.allowed) {
+				return costReservationRejectionResponse('/v1/messages', authResult, costReservation);
+			}
 			const attribution = reservedCostAttribution(
 				authResult,
 				parsedModel,
@@ -1134,7 +1157,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				authResult.accountPlan,
 				authResult.hostedAiTrial === true,
 			);
-			if (!costReservation.allowed) return costReservation.response;
+			if (!costReservation.allowed) {
+				return costReservationRejectionResponse('/anthropic/v1/messages', authResult, costReservation);
+			}
 			const attribution = reservedCostAttribution(
 				authResult,
 				ocModel,

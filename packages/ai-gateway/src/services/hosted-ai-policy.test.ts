@@ -65,8 +65,8 @@ describe('hosted AI model products', () => {
 		['free', 10, 0.1],
 		['basic', 150, 1.5],
 		['business', 400, 4],
-		['business_max', 400, 4],
-		['business_ultra', 400, 4],
+		['business_max', 800, 8],
+		['business_ultra', 1_600, 16],
 		['team', 400, 4],
 		['enterprise', 400, 4],
 	] as const)('keeps %s credits and provider-cost allowance aligned', (plan, credits, costUsd) => {

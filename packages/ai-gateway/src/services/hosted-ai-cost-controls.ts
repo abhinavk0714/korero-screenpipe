@@ -196,6 +196,18 @@ function requireHostedPlan(accountPlan: AccountPlan): HostedAiPlan {
 	return plan;
 }
 
+/**
+ * Max and Ultra are the same model-access product as Business with additional
+ * self-serve hosted-AI headroom. Scale the reviewed Business request/day/month
+ * controls together so no window becomes an accidental lower-plan bottleneck;
+ * global safety breakers remain unchanged.
+ */
+function powerPlanCostMultiplier(accountPlan: AccountPlan): number {
+	if (accountPlan === 'business_max') return 2;
+	if (accountPlan === 'business_ultra') return 4;
+	return 1;
+}
+
 export function getTranscriptionDailyCostCap(
 	accountPlan: AccountPlan,
 	env: HostedAiCostControlEnv,
@@ -253,11 +265,12 @@ export function resolveHostedAiTextCostLimits(
 		};
 	}
 	const plan = requireHostedPlan(accountPlan);
+	const multiplier = powerPlanCostMultiplier(accountPlan);
 	const windows = clampWindowsToIncludedAllowance(
 		accountPlan,
-		controls.request[plan],
-		controls.daily[plan],
-		controls.monthly[plan],
+		controls.request[plan] * multiplier,
+		controls.daily[plan] * multiplier,
+		controls.monthly[plan] * multiplier,
 	);
 	return {
 		...windows,
