@@ -24,6 +24,7 @@
 //! probe order without disabling the fallback chain.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
 use tokio::sync::OnceCell;
@@ -38,6 +39,21 @@ const GOP_FRAMES: u32 = 25;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
 static SELECTED: OnceCell<CompactionEncoder> = OnceCell::const_new();
+
+/// Consecutive hardware encode failures observed in production (not probes).
+static HW_ENCODE_FAILURES: AtomicU32 = AtomicU32::new(0);
+
+/// Set once a hardware encoder proved unreliable at runtime; from then on
+/// `select` returns the software fallback until the process restarts.
+/// The startup probe can't cover this class: a GPU that probes fine can die
+/// later (driver update/reset, TDR, session exhaustion, eGPU unplug), and a
+/// self-healed ffmpeg path may point at a build lacking the cached encoder.
+static HW_DEMOTED: AtomicBool = AtomicBool::new(false);
+
+/// Encode failures tolerated before demoting to software. Transient blips
+/// (one lost NVENC session) shouldn't flip a machine off hardware forever,
+/// but a persistent failure must not retry every 5-minute cycle for weeks.
+const MAX_HW_ENCODE_FAILURES: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompactionEncoder {
@@ -103,6 +119,8 @@ impl CompactionEncoder {
                     "1",
                     "-q:v",
                     q,
+                    "-bf",
+                    "0",
                     "-tag:v",
                     "hvc1",
                     "-g",
@@ -116,6 +134,11 @@ impl CompactionEncoder {
                     "max" => "19",
                     _ => "28",
                 };
+                // -bf 0 is load-bearing on every hardware arm: frame lookup
+                // assumes PTS == index/fps (extract_frame_from_video seeks by
+                // offset_index/fps), and driver-default B-frames delay PTS by
+                // the reorder depth — every extraction would return a
+                // neighboring frame instead of the requested one.
                 svec([
                     "-vcodec",
                     "hevc_nvenc",
@@ -126,6 +149,8 @@ impl CompactionEncoder {
                     "-cq",
                     cq,
                     "-b:v",
+                    "0",
+                    "-bf",
                     "0",
                     "-tag:v",
                     "hvc1",
@@ -145,6 +170,8 @@ impl CompactionEncoder {
                     "hevc_qsv",
                     "-global_quality",
                     gq,
+                    "-bf",
+                    "0",
                     "-tag:v",
                     "hvc1",
                     "-g",
@@ -170,9 +197,16 @@ impl CompactionEncoder {
 
     /// Hardware candidates for this platform, in probe order.
     fn hardware_candidates() -> &'static [CompactionEncoder] {
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         {
             &[Self::HevcVideoToolbox]
+        }
+        #[cfg(all(target_os = "macos", not(target_arch = "aarch64")))]
+        {
+            // ffmpeg's videotoolbox encoder supports -q:v only on ARM64
+            // builds (vtenc_qscale_enabled); on the bundled Intel build the
+            // probe would fail at init every launch. Skip the wasted probe.
+            &[]
         }
         #[cfg(windows)]
         {
@@ -199,10 +233,11 @@ impl CompactionEncoder {
 
     /// Resolve the encoder to use, probing hardware candidates once per
     /// process. Always returns something usable: X264 is the terminal
-    /// fallback and is never probed away.
+    /// fallback and is never probed away. A hardware encoder that keeps
+    /// failing in production is demoted via [`Self::record_encode_outcome`].
     pub async fn select(ffmpeg: &Path) -> CompactionEncoder {
         let ffmpeg = ffmpeg.to_path_buf();
-        *SELECTED
+        let selected = *SELECTED
             .get_or_init(|| async move {
                 let selected = select_uncached(&ffmpeg).await;
                 info!(
@@ -216,7 +251,47 @@ impl CompactionEncoder {
                 );
                 selected
             })
-            .await
+            .await;
+        if selected.is_hardware() && HW_DEMOTED.load(Ordering::Relaxed) {
+            CompactionEncoder::X264
+        } else {
+            selected
+        }
+    }
+
+    /// Report whether a production encode with this encoder succeeded.
+    /// After [`MAX_HW_ENCODE_FAILURES`] consecutive hardware failures the
+    /// selection demotes to software for the rest of the process lifetime —
+    /// otherwise a GPU that dies after the startup probe would fail every
+    /// cycle until restart while the JPEG backlog grows unbounded.
+    pub fn record_encode_outcome(self, success: bool) {
+        if !self.is_hardware() {
+            return;
+        }
+        if success {
+            HW_ENCODE_FAILURES.store(0, Ordering::Relaxed);
+            return;
+        }
+        let failures = HW_ENCODE_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
+        if failures >= MAX_HW_ENCODE_FAILURES && !HW_DEMOTED.swap(true, Ordering::Relaxed) {
+            warn!(
+                "hardware compaction encoder {} failed {} consecutive encodes — \
+                 demoting to software libx264 until restart",
+                self.codec_name(),
+                failures
+            );
+        }
+    }
+
+    #[cfg(test)]
+    fn reset_demotion_for_test() {
+        HW_ENCODE_FAILURES.store(0, Ordering::Relaxed);
+        HW_DEMOTED.store(false, Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    fn is_demoted_for_test() -> bool {
+        HW_DEMOTED.load(Ordering::Relaxed)
     }
 }
 
@@ -284,12 +359,19 @@ async fn probe_encoder(ffmpeg: &Path, enc: CompactionEncoder) -> bool {
         "color=black:s=640x360:r=10:d=0.3",
         "-frames:v",
         "2",
+        // Match the production filter/pixel-format shape so a probe pass
+        // implies the real pipeline's args are accepted too.
+        "-vf",
+        "scale=trunc(iw/2)*2:trunc(ih/2)*2",
     ])
     .args(enc.encode_args("balanced"))
-    .args(["-f", "null", "-"])
+    .args(["-pix_fmt", "yuv420p", "-f", "null", "-"])
     .stdin(std::process::Stdio::null())
     .stdout(std::process::Stdio::null())
     .stderr(std::process::Stdio::null());
+
+    // If shutdown cancels a hung probe, never leave the ffmpeg child running.
+    cmd.kill_on_drop(true);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -381,6 +463,56 @@ mod tests {
             // Unknown quality falls back to balanced, never panics.
             assert_eq!(enc.encode_args("garbage"), enc.encode_args("balanced"));
         }
+    }
+
+    #[test]
+    fn hardware_arms_disable_bframes() {
+        // B-frames shift PTS; frame lookup assumes PTS == index/fps, so a
+        // driver-default B-frame depth would make every extraction return a
+        // neighboring frame. AMF has no HEVC B-frame support; the other
+        // hardware arms must pin -bf 0 explicitly.
+        for enc in [
+            CompactionEncoder::HevcVideoToolbox,
+            CompactionEncoder::HevcNvenc,
+            CompactionEncoder::HevcQsv,
+        ] {
+            let args = enc.encode_args("balanced");
+            let bf = args
+                .iter()
+                .position(|a| a == "-bf")
+                .unwrap_or_else(|| panic!("{:?} missing -bf", enc));
+            assert_eq!(args[bf + 1], "0", "{:?} must disable B-frames", enc);
+        }
+        let x264 = CompactionEncoder::X264.encode_args("balanced");
+        let bf = x264.iter().position(|a| a == "-bf").expect("x264 -bf");
+        assert_eq!(x264[bf + 1], "0");
+    }
+
+    #[test]
+    fn hardware_demotes_after_consecutive_failures() {
+        CompactionEncoder::reset_demotion_for_test();
+        let enc = CompactionEncoder::HevcAmf;
+
+        enc.record_encode_outcome(false);
+        enc.record_encode_outcome(false);
+        assert!(!CompactionEncoder::is_demoted_for_test());
+
+        // A success resets the streak — transient blips must not demote.
+        enc.record_encode_outcome(true);
+        enc.record_encode_outcome(false);
+        enc.record_encode_outcome(false);
+        assert!(!CompactionEncoder::is_demoted_for_test());
+
+        enc.record_encode_outcome(false);
+        assert!(CompactionEncoder::is_demoted_for_test());
+
+        // Software failures never count toward demotion.
+        CompactionEncoder::reset_demotion_for_test();
+        for _ in 0..5 {
+            CompactionEncoder::X264.record_encode_outcome(false);
+        }
+        assert!(!CompactionEncoder::is_demoted_for_test());
+        CompactionEncoder::reset_demotion_for_test();
     }
 
     #[test]
