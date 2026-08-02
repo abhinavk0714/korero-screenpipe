@@ -367,7 +367,15 @@ export interface CostLogEntry {
   // A/B baseline), or null (router N/A: vision/background/explicit/off).
   latency_ms?: number | null;
   router_tier?: string | null;
+  /** Admission lane for priced text AI. Missing legacy callers default to interactive. */
+  lane?: HostedAiCostLane;
+  /** Daily incident namespace captured when the request was admitted. */
+  cost_ledger_epoch?: string;
+  /** Monthly or trial incident namespace captured when the request was admitted. */
+  cost_total_ledger_epoch?: string;
 }
+
+export type HostedAiCostLane = 'interactive' | 'background';
 
 /** UTC day string (YYYY-MM-DD) — same convention as usage.last_reset. */
 function utcToday(): string {
@@ -394,6 +402,42 @@ export function transcriptionCostKey(deviceId: string): string {
   return `hosted-transcription-cost:day:v1:${deviceId}`;
 }
 
+/** Share the incident epoch with lane ledgers so an authorized reset is complete. */
+export function costLedgerEpoch(env?: Pick<Env, 'PRIVATE_COST_CAP_EPOCH'>): string {
+	const epoch = env?.PRIVATE_COST_CAP_EPOCH?.trim();
+	return epoch && epoch.length <= 128 ? epoch : 'default';
+}
+
+/** Use the matching monthly/trial epoch for the cumulative background ledger. */
+export function totalCostLedgerEpoch(
+	env?: Pick<Env, 'PRIVATE_COST_CAP_EPOCH' | 'PRIVATE_TRIAL_COST_CAP_EPOCH'>,
+	hostedAiTrial = false,
+): string {
+	const epoch = hostedAiTrial
+		? env?.PRIVATE_TRIAL_COST_CAP_EPOCH?.trim()
+		: env?.PRIVATE_COST_CAP_EPOCH?.trim();
+	return epoch && epoch.length <= 128 ? epoch : 'default';
+}
+
+/** Bounded per-account daily lane accumulator used to preserve chat headroom. */
+export function dailyLaneCostKey(
+	deviceId: string,
+	lane: HostedAiCostLane,
+	epoch = 'default',
+): string {
+	return `hosted-ai-cost:lane-day:v1:${epoch}:${lane}:${deviceId}`;
+}
+
+/** Bounded per-account monthly (or permanent trial) lane accumulator. */
+export function totalLaneCostKey(
+	deviceId: string,
+	lane: HostedAiCostLane,
+	hostedAiTrial = false,
+	epoch = 'default',
+): string {
+	return `hosted-ai-cost:lane-total:v1:${hostedAiTrial ? 'trial' : 'month'}:${epoch}:${lane}:${deviceId}`;
+}
+
 export const GLOBAL_DAILY_COST_KEY = 'hosted-ai-cost:global-day:v1';
 export const GLOBAL_HOURLY_COST_KEY = 'hosted-ai-cost:global-hour:v1';
 
@@ -413,6 +457,9 @@ async function bumpCostAccumulators(
   deviceId: string,
   cost: number,
   hostedAiTrial: boolean,
+  lane: HostedAiCostLane,
+  ledgerEpoch: string,
+  totalLedgerEpoch: string,
 ): Promise<boolean> {
   const now = new Date();
   const today = utcToday();
@@ -429,12 +476,20 @@ async function bumpCostAccumulators(
   try {
     // D1 batches are transactional: a request is either visible in every
     // account/global budget window or in none of them.
+    const backgroundStatements = lane === 'background' ? [
+      statement(dailyLaneCostKey(deviceId, lane, ledgerEpoch), today),
+      statement(
+        totalLaneCostKey(deviceId, lane, hostedAiTrial, totalLedgerEpoch),
+        hostedAiTrial ? 'trial' : month,
+      ),
+    ] : [];
     const statements = [
       statement(deviceId, today),
       statement(
         hostedAiTrial ? trialCostKey(deviceId) : monthlyCostKey(deviceId),
         hostedAiTrial ? 'trial' : month,
       ),
+      ...backgroundStatements,
       statement(GLOBAL_DAILY_COST_KEY, today),
       statement(GLOBAL_HOURLY_COST_KEY, hour),
     ];
@@ -525,6 +580,10 @@ export async function logCost(env: Env, entry: CostLogEntry): Promise<boolean> {
       entry.device_id,
       entry.estimated_cost_usd,
       entry.hosted_ai_trial === true,
+      entry.lane ?? 'interactive',
+      entry.cost_ledger_epoch?.trim() || costLedgerEpoch(env),
+      entry.cost_total_ledger_epoch?.trim()
+        || totalCostLedgerEpoch(env, entry.hosted_ai_trial === true),
     );
   }
 
