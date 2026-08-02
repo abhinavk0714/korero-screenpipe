@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 const BRAIN_VIEW_CANVAS_SCHEMA: &str = "live-view-canvas.v1";
+const BRAIN_VIEW_WHITEBOARD_SCHEMA: &str = "live-view-whiteboard.v1";
 const MAX_CANVAS_NOTES: usize = 64;
 const MAX_CANVAS_ARROWS: usize = 128;
 const MAX_CANVAS_STROKES: usize = 64;
@@ -120,6 +121,32 @@ pub struct SaveBrainViewCanvasRequest {
     pub mode: BrainViewDisplayMode,
     pub viewport: BrainViewCanvasViewport,
     pub blocks: Vec<BrainViewCanvasBlock>,
+    pub notes: Vec<BrainViewCanvasNote>,
+    pub arrows: Vec<BrainViewCanvasArrow>,
+    pub strokes: Vec<BrainViewCanvasStroke>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainViewWhiteboardDocument {
+    pub schema: String,
+    pub view_id: String,
+    pub block_id: String,
+    pub revision: u64,
+    pub viewport: BrainViewCanvasViewport,
+    pub notes: Vec<BrainViewCanvasNote>,
+    pub arrows: Vec<BrainViewCanvasArrow>,
+    pub strokes: Vec<BrainViewCanvasStroke>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveBrainViewWhiteboardRequest {
+    pub view_id: String,
+    pub block_id: String,
+    pub expected_revision: Option<u64>,
+    pub viewport: BrainViewCanvasViewport,
     pub notes: Vec<BrainViewCanvasNote>,
     pub arrows: Vec<BrainViewCanvasArrow>,
     pub strokes: Vec<BrainViewCanvasStroke>,
@@ -244,6 +271,8 @@ pub enum BrainViewComponent {
     TimelineV1,
     #[serde(rename = "markdown.v1")]
     MarkdownV1,
+    #[serde(rename = "whiteboard.v1")]
+    WhiteboardV1,
 }
 
 impl From<BrainViewComponent> for LiveViewBlockKind {
@@ -256,6 +285,7 @@ impl From<BrainViewComponent> for LiveViewBlockKind {
             BrainViewComponent::TableV1 => Self::TableV1,
             BrainViewComponent::TimelineV1 => Self::TimelineV1,
             BrainViewComponent::MarkdownV1 => Self::MarkdownV1,
+            BrainViewComponent::WhiteboardV1 => Self::WhiteboardV1,
         }
     }
 }
@@ -270,6 +300,7 @@ impl From<LiveViewBlockKind> for BrainViewComponent {
             LiveViewBlockKind::TableV1 => Self::TableV1,
             LiveViewBlockKind::TimelineV1 => Self::TimelineV1,
             LiveViewBlockKind::MarkdownV1 => Self::MarkdownV1,
+            LiveViewBlockKind::WhiteboardV1 => Self::WhiteboardV1,
         }
     }
 }
@@ -611,6 +642,21 @@ fn canvas_document_path(screenpipe_dir: &Path, view_id: &str) -> PathBuf {
         .join(format!("{view_id}.json"))
 }
 
+fn whiteboard_document_path(screenpipe_dir: &Path, view_id: &str, block_id: &str) -> PathBuf {
+    screenpipe_dir
+        .join("live-views")
+        .join("whiteboards")
+        .join(view_id)
+        .join(format!("{block_id}.json"))
+}
+
+fn whiteboard_view_directory(screenpipe_dir: &Path, view_id: &str) -> PathBuf {
+    screenpipe_dir
+        .join("live-views")
+        .join("whiteboards")
+        .join(view_id)
+}
+
 fn valid_canvas_id(value: &str) -> bool {
     let mut characters = value.chars();
     matches!(characters.next(), Some(character) if character.is_ascii_lowercase() || character.is_ascii_digit())
@@ -756,6 +802,115 @@ fn validate_canvas_request(
     Ok(())
 }
 
+fn validate_whiteboard_request(request: &SaveBrainViewWhiteboardRequest) -> Result<(), String> {
+    if !valid_canvas_id(&request.view_id) {
+        return Err("Live View id is invalid".to_string());
+    }
+    if !valid_canvas_id(&request.block_id) {
+        return Err("whiteboard Block id is invalid".to_string());
+    }
+    validate_canvas_number(request.viewport.x, -100_000.0, 100_000.0, "viewport x")?;
+    validate_canvas_number(request.viewport.y, -100_000.0, 100_000.0, "viewport y")?;
+    validate_canvas_number(request.viewport.zoom, 0.25, 2.5, "viewport zoom")?;
+    if request.notes.len() > MAX_CANVAS_NOTES {
+        return Err(format!(
+            "a whiteboard may contain at most {MAX_CANVAS_NOTES} notes"
+        ));
+    }
+    if request.arrows.len() > MAX_CANVAS_ARROWS {
+        return Err(format!(
+            "a whiteboard may contain at most {MAX_CANVAS_ARROWS} arrows"
+        ));
+    }
+    if request.strokes.len() > MAX_CANVAS_STROKES {
+        return Err(format!(
+            "a whiteboard may contain at most {MAX_CANVAS_STROKES} strokes"
+        ));
+    }
+
+    let mut note_ids = HashSet::new();
+    for note in &request.notes {
+        if !valid_canvas_id(&note.id) || !note_ids.insert(note.id.clone()) {
+            return Err(format!(
+                "whiteboard note id '{}' is invalid or duplicated",
+                note.id
+            ));
+        }
+        if note.text.chars().count() > 4_000 {
+            return Err("whiteboard notes may contain at most 4,000 characters".to_string());
+        }
+        validate_canvas_number(note.x, -100_000.0, 100_000.0, "note x")?;
+        validate_canvas_number(note.y, -100_000.0, 100_000.0, "note y")?;
+        validate_canvas_number(note.width, 140.0, 1_200.0, "note width")?;
+        validate_canvas_number(note.height, 80.0, 1_000.0, "note height")?;
+    }
+
+    let node_ids = note_ids
+        .iter()
+        .map(|id| format!("note:{id}"))
+        .collect::<HashSet<_>>();
+    let mut arrow_ids = HashSet::new();
+    for arrow in &request.arrows {
+        if !valid_canvas_id(&arrow.id) || !arrow_ids.insert(arrow.id.clone()) {
+            return Err(format!(
+                "whiteboard arrow id '{}' is invalid or duplicated",
+                arrow.id
+            ));
+        }
+        if arrow.from_id == arrow.to_id
+            || !node_ids.contains(&arrow.from_id)
+            || !node_ids.contains(&arrow.to_id)
+        {
+            return Err(format!(
+                "whiteboard arrow '{}' has an invalid endpoint",
+                arrow.id
+            ));
+        }
+        if arrow
+            .label
+            .as_ref()
+            .is_some_and(|label| label.chars().count() > 200)
+        {
+            return Err("whiteboard arrow labels may contain at most 200 characters".to_string());
+        }
+    }
+
+    let mut stroke_ids = HashSet::new();
+    for stroke in &request.strokes {
+        if !valid_canvas_id(&stroke.id) || !stroke_ids.insert(stroke.id.clone()) {
+            return Err(format!(
+                "whiteboard stroke id '{}' is invalid or duplicated",
+                stroke.id
+            ));
+        }
+        if stroke.points.len() < 2 || stroke.points.len() > MAX_CANVAS_STROKE_POINTS {
+            return Err(format!(
+                "whiteboard strokes must contain between 2 and {MAX_CANVAS_STROKE_POINTS} points"
+            ));
+        }
+        for point in &stroke.points {
+            validate_canvas_number(point.x, -100_000.0, 100_000.0, "stroke x")?;
+            validate_canvas_number(point.y, -100_000.0, 100_000.0, "stroke y")?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_whiteboard_document(document: &BrainViewWhiteboardDocument) -> Result<(), String> {
+    if document.revision == 0 {
+        return Err("whiteboard revision must be greater than zero".to_string());
+    }
+    validate_whiteboard_request(&SaveBrainViewWhiteboardRequest {
+        view_id: document.view_id.clone(),
+        block_id: document.block_id.clone(),
+        expected_revision: None,
+        viewport: document.viewport.clone(),
+        notes: document.notes.clone(),
+        arrows: document.arrows.clone(),
+        strokes: document.strokes.clone(),
+    })
+}
+
 fn validate_canvas_document(
     document: &BrainViewCanvasDocument,
     valid_slot_ids: &HashSet<String>,
@@ -856,6 +1011,101 @@ fn save_canvas_document(
     Ok(document)
 }
 
+fn require_whiteboard_block(
+    screenpipe_dir: &Path,
+    view_id: &str,
+    block_id: &str,
+) -> Result<(), String> {
+    let template = list_live_view_templates(screenpipe_dir)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|template| template.id == view_id)
+        .ok_or_else(|| format!("Live View '{view_id}' was not found"))?;
+    let block = template
+        .blocks
+        .into_iter()
+        .find(|block| block.id == block_id)
+        .ok_or_else(|| format!("Block '{block_id}' was not found in Live View '{view_id}'"))?;
+    if block.kind != LiveViewBlockKind::WhiteboardV1 {
+        return Err(format!("Block '{block_id}' is not a whiteboard"));
+    }
+    Ok(())
+}
+
+fn read_whiteboard_document(
+    screenpipe_dir: &Path,
+    view_id: &str,
+    block_id: &str,
+) -> Result<Option<BrainViewWhiteboardDocument>, String> {
+    let path = whiteboard_document_path(screenpipe_dir, view_id, block_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let document: BrainViewWhiteboardDocument = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
+    if document.schema != BRAIN_VIEW_WHITEBOARD_SCHEMA
+        || document.view_id != view_id
+        || document.block_id != block_id
+    {
+        return Err(format!(
+            "{} is not a valid whiteboard document for this Block",
+            path.display()
+        ));
+    }
+    validate_whiteboard_document(&document)?;
+    Ok(Some(document))
+}
+
+fn save_whiteboard_document(
+    screenpipe_dir: &Path,
+    request: SaveBrainViewWhiteboardRequest,
+) -> Result<BrainViewWhiteboardDocument, String> {
+    let _guard = canvas_store_lock()
+        .lock()
+        .map_err(|_| "canvas store lock was poisoned".to_string())?;
+    validate_whiteboard_request(&request)?;
+    require_whiteboard_block(screenpipe_dir, &request.view_id, &request.block_id)?;
+    let existing = read_whiteboard_document(screenpipe_dir, &request.view_id, &request.block_id)?;
+    match &existing {
+        Some(document) if request.expected_revision != Some(document.revision) => {
+            return Err(format!(
+                "whiteboard revision changed (expected {}, received {:?})",
+                document.revision, request.expected_revision
+            ));
+        }
+        None if request.expected_revision.is_some() => {
+            return Err(
+                "cannot provide expectedRevision when creating a whiteboard".to_string(),
+            );
+        }
+        _ => {}
+    }
+
+    let document = BrainViewWhiteboardDocument {
+        schema: BRAIN_VIEW_WHITEBOARD_SCHEMA.to_string(),
+        view_id: request.view_id,
+        block_id: request.block_id,
+        revision: existing.map_or(1, |document| document.revision + 1),
+        viewport: request.viewport,
+        notes: request.notes,
+        arrows: request.arrows,
+        strokes: request.strokes,
+        updated_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let path = whiteboard_document_path(screenpipe_dir, &document.view_id, &document.block_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+    }
+    let bytes = serde_json::to_vec_pretty(&document)
+        .map_err(|error| format!("failed to serialize Live View whiteboard: {error}"))?;
+    crate::store::durable_write(&path, &bytes)
+        .map_err(|error| format!("failed to replace {}: {error}", path.display()))?;
+    Ok(document)
+}
+
 fn remove_canvas_document(screenpipe_dir: &Path, view_id: &str) -> Result<(), String> {
     let _guard = canvas_store_lock()
         .lock()
@@ -865,6 +1115,18 @@ fn remove_canvas_document(screenpipe_dir: &Path, view_id: &str) -> Result<(), St
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("failed to remove {}: {error}", path.display())),
+    }
+}
+
+fn remove_whiteboard_documents(screenpipe_dir: &Path, view_id: &str) -> Result<(), String> {
+    let _guard = canvas_store_lock()
+        .lock()
+        .map_err(|_| "canvas store lock was poisoned".to_string())?;
+    let directory = whiteboard_view_directory(screenpipe_dir, view_id);
+    match std::fs::remove_dir_all(&directory) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("failed to remove {}: {error}", directory.display())),
     }
 }
 
@@ -913,6 +1175,33 @@ pub async fn save_brain_view_canvas(
     request: SaveBrainViewCanvasRequest,
 ) -> Result<BrainViewCanvasDocument, String> {
     save_canvas_document(&active_screenpipe_dir(&app)?, request)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn load_brain_view_whiteboard(
+    app: tauri::AppHandle,
+    view_id: String,
+    block_id: String,
+) -> Result<Option<BrainViewWhiteboardDocument>, String> {
+    if !valid_canvas_id(&view_id) || !valid_canvas_id(&block_id) {
+        return Err("Live View or whiteboard Block id is invalid".to_string());
+    }
+    let screenpipe_dir = active_screenpipe_dir(&app)?;
+    require_whiteboard_block(&screenpipe_dir, &view_id, &block_id)?;
+    let _guard = canvas_store_lock()
+        .lock()
+        .map_err(|_| "canvas store lock was poisoned".to_string())?;
+    read_whiteboard_document(&screenpipe_dir, &view_id, &block_id)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_brain_view_whiteboard(
+    app: tauri::AppHandle,
+    request: SaveBrainViewWhiteboardRequest,
+) -> Result<BrainViewWhiteboardDocument, String> {
+    save_whiteboard_document(&active_screenpipe_dir(&app)?, request)
 }
 
 #[tauri::command]
@@ -976,7 +1265,8 @@ pub async fn save_brain_view(
 pub async fn delete_brain_view(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let screenpipe_dir = active_screenpipe_dir(&app)?;
     delete_live_view(&screenpipe_dir, &id).map_err(|error| error.to_string())?;
-    remove_canvas_document(&screenpipe_dir, &id)
+    remove_canvas_document(&screenpipe_dir, &id)?;
+    remove_whiteboard_documents(&screenpipe_dir, &id)
 }
 
 #[cfg(test)]
@@ -1038,6 +1328,77 @@ mod tests {
                     title: "Focus time".to_string(),
                     kind: LiveViewBlockKind::MetricV1,
                     width: 6,
+                    order: 0,
+                    intent: None,
+                    source: None,
+                }],
+            },
+        )
+        .unwrap();
+    }
+
+    fn whiteboard_request(
+        view_id: &str,
+        block_id: &str,
+        expected_revision: Option<u64>,
+    ) -> SaveBrainViewWhiteboardRequest {
+        SaveBrainViewWhiteboardRequest {
+            view_id: view_id.to_string(),
+            block_id: block_id.to_string(),
+            expected_revision,
+            viewport: BrainViewCanvasViewport {
+                x: 24.0,
+                y: 32.0,
+                zoom: 1.0,
+            },
+            notes: vec![
+                BrainViewCanvasNote {
+                    id: "problem".to_string(),
+                    text: "Observed problem".to_string(),
+                    x: 80.0,
+                    y: 96.0,
+                    width: 240.0,
+                    height: 160.0,
+                },
+                BrainViewCanvasNote {
+                    id: "decision".to_string(),
+                    text: "Decision".to_string(),
+                    x: 400.0,
+                    y: 96.0,
+                    width: 240.0,
+                    height: 160.0,
+                },
+            ],
+            arrows: vec![BrainViewCanvasArrow {
+                id: "flow".to_string(),
+                from_id: "note:problem".to_string(),
+                to_id: "note:decision".to_string(),
+                label: Some("leads to".to_string()),
+            }],
+            strokes: vec![BrainViewCanvasStroke {
+                id: "underline".to_string(),
+                points: vec![
+                    BrainViewCanvasPoint { x: 90.0, y: 240.0 },
+                    BrainViewCanvasPoint { x: 280.0, y: 240.0 },
+                ],
+            }],
+        }
+    }
+
+    fn create_whiteboard_test_view(dir: &Path) {
+        save_live_view(
+            dir,
+            SaveLiveViewRequest {
+                id: "whiteboard-test".to_string(),
+                title: "Whiteboard test".to_string(),
+                expected_revision: None,
+                time_range: LiveViewTimeRange::Today,
+                period_policy: None,
+                blocks: vec![LiveViewTemplateBlock {
+                    id: "strategy-map".to_string(),
+                    title: "Strategy map".to_string(),
+                    kind: LiveViewBlockKind::WhiteboardV1,
+                    width: 12,
                     order: 0,
                     intent: None,
                     source: None,
@@ -1132,5 +1493,78 @@ mod tests {
         delete_live_view(dir.path(), "canvas-test").unwrap();
         remove_canvas_document(dir.path(), "canvas-test").unwrap();
         assert!(!canvas_document_path(dir.path(), "canvas-test").exists());
+    }
+
+    #[test]
+    fn whiteboard_document_round_trips_with_revision_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        create_whiteboard_test_view(dir.path());
+
+        let first = save_whiteboard_document(
+            dir.path(),
+            whiteboard_request("whiteboard-test", "strategy-map", None),
+        )
+        .unwrap();
+        assert_eq!(first.schema, BRAIN_VIEW_WHITEBOARD_SCHEMA);
+        assert_eq!(first.revision, 1);
+        assert_eq!(first.notes.len(), 2);
+        assert_eq!(
+            read_whiteboard_document(dir.path(), "whiteboard-test", "strategy-map")
+                .unwrap()
+                .unwrap(),
+            first
+        );
+
+        let mut update = whiteboard_request(
+            "whiteboard-test",
+            "strategy-map",
+            Some(first.revision),
+        );
+        update.notes[0].text = "Updated problem".to_string();
+        let second = save_whiteboard_document(dir.path(), update).unwrap();
+        assert_eq!(second.revision, 2);
+        assert_eq!(second.notes[0].text, "Updated problem");
+
+        let conflict = save_whiteboard_document(
+            dir.path(),
+            whiteboard_request("whiteboard-test", "strategy-map", Some(first.revision)),
+        )
+        .unwrap_err();
+        assert!(conflict.contains("whiteboard revision changed"));
+    }
+
+    #[test]
+    fn whiteboard_rejects_wrong_block_kinds_and_dangling_arrows() {
+        let dir = tempfile::tempdir().unwrap();
+        create_canvas_test_view(dir.path());
+        let error = save_whiteboard_document(
+            dir.path(),
+            whiteboard_request("canvas-test", "focus-time", None),
+        )
+        .unwrap_err();
+        assert!(error.contains("is not a whiteboard"));
+
+        create_whiteboard_test_view(dir.path());
+        let mut dangling = whiteboard_request("whiteboard-test", "strategy-map", None);
+        dangling.arrows[0].to_id = "note:missing".to_string();
+        let error = save_whiteboard_document(dir.path(), dangling).unwrap_err();
+        assert!(error.contains("invalid endpoint"));
+    }
+
+    #[test]
+    fn deleting_a_live_view_removes_its_whiteboard_documents() {
+        let dir = tempfile::tempdir().unwrap();
+        create_whiteboard_test_view(dir.path());
+        save_whiteboard_document(
+            dir.path(),
+            whiteboard_request("whiteboard-test", "strategy-map", None),
+        )
+        .unwrap();
+        let path = whiteboard_document_path(dir.path(), "whiteboard-test", "strategy-map");
+        assert!(path.exists());
+
+        delete_live_view(dir.path(), "whiteboard-test").unwrap();
+        remove_whiteboard_documents(dir.path(), "whiteboard-test").unwrap();
+        assert!(!path.exists());
     }
 }

@@ -43,8 +43,16 @@ interface CanvasDocument {
   strokes: Array<{ id: string }>;
 }
 
+interface WhiteboardDocument {
+  revision: number;
+  notes: Array<{ id: string; text: string; x: number; y: number }>;
+  arrows: Array<{ id: string; fromId: string; toId: string }>;
+  strokes: Array<{ id: string }>;
+}
+
 const SELECTABLE_VIEW_ID = "my-overview";
 const FIXED_VIEW_ID = "daily-memory-fixed";
+const WHITEBOARD_BLOCK_ID = "decision-map";
 const PIPE_NAME = "e2e-overview-pipe";
 
 const SUPPORTED_WINDOW_SIZES = [
@@ -416,7 +424,7 @@ Refresh the assigned Live View output targets from source-backed activity.
     expect(installPipe.ok).toBe(true);
     expect((await installPipe.json()).success).toBe(true);
 
-    const slots = [
+    const sourceSlots = [
       {
         id: "focus-time",
         title: "Focus time",
@@ -454,7 +462,19 @@ Refresh the assigned Live View output targets from source-backed activity.
       },
     ].map((slot) => ({ ...slot, binding: { pipe_name: PIPE_NAME } }));
 
-    const fixedSlots = slots.filter((slot) =>
+    const slots = [
+      ...sourceSlots,
+      {
+        id: WHITEBOARD_BLOCK_ID,
+        title: "Decision map",
+        component: "whiteboard.v1",
+        width: 12,
+        order: sourceSlots.length,
+        binding: null,
+      },
+    ];
+
+    const fixedSlots = sourceSlots.filter((slot) =>
       ["daily-brief", "recent-activity"].includes(slot.id),
     );
 
@@ -469,7 +489,7 @@ Refresh the assigned Live View output targets from source-backed activity.
       },
       slots: slots.map((slot) => ({
         ...slot,
-        binding: { pipeName: slot.binding.pipe_name },
+        binding: slot.binding ? { pipeName: slot.binding.pipe_name } : null,
       })),
     };
     await invokeOrThrow("save_brain_view", {
@@ -489,6 +509,64 @@ Refresh the assigned Live View output targets from source-backed activity.
           ...slot,
           binding: { pipeName: slot.binding.pipe_name },
         })),
+      },
+    });
+    await invokeOrThrow("save_brain_view_whiteboard", {
+      request: {
+        viewId: SELECTABLE_VIEW_ID,
+        blockId: WHITEBOARD_BLOCK_ID,
+        expectedRevision: null,
+        viewport: { x: 16, y: 44, zoom: 0.5 },
+        notes: [
+          {
+            id: "problem",
+            text: "Problem\nWhere does the handoff break?",
+            x: 40,
+            y: 72,
+            width: 220,
+            height: 128,
+          },
+          {
+            id: "evidence",
+            text: "Evidence\nThree repeated manual steps",
+            x: 328,
+            y: 72,
+            width: 220,
+            height: 128,
+          },
+          {
+            id: "decision",
+            text: "Decision\nPrototype the smallest loop",
+            x: 616,
+            y: 72,
+            width: 220,
+            height: 128,
+          },
+        ],
+        arrows: [
+          {
+            id: "problem-to-evidence",
+            fromId: "note:problem",
+            toId: "note:evidence",
+            label: "observe",
+          },
+          {
+            id: "evidence-to-decision",
+            fromId: "note:evidence",
+            toId: "note:decision",
+            label: "decide",
+          },
+        ],
+        strokes: [
+          {
+            id: "decision-underline",
+            points: [
+              { x: 644, y: 224 },
+              { x: 772, y: 224 },
+              { x: 812, y: 218 },
+            ],
+          },
+        ],
       },
     });
     const fixtureViews = await invokeOrThrow<BrainView[]>("list_brain_views");
@@ -552,7 +630,7 @@ Refresh the assigned Live View output targets from source-backed activity.
 
     const artifactIds: number[] = [];
     for (const [viewId, viewSlots] of [
-      [SELECTABLE_VIEW_ID, slots],
+      [SELECTABLE_VIEW_ID, sourceSlots],
       [FIXED_VIEW_ID, fixedSlots],
     ] as const) {
       for (const slot of viewSlots) {
@@ -737,6 +815,73 @@ Refresh the assigned Live View output targets from source-backed activity.
     expect(existsSync(screenshot)).toBe(true);
     await browser.keys(["Escape"]);
 
+    const whiteboardActivate = await waitForTestId(
+      "whiteboard-activate",
+      10_000,
+    );
+    await whiteboardActivate.scrollIntoView({ block: "center" });
+    expect(await whiteboardActivate.getText()).toContain(
+      "double-click or press enter to edit",
+    );
+    await browser.execute(() => {
+      const target = document.querySelector<HTMLElement>(
+        "[data-testid='whiteboard-activate']",
+      );
+      if (!target) throw new Error("whiteboard activation surface is missing");
+      target.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    });
+    await waitForTestId("whiteboard-exit", 10_000);
+    expect(await $("[data-testid='canvas-tool-note']").isExisting()).toBe(true);
+    expect(await $("[data-testid='canvas-note-problem']").getText()).toContain(
+      "Where does the handoff break?",
+    );
+    await $("[data-testid='canvas-fit']").click();
+    await browser.pause(250);
+
+    const whiteboardNoteTool = await $("[data-testid='canvas-tool-note']");
+    await whiteboardNoteTool.click();
+    await clickEmptyCanvasSpace();
+    const noteInputs = await $$("textarea[aria-label='Canvas note']");
+    let experimentNote: WebdriverIO.Element | undefined;
+    for (const noteInput of noteInputs) {
+      if ((await noteInput.getValue()) === "") {
+        experimentNote = noteInput;
+        break;
+      }
+    }
+    expect(experimentNote).toBeDefined();
+    await experimentNote!.setValue("Next experiment\nAutomate one handoff");
+    expect(await experimentNote!.getValue()).toContain("Automate one handoff");
+    await $("[data-testid='canvas-fit']").click();
+    await browser.waitUntil(
+      async () => {
+        const saved = await invokeOrThrow<WhiteboardDocument | null>(
+          "load_brain_view_whiteboard",
+          { viewId: SELECTABLE_VIEW_ID, blockId: WHITEBOARD_BLOCK_ID },
+        );
+        return Boolean(
+          saved?.notes.some((note) =>
+            note.text.includes("Automate one handoff"),
+          ),
+        );
+      },
+      {
+        timeout: t(10_000),
+        interval: 200,
+        timeoutMsg: "the embedded whiteboard edit was not durably saved",
+      },
+    );
+    await $("[data-testid='canvas-fit']").click();
+    await browser.pause(250);
+    const whiteboardScreenshot = await saveScreenshot(
+      "brain-overview-whiteboard-editing",
+    );
+    expect(existsSync(whiteboardScreenshot)).toBe(true);
+    await $("[data-testid='whiteboard-exit']").click();
+    expect(await $("[data-testid='canvas-tool-note']").isExisting()).toBe(
+      false,
+    );
+
     const timeRange = await waitForTestId("overview-time-range", 10_000);
     await timeRange.click();
     const rangeOption = await $("[role='option']");
@@ -790,6 +935,7 @@ Refresh the assigned Live View output targets from source-backed activity.
     const cancelFixedEditor = await $("button=cancel");
     await cancelFixedEditor.click();
     await selectDashboard(SELECTABLE_VIEW_ID);
+    await waitForTestId("whiteboard-activate", 10_000);
 
     const canvas = await waitForTestId("live-view-canvas", 10_000);
     expect(
@@ -882,8 +1028,25 @@ Refresh the assigned Live View output targets from source-backed activity.
     await noteTool.click();
     expect(await noteTool.getAttribute("aria-pressed")).toBe("true");
     await clickEmptyCanvasSpace();
-    const surface = await waitForTestId("live-view-canvas-surface", 10_000);
-    const noteInput = await $("textarea[aria-label='Canvas note']");
+    let outerNoteId: string | undefined;
+    await browser.waitUntil(
+      async () => {
+        const saved = await invokeOrThrow<CanvasDocument | null>(
+          "load_brain_view_canvas",
+          { viewId: SELECTABLE_VIEW_ID },
+        );
+        outerNoteId = saved?.notes.find((note) => note.text === "")?.id;
+        return Boolean(outerNoteId);
+      },
+      {
+        timeout: t(10_000),
+        interval: 200,
+        timeoutMsg: "the parent Canvas note was not durably created",
+      },
+    );
+    const noteInput = await $(
+      `[data-testid='canvas-note-text-${outerNoteId!}']`,
+    );
     await noteInput.waitForDisplayed({ timeout: t(10_000) });
     await noteInput.setValue("Review the source evidence before automating.");
     await $("[data-testid='canvas-fit']").click();
@@ -935,9 +1098,9 @@ Refresh the assigned Live View output targets from source-backed activity.
       await browser.pause(150);
       const canvasLayout = (await browser.execute(() => {
         const canvasElement = document.querySelector<HTMLElement>(
-          "[data-testid='live-view-canvas']",
+          "[data-testid='live-view-canvas']:not([data-embedded='true'])",
         );
-        const toolbar = document.querySelector<HTMLElement>(
+        const toolbar = canvasElement?.querySelector<HTMLElement>(
           "[data-canvas-toolbar]",
         );
         if (!canvasElement || !toolbar) return null;
@@ -1008,11 +1171,32 @@ Refresh the assigned Live View output targets from source-backed activity.
     await waitForTestId("section-brain", 15_000);
     await waitForTestId("overview-dashboard-selector", 10_000);
     await selectDashboard(SELECTABLE_VIEW_ID);
-    await waitForTestId("live-view-canvas", 15_000);
-    expect(await $("textarea[aria-label='Canvas note']").getValue()).toBe(
-      "Review the source evidence before automating.",
+    const restoredOuterCanvas = await $(
+      "[data-testid='live-view-canvas']:not([data-embedded='true'])",
     );
-    expect(await $("[data-testid^='canvas-arrow-']").isExisting()).toBe(true);
+    await restoredOuterCanvas.waitForExist({ timeout: t(15_000) });
+    const restoredCanvas = await invokeOrThrow<CanvasDocument | null>(
+      "load_brain_view_canvas",
+      { viewId: SELECTABLE_VIEW_ID },
+    );
+    const restoredNote = restoredCanvas?.notes.find(
+      (note) => note.text === "Review the source evidence before automating.",
+    );
+    expect(restoredNote).toBeDefined();
+    expect(
+      await $(
+        `[data-testid='canvas-note-text-${restoredNote!.id}']`,
+      ).getValue(),
+    ).toBe("Review the source evidence before automating.");
+    const restoredArrow = restoredCanvas?.arrows.find(
+      (candidate) =>
+        candidate.fromId === "block:focus-time" &&
+        candidate.toId === "block:time-by-app",
+    );
+    expect(restoredArrow).toBeDefined();
+    expect(
+      await $(`[data-testid='canvas-arrow-${restoredArrow!.id}']`).isExisting(),
+    ).toBe(true);
 
     await setCssWindowSize(1440, 900);
     await openDashboardMenu();

@@ -179,6 +179,8 @@ pub enum LiveViewBlockKind {
     TimelineV1,
     #[serde(rename = "markdown.v1")]
     MarkdownV1,
+    #[serde(rename = "whiteboard.v1")]
+    WhiteboardV1,
 }
 
 impl LiveViewBlockKind {
@@ -191,11 +193,12 @@ impl LiveViewBlockKind {
             Self::TableV1 => "table.v1",
             Self::TimelineV1 => "timeline.v1",
             Self::MarkdownV1 => "markdown.v1",
+            Self::WhiteboardV1 => "whiteboard.v1",
         }
     }
 
-    pub fn output_schema(&self) -> Value {
-        match self {
+    pub fn output_schema(&self) -> Option<Value> {
+        Some(match self {
             Self::MetricV1 => json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -266,7 +269,10 @@ impl LiveViewBlockKind {
                     "content": {"type": "string", "maxLength": 10000}
                 }
             }),
-        }
+            // Whiteboards are local, user-authored documents. They do not
+            // compile into Pipe output targets or accept generated payloads.
+            Self::WhiteboardV1 => return None,
+        })
     }
 }
 
@@ -571,6 +577,11 @@ fn validate_blocks(blocks: &[LiveViewTemplateBlock]) -> Result<(), LiveViewError
             )));
         }
         if let Some(source) = &block.source {
+            if block.kind == LiveViewBlockKind::WhiteboardV1 {
+                return Err(LiveViewError::invalid(
+                    "whiteboard Blocks cannot be connected to a Pipe",
+                ));
+            }
             validate_title(source.pipe_name(), "Pipe source name")?;
         }
     }
@@ -877,7 +888,7 @@ pub fn compile_live_view_targets(templates: &[LiveViewTemplate]) -> Vec<OutputTa
         .flat_map(|template| {
             template.blocks.iter().filter_map(move |block| {
                 let source = block.source.as_ref()?;
-                let mut schema = block.kind.output_schema();
+                let mut schema = block.kind.output_schema()?;
                 if let Some(object) = schema.as_object_mut() {
                     object.insert(
                         "x-screenpipe-time-range".to_string(),
@@ -1180,6 +1191,53 @@ mod tests {
         )
         .unwrap();
         assert!(list_output_targets(dir.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn whiteboard_blocks_are_local_documents_without_pipe_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let whiteboard = LiveViewTemplateBlock {
+            id: "strategy-map".to_string(),
+            title: "Strategy map".to_string(),
+            kind: LiveViewBlockKind::WhiteboardV1,
+            width: 12,
+            order: 0,
+            intent: None,
+            source: None,
+        };
+        let view = save_live_view(
+            dir.path(),
+            SaveLiveViewRequest {
+                id: "planning".to_string(),
+                title: "Planning".to_string(),
+                expected_revision: None,
+                time_range: LiveViewTimeRange::Today,
+                period_policy: None,
+                blocks: vec![whiteboard.clone()],
+            },
+        )
+        .unwrap();
+
+        assert_eq!(view.blocks[0].kind, LiveViewBlockKind::WhiteboardV1);
+        assert!(view.blocks[0].value.is_none());
+        assert!(list_output_targets(dir.path()).unwrap().is_empty());
+
+        let mut invalid = whiteboard;
+        invalid.source = Some(LiveViewSource::pipe("daily-summary"));
+        let error = save_live_view(
+            dir.path(),
+            SaveLiveViewRequest {
+                id: "planning".to_string(),
+                title: "Planning".to_string(),
+                expected_revision: Some(view.revision),
+                time_range: LiveViewTimeRange::Today,
+                period_policy: None,
+                blocks: vec![invalid],
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, LiveViewErrorKind::Invalid);
+        assert!(error.message.contains("cannot be connected to a Pipe"));
     }
 
     #[test]

@@ -364,11 +364,19 @@ export function LiveViewLayoutEditor({
                 value={selectedSlot.component}
                 className="h-9 w-full border border-border bg-background px-2 text-xs outline-none focus:border-foreground"
                 onChange={(event) =>
-                  updateSlot(selectedSlot.id, (slot) => ({
-                    ...slot,
-                    component: event.target.value as BrainViewComponent,
-                    value: null,
-                  }))
+                  updateSlot(selectedSlot.id, (slot) => {
+                    const component = event.target.value as BrainViewComponent;
+                    return {
+                      ...slot,
+                      component,
+                      width: component === "whiteboard.v1" ? 12 : slot.width,
+                      intent:
+                        component === "whiteboard.v1" ? null : slot.intent,
+                      binding:
+                        component === "whiteboard.v1" ? null : slot.binding,
+                      value: null,
+                    };
+                  })
                 }
               >
                 {componentOptions.map((component) => (
@@ -378,32 +386,34 @@ export function LiveViewLayoutEditor({
                 ))}
               </select>
             </label>
-            <label className="space-y-1">
-              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                Connected Pipe
-              </span>
-              <select
-                data-testid={`overview-pipe-${selectedSlot.id}`}
-                value={selectedSlot.binding?.pipeName ?? ""}
-                className="h-9 w-full border border-border bg-background px-2 text-xs outline-none focus:border-foreground"
-                onChange={(event) =>
-                  updateSlot(selectedSlot.id, (slot) => ({
-                    ...slot,
-                    binding: event.target.value
-                      ? { pipeName: event.target.value }
-                      : null,
-                    value: null,
-                  }))
-                }
-              >
-                <option value="">No Pipe</option>
-                {pipeNames.map((pipeName) => (
-                  <option key={pipeName} value={pipeName}>
-                    {pipeName}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {selectedSlot.component !== "whiteboard.v1" && (
+              <label className="space-y-1">
+                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Connected Pipe
+                </span>
+                <select
+                  data-testid={`overview-pipe-${selectedSlot.id}`}
+                  value={selectedSlot.binding?.pipeName ?? ""}
+                  className="h-9 w-full border border-border bg-background px-2 text-xs outline-none focus:border-foreground"
+                  onChange={(event) =>
+                    updateSlot(selectedSlot.id, (slot) => ({
+                      ...slot,
+                      binding: event.target.value
+                        ? { pipeName: event.target.value }
+                        : null,
+                      value: null,
+                    }))
+                  }
+                >
+                  <option value="">No Pipe</option>
+                  {pipeNames.map((pipeName) => (
+                    <option key={pipeName} value={pipeName}>
+                      {pipeName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className="space-y-1">
               <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
                 Width
@@ -424,26 +434,28 @@ export function LiveViewLayoutEditor({
                 <option value={12}>Full</option>
               </select>
             </label>
-            <label className="space-y-1 md:col-span-2 xl:col-span-4">
-              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                What this Block should show
-              </span>
-              <textarea
-                data-testid={`overview-block-intent-${selectedSlot.id}`}
-                value={selectedSlot.intent ?? ""}
-                maxLength={800}
-                rows={2}
-                placeholder={`For example: Calculate time spent on GTM as a percentage of all active time in the selected period. Use 0 when no GTM activity is observed.`}
-                className="w-full resize-y border border-border bg-background px-3 py-2 text-xs outline-none focus:border-foreground"
-                onChange={(event) =>
-                  updateSlot(selectedSlot.id, (slot) => ({
-                    ...slot,
-                    intent: event.target.value || null,
-                    value: null,
-                  }))
-                }
-              />
-            </label>
+            {selectedSlot.component !== "whiteboard.v1" && (
+              <label className="space-y-1 md:col-span-2 xl:col-span-4">
+                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  What this Block should show
+                </span>
+                <textarea
+                  data-testid={`overview-block-intent-${selectedSlot.id}`}
+                  value={selectedSlot.intent ?? ""}
+                  maxLength={800}
+                  rows={2}
+                  placeholder={`For example: Calculate time spent on GTM as a percentage of all active time in the selected period. Use 0 when no GTM activity is observed.`}
+                  className="w-full resize-y border border-border bg-background px-3 py-2 text-xs outline-none focus:border-foreground"
+                  onChange={(event) =>
+                    updateSlot(selectedSlot.id, (slot) => ({
+                      ...slot,
+                      intent: event.target.value || null,
+                      value: null,
+                    }))
+                  }
+                />
+              </label>
+            )}
           </div>
           <p className="mt-2 text-[10px] text-muted-foreground">
             {
@@ -451,8 +463,10 @@ export function LiveViewLayoutEditor({
                 (component) => component.value === selectedSlot.component,
               )?.schema
             }
-            . The title is display copy. The instruction above is the data
-            contract the connected Pipe receives on its next run.
+            .{" "}
+            {selectedSlot.component === "whiteboard.v1"
+              ? "This document stays local and is edited directly inside the Block."
+              : "The title is display copy. The instruction above is the data contract the connected Pipe receives on its next run."}
           </p>
         </section>
       )}

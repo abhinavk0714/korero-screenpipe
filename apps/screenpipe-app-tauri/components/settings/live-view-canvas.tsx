@@ -19,6 +19,7 @@ import {
   NodeResizer,
   Position,
   ReactFlow,
+  ReactFlowProvider,
   ViewportPortal,
   type Connection,
   type Edge,
@@ -85,6 +86,7 @@ type CanvasNodeActions = {
 };
 
 type LiveViewFlowNodeData = CanvasNodeActions & {
+  viewId: string;
   slot: BrainViewSlot;
   timeRange: BrainViewTimeRange;
   refreshing: boolean;
@@ -259,6 +261,7 @@ function LiveViewBlockNode({ id, data }: NodeProps<LiveViewFlowNode>) {
       <div className="nowheel h-[calc(100%-2rem)] overflow-auto border border-t-0 border-border [&>article]:min-h-full">
         <LiveViewCard
           slot={slot}
+          viewId={data.viewId}
           timeRange={data.timeRange}
           refreshing={data.refreshing}
           feedback={data.feedback}
@@ -354,6 +357,10 @@ export function LiveViewCanvas({
   onAiEdit,
   onItemAction,
   onItemHandoff,
+  embedded = false,
+  active = true,
+  onActivate,
+  onExit,
 }: {
   document: BrainViewCanvasDocument;
   slots: BrainViewSlot[];
@@ -373,6 +380,10 @@ export function LiveViewCanvas({
     request: LiveViewItemActionRequest,
   ) => Promise<boolean>;
   onItemHandoff: (slot: BrainViewSlot, item: LiveViewListItem) => void;
+  embedded?: boolean;
+  active?: boolean;
+  onActivate?: () => void;
+  onExit?: () => void;
 }) {
   const [tool, setTool] = useState<CanvasTool>("select");
   const [selection, setSelection] = useState<string[]>([]);
@@ -591,6 +602,7 @@ export function LiveViewCanvas({
           deletable: false,
           ariaLabel: `Live View step: ${slot.title}`,
           data: {
+            viewId: document.viewId,
             slot,
             timeRange,
             refreshing: refreshingSlotIds.has(slot.id),
@@ -664,6 +676,7 @@ export function LiveViewCanvas({
     connectNode,
     document.blocks,
     document.notes,
+    document.viewId,
     onAiEdit,
     onFeedback,
     onItemAction,
@@ -997,6 +1010,11 @@ export function LiveViewCanvas({
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       const target = event.target as HTMLElement;
       if (event.key === "Escape") {
+        if (embedded && active && onExit) {
+          event.preventDefault();
+          event.stopPropagation();
+          onExit();
+        }
         setArrowSource(null);
         setCanvasSelection([]);
         setTool("select");
@@ -1061,6 +1079,9 @@ export function LiveViewCanvas({
       removeSelection,
       selection,
       setCanvasSelection,
+      active,
+      embedded,
+      onExit,
       updateNodePosition,
       zoomCanvas,
     ],
@@ -1091,223 +1112,296 @@ export function LiveViewCanvas({
   );
 
   const selectedCanDelete = selection.some((id) => !id.startsWith("block:"));
+  const interactionEnabled = !embedded || active;
 
   return (
     <section
       data-testid="live-view-canvas"
-      className="relative min-h-0 w-full flex-1 overflow-hidden border border-border bg-background"
-      aria-label="Live View process canvas"
+      data-embedded={embedded ? "true" : undefined}
+      data-active={embedded ? String(active) : undefined}
+      className={`relative w-full overflow-hidden border bg-background ${
+        embedded
+          ? `nodrag nowheel nopan h-[360px] min-h-[320px] ${
+              active
+                ? "border-foreground outline outline-2 outline-foreground outline-offset-2"
+                : "border-border"
+            }`
+          : "min-h-0 flex-1 border-border"
+      }`}
+      aria-label={embedded ? "Embedded whiteboard" : "Live View process canvas"}
+      onPointerDown={(event) => {
+        if (embedded && active) event.stopPropagation();
+      }}
+      onWheel={(event) => {
+        if (embedded && active) event.stopPropagation();
+      }}
     >
       <div
         ref={surfaceRef}
         data-testid="live-view-canvas-surface"
         role="application"
-        aria-label="Whiteboard canvas. Use the toolbar to select, pan, add notes, connect Blocks, or draw."
+        aria-label={
+          embedded
+            ? "Whiteboard Block canvas. Enter edit mode, then use the toolbar to add notes, connect them, or draw."
+            : "Whiteboard canvas. Use the toolbar to select, pan, add notes, connect Blocks, or draw."
+        }
         tabIndex={0}
-        className="live-view-process-canvas absolute inset-0 outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-inset"
+        className={`live-view-process-canvas absolute inset-0 outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-inset ${
+          interactionEnabled ? "" : "pointer-events-none"
+        }`}
         onPointerDownCapture={handleSurfacePointerDown}
         onPointerMoveCapture={handleSurfacePointerMove}
         onPointerUpCapture={finishDrawSession}
         onPointerCancelCapture={finishDrawSession}
         onKeyDown={handleKeyDown}
       >
-        <ReactFlow<CanvasFlowNode, CanvasFlowEdge>
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={CANVAS_NODE_TYPES}
-          viewport={document.viewport}
-          minZoom={0.25}
-          maxZoom={2.5}
-          snapToGrid
-          snapGrid={[CANVAS_GRID, CANVAS_GRID]}
-          nodesDraggable={tool === "select"}
-          nodesConnectable={tool === "arrow"}
-          elementsSelectable={tool === "select" || tool === "arrow"}
-          selectionOnDrag={tool === "select"}
-          panOnDrag={tool === "pan" ? true : [1, 2]}
-          panOnScroll
-          zoomOnScroll={false}
-          zoomOnPinch
-          zoomOnDoubleClick={false}
-          zoomActivationKeyCode={["Meta", "Control"]}
-          connectOnClick
-          connectionMode={ConnectionMode.Loose}
-          connectionLineStyle={{
-            stroke: "hsl(var(--foreground))",
-            strokeWidth: 2,
-          }}
-          deleteKeyCode={null}
-          nodesFocusable={false}
-          edgesFocusable={false}
-          disableKeyboardA11y
-          elevateNodesOnSelect={false}
-          proOptions={{ hideAttribution: true }}
-          onNodesChange={handleNodesChange}
-          onNodeDragStop={(_, node) =>
-            updateNodePosition(node.id, node.position, true)
-          }
-          onSelectionChange={handleSelectionChange}
-          onConnect={handleConnect}
-          onEdgeClick={(_, edge) => setCanvasSelection([edge.id])}
-          onPaneClick={() => {
-            setCanvasSelection([]);
-            setArrowSource(null);
-          }}
-          onViewportChange={handleViewportChange}
-          onMoveEnd={handleMoveEnd}
-        >
-          <Background
-            variant={BackgroundVariant.Dots}
-            gap={CANVAS_GRID}
-            size={1}
-            color="hsl(var(--border))"
-          />
-          <ViewportPortal>
-            <svg
-              aria-hidden="true"
-              className="pointer-events-none absolute left-0 top-0 z-10 overflow-visible"
-              width="1"
-              height="1"
-            >
-              {document.strokes.map((stroke) => (
-                <path
-                  key={stroke.id}
-                  data-testid={`canvas-stroke-${stroke.id}`}
-                  d={strokePath(stroke.points)}
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={
-                    selection.includes(`stroke:${stroke.id}`) ? 4 : 2
-                  }
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="pointer-events-auto cursor-pointer"
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                    setCanvasSelection([`stroke:${stroke.id}`]);
-                  }}
-                />
-              ))}
-              {draftStroke && (
-                <path
-                  d={strokePath(draftStroke.points)}
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              )}
-            </svg>
-          </ViewportPortal>
-        </ReactFlow>
+        <ReactFlowProvider>
+          <ReactFlow<CanvasFlowNode, CanvasFlowEdge>
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={CANVAS_NODE_TYPES}
+            viewport={document.viewport}
+            minZoom={0.25}
+            maxZoom={2.5}
+            snapToGrid
+            snapGrid={[CANVAS_GRID, CANVAS_GRID]}
+            nodesDraggable={interactionEnabled && tool === "select"}
+            nodesConnectable={interactionEnabled && tool === "arrow"}
+            elementsSelectable={
+              interactionEnabled && (tool === "select" || tool === "arrow")
+            }
+            selectionOnDrag={interactionEnabled && tool === "select"}
+            panOnDrag={
+              interactionEnabled ? (tool === "pan" ? true : [1, 2]) : false
+            }
+            panOnScroll={interactionEnabled}
+            zoomOnScroll={false}
+            zoomOnPinch={interactionEnabled}
+            zoomOnDoubleClick={false}
+            zoomActivationKeyCode={["Meta", "Control"]}
+            connectOnClick
+            connectionMode={ConnectionMode.Loose}
+            connectionLineStyle={{
+              stroke: "hsl(var(--foreground))",
+              strokeWidth: 2,
+            }}
+            deleteKeyCode={null}
+            nodesFocusable={false}
+            edgesFocusable={false}
+            disableKeyboardA11y
+            elevateNodesOnSelect={false}
+            proOptions={{ hideAttribution: true }}
+            onNodesChange={handleNodesChange}
+            onNodeDragStop={(_, node) =>
+              updateNodePosition(node.id, node.position, true)
+            }
+            onSelectionChange={handleSelectionChange}
+            onConnect={handleConnect}
+            onEdgeClick={(_, edge) => setCanvasSelection([edge.id])}
+            onPaneClick={() => {
+              setCanvasSelection([]);
+              setArrowSource(null);
+            }}
+            onViewportChange={handleViewportChange}
+            onMoveEnd={handleMoveEnd}
+          >
+            <Background
+              variant={BackgroundVariant.Dots}
+              gap={CANVAS_GRID}
+              size={1}
+              color="hsl(var(--border))"
+            />
+            <ViewportPortal>
+              <svg
+                aria-hidden="true"
+                className="pointer-events-none absolute left-0 top-0 z-10 overflow-visible"
+                width="1"
+                height="1"
+              >
+                {document.strokes.map((stroke) => (
+                  <path
+                    key={stroke.id}
+                    data-testid={`canvas-stroke-${stroke.id}`}
+                    d={strokePath(stroke.points)}
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={
+                      selection.includes(`stroke:${stroke.id}`) ? 4 : 2
+                    }
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="pointer-events-auto cursor-pointer"
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                      setCanvasSelection([`stroke:${stroke.id}`]);
+                    }}
+                  />
+                ))}
+                {draftStroke && (
+                  <path
+                    d={strokePath(draftStroke.points)}
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                )}
+              </svg>
+            </ViewportPortal>
+          </ReactFlow>
+        </ReactFlowProvider>
       </div>
 
-      <div
-        data-canvas-toolbar
-        className="absolute left-3 top-1/2 z-30 flex -translate-y-1/2 flex-col items-center border border-foreground bg-background shadow-lg shadow-black/5"
-      >
-        {TOOL_OPTIONS.map((option) => {
-          const Icon = option.icon;
-          return (
+      {interactionEnabled && (
+        <>
+          <div
+            data-canvas-toolbar
+            className="absolute left-3 top-1/2 z-30 flex -translate-y-1/2 flex-col items-center border border-foreground bg-background shadow-lg shadow-black/5"
+          >
+            {TOOL_OPTIONS.map((option) => {
+              const Icon = option.icon;
+              return (
+                <Button
+                  key={option.value}
+                  type="button"
+                  data-testid={`canvas-tool-${option.value}`}
+                  variant="ghost"
+                  size="icon"
+                  aria-label={option.label}
+                  aria-pressed={tool === option.value}
+                  title={option.label}
+                  className={`h-9 w-9 rounded-none border-b border-border ${
+                    tool === option.value
+                      ? "bg-foreground text-background"
+                      : ""
+                  }`}
+                  onClick={() => {
+                    setTool(option.value);
+                    setArrowSource(null);
+                  }}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  <span className="sr-only">{option.label}</span>
+                </Button>
+              );
+            })}
+            {!embedded && (
+              <Button
+                type="button"
+                data-testid="canvas-arrange"
+                variant="ghost"
+                size="icon"
+                aria-label="arrange canvas"
+                title="arrange canvas"
+                className="h-9 w-9 rounded-none border-b border-border"
+                onClick={arrangeCanvas}
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+                <span className="sr-only">arrange canvas</span>
+              </Button>
+            )}
             <Button
-              key={option.value}
               type="button"
-              data-testid={`canvas-tool-${option.value}`}
+              data-testid="canvas-delete-selection"
               variant="ghost"
               size="icon"
-              aria-label={option.label}
-              aria-pressed={tool === option.value}
-              title={option.label}
-              className={`h-9 w-9 rounded-none border-b border-border ${
-                tool === option.value ? "bg-foreground text-background" : ""
-              }`}
-              onClick={() => {
-                setTool(option.value);
-                setArrowSource(null);
-              }}
+              aria-label="delete selected canvas item"
+              title="delete selected canvas item"
+              className="h-9 w-9 rounded-none"
+              disabled={!selectedCanDelete}
+              onClick={removeSelection}
             >
-              <Icon className="h-3.5 w-3.5" />
-              <span className="sr-only">{option.label}</span>
+              <Trash2 className="h-3 w-3" />
             </Button>
-          );
-        })}
-        <Button
-          type="button"
-          data-testid="canvas-arrange"
-          variant="ghost"
-          size="icon"
-          aria-label="arrange canvas"
-          title="arrange canvas"
-          className="h-9 w-9 rounded-none border-b border-border"
-          onClick={arrangeCanvas}
-        >
-          <LayoutGrid className="h-3.5 w-3.5" />
-          <span className="sr-only">arrange canvas</span>
-        </Button>
-        <Button
-          type="button"
-          data-testid="canvas-delete-selection"
-          variant="ghost"
-          size="icon"
-          aria-label="delete selected canvas item"
-          title="delete selected canvas item"
-          className="h-9 w-9 rounded-none"
-          disabled={!selectedCanDelete}
-          onClick={removeSelection}
-        >
-          <Trash2 className="h-3 w-3" />
-        </Button>
-      </div>
+          </div>
 
-      <div
-        data-canvas-toolbar
-        className="absolute bottom-3 left-3 z-30 flex items-center border border-foreground bg-background shadow-lg shadow-black/5"
-      >
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="zoom out"
-          className="h-8 w-8 rounded-none border-r border-border"
-          onClick={() => zoomCanvas(1 / 1.2)}
-        >
-          <ZoomOut className="h-3 w-3" />
-        </Button>
-        <span className="w-11 text-center font-mono text-[10px] tabular-nums">
-          {Math.round(document.viewport.zoom * 100)}%
-        </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="zoom in"
-          className="h-8 w-8 rounded-none border-l border-border"
-          onClick={() => zoomCanvas(1.2)}
-        >
-          <ZoomIn className="h-3 w-3" />
-        </Button>
-        <Button
-          type="button"
-          data-testid="canvas-fit"
-          variant="ghost"
-          size="icon"
-          aria-label="fit canvas"
-          className="h-8 w-8 rounded-none border-l border-border"
-          onClick={fitCanvas}
-        >
-          <Maximize2 className="h-3 w-3" />
-        </Button>
-      </div>
+          <div
+            data-canvas-toolbar
+            className="absolute bottom-3 left-3 z-30 flex items-center border border-foreground bg-background shadow-lg shadow-black/5"
+          >
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="zoom out"
+              className="h-8 w-8 rounded-none border-r border-border"
+              onClick={() => zoomCanvas(1 / 1.2)}
+            >
+              <ZoomOut className="h-3 w-3" />
+            </Button>
+            <span className="w-11 text-center font-mono text-[10px] tabular-nums">
+              {Math.round(document.viewport.zoom * 100)}%
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="zoom in"
+              className="h-8 w-8 rounded-none border-l border-border"
+              onClick={() => zoomCanvas(1.2)}
+            >
+              <ZoomIn className="h-3 w-3" />
+            </Button>
+            <Button
+              type="button"
+              data-testid="canvas-fit"
+              variant="ghost"
+              size="icon"
+              aria-label="fit canvas"
+              className="h-8 w-8 rounded-none border-l border-border"
+              onClick={fitCanvas}
+            >
+              <Maximize2 className="h-3 w-3" />
+            </Button>
+          </div>
+        </>
+      )}
 
-      {tool === "arrow" && arrowSource && (
+      {interactionEnabled && tool === "arrow" && arrowSource && (
         <div className="absolute bottom-14 left-3 z-30 border border-foreground bg-background px-3 py-2 text-xs">
-          choose another Block or note to connect
+          choose another {embedded ? "note" : "Block or note"} to connect
         </div>
       )}
-      <div className="pointer-events-none absolute bottom-3 right-3 z-20 border border-border bg-background/95 px-2 py-1 font-mono text-[9px] text-muted-foreground">
-        drag nodes · pan tool or middle-drag · ctrl/⌘ + wheel to zoom
-      </div>
+      {interactionEnabled && (
+        <div className="pointer-events-none absolute bottom-3 right-3 z-20 border border-border bg-background/95 px-2 py-1 font-mono text-[9px] text-muted-foreground">
+          drag {embedded ? "notes" : "nodes"} · pan tool or middle-drag · ctrl/⌘
+          + wheel to zoom
+        </div>
+      )}
+      {embedded && active && (
+        <div className="absolute right-3 top-3 z-40 flex items-center border border-foreground bg-background shadow-lg shadow-black/5">
+          <span className="px-2 font-mono text-[9px] uppercase tracking-wide">
+            editing whiteboard
+          </span>
+          <Button
+            type="button"
+            data-testid="whiteboard-exit"
+            variant="ghost"
+            size="sm"
+            className="h-8 rounded-none border-l border-border px-2 text-[10px]"
+            onClick={onExit}
+          >
+            esc to exit
+          </Button>
+        </div>
+      )}
+      {embedded && !active && (
+        <button
+          type="button"
+          data-testid="whiteboard-activate"
+          aria-label="Edit whiteboard"
+          className="absolute inset-0 z-40 cursor-default bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-inset"
+          onClick={(event) => {
+            if (event.detail === 0) onActivate?.();
+          }}
+          onDoubleClick={onActivate}
+        >
+          <span className="absolute bottom-3 right-3 border border-border bg-background/95 px-2 py-1 font-mono text-[9px] uppercase tracking-wide text-muted-foreground">
+            double-click or press enter to edit
+          </span>
+        </button>
+      )}
     </section>
   );
 }

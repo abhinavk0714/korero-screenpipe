@@ -1268,6 +1268,14 @@ async loadBrainViewCanvas(viewId: string) : Promise<Result<BrainViewCanvasDocume
     else return { status: "error", error: e  as any };
 }
 },
+async loadBrainViewWhiteboard(viewId: string, blockId: string) : Promise<Result<BrainViewWhiteboardDocument | null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_brain_view_whiteboard", { viewId, blockId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Lock sync (clear keys from memory and stop server sync service).
  */
@@ -2158,6 +2166,14 @@ async saveBrainViewCanvas(request: SaveBrainViewCanvasRequest) : Promise<Result<
     else return { status: "error", error: e  as any };
 }
 },
+async saveBrainViewWhiteboard(request: SaveBrainViewWhiteboardRequest) : Promise<Result<BrainViewWhiteboardDocument, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_brain_view_whiteboard", { request }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Save the enterprise license key to `~/.screenpipe/enterprise.json`.
  * Used by the in-app prompt when enterprise.json is not deployed via MDM.
@@ -2827,7 +2843,7 @@ export type BrainViewCanvasNote = { id: string; text: string; x: number; y: numb
 export type BrainViewCanvasPoint = { x: number; y: number }
 export type BrainViewCanvasStroke = { id: string; points: BrainViewCanvasPoint[] }
 export type BrainViewCanvasViewport = { x: number; y: number; zoom: number }
-export type BrainViewComponent = "metric.v1" | "list.v1" | "bar-chart.v1" | "line-chart.v1" | "table.v1" | "timeline.v1" | "markdown.v1"
+export type BrainViewComponent = "metric.v1" | "list.v1" | "bar-chart.v1" | "line-chart.v1" | "table.v1" | "timeline.v1" | "markdown.v1" | "whiteboard.v1"
 export type BrainViewDefinition = { id: string; title: string; revision: number; timeRange: BrainViewTimeRange; periodPolicy: BrainViewPeriodPolicy; slots: BrainViewSlot[]; createdAt: string; updatedAt: string }
 export type BrainViewDisplayMode = "dashboard" | "canvas"
 export type BrainViewEvidenceRef = { eventId: number | null; frameId: number | null; transcriptionId: number | null; ts: string | null; deviceId: string | null }
@@ -2844,6 +2860,7 @@ export type BrainViewTemplateKit = { id: string; title: string; description: str
 export type BrainViewTemplatePipe = { name: string; distribution: string }
 export type BrainViewTimeRange = "today" | "24h" | "7d" | "30d"
 export type BrainViewValue = { payload: JsonValue; evidence: BrainViewEvidenceRef[]; sourcePipe: string; artifactOutputId: number; artifactVersion: number; updatedAt: string }
+export type BrainViewWhiteboardDocument = { schema: string; viewId: string; blockId: string; revision: number; viewport: BrainViewCanvasViewport; notes: BrainViewCanvasNote[]; arrows: BrainViewCanvasArrow[]; strokes: BrainViewCanvasStroke[]; updatedAt: string }
 /**
  * Per-browser automation status: "granted", "denied", or "not_asked".
  * Also includes whether the browser is currently running.
@@ -3132,6 +3149,7 @@ export type RemoteSyncConfig = { host: string; port: number; user: string; key_p
 export type RemoteSyncResult = { ok: boolean; files_transferred: number; bytes_transferred: number; error: string | null }
 export type SaveBrainViewCanvasRequest = { viewId: string; expectedRevision: number | null; mode: BrainViewDisplayMode; viewport: BrainViewCanvasViewport; blocks: BrainViewCanvasBlock[]; notes: BrainViewCanvasNote[]; arrows: BrainViewCanvasArrow[]; strokes: BrainViewCanvasStroke[] }
 export type SaveBrainViewRequest = { id: string; title: string; expectedRevision: number | null; timeRange: BrainViewTimeRange; periodPolicy: BrainViewPeriodPolicy; slots: BrainViewSlotInput[] }
+export type SaveBrainViewWhiteboardRequest = { viewId: string; blockId: string; expectedRevision: number | null; viewport: BrainViewCanvasViewport; notes: BrainViewCanvasNote[]; arrows: BrainViewCanvasArrow[]; strokes: BrainViewCanvasStroke[] }
 /**
  * A single schedule rule: a day-of-week + time range + what to record.
  */

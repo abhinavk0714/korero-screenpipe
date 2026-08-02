@@ -251,17 +251,23 @@ const COMPONENTS: Array<{
   },
   { value: "timeline.v1", label: "Timeline", schema: "timestamped events" },
   { value: "markdown.v1", label: "Text", schema: "a short formatted brief" },
+  {
+    value: "whiteboard.v1",
+    label: "Whiteboard",
+    schema: "a local editable canvas with notes, connectors, and drawing",
+  },
 ];
 
 function serializedSlots(slots: ViewSlot[]): BrainViewSlotInput[] {
   return normalizedSlots(slots).map((slot) => ({
     id: slot.id,
     title: slot.title.trim(),
-    intent: slot.intent?.trim() || null,
+    intent:
+      slot.component === "whiteboard.v1" ? null : slot.intent?.trim() || null,
     component: slot.component,
     width: slot.width,
     order: slot.order,
-    binding: slot.binding,
+    binding: slot.component === "whiteboard.v1" ? null : slot.binding,
   }));
 }
 

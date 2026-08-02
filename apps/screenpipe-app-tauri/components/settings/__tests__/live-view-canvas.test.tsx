@@ -5,6 +5,7 @@
 import React, { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { ReactFlowProvider } from "@xyflow/react";
 import { LiveViewCanvas } from "../live-view-canvas";
 import { createCanvasDocument } from "@/lib/live-views/canvas-layout";
 import type {
@@ -104,6 +105,35 @@ function CanvasHarness({
       onFeedback={vi.fn().mockResolvedValue(true)}
       onRegenerate={vi.fn()}
       onAiEdit={vi.fn().mockResolvedValue(true)}
+      onItemAction={vi.fn().mockResolvedValue(true)}
+      onItemHandoff={vi.fn()}
+    />
+  );
+}
+
+function EmbeddedCanvasHarness() {
+  const [active, setActive] = useState(false);
+  const [document, setDocument] = useState<BrainViewCanvasDocument>({
+    ...createCanvasDocument({ ...view, slots: [] }),
+    mode: "canvas",
+  });
+  return (
+    <LiveViewCanvas
+      document={document}
+      slots={[]}
+      timeRange="today"
+      refreshingSlotIds={new Set()}
+      aiEditingSlotId={null}
+      embedded
+      active={active}
+      onActivate={() => setActive(true)}
+      onExit={() => setActive(false)}
+      onChange={(next) => setDocument(next)}
+      onFeedback={vi.fn().mockResolvedValue(true)}
+      onRegenerate={vi.fn()}
+      onAiEdit={vi.fn().mockResolvedValue(true)}
+      onItemAction={vi.fn().mockResolvedValue(true)}
+      onItemHandoff={vi.fn()}
     />
   );
 }
@@ -132,6 +162,38 @@ afterEach(() => {
 });
 
 describe("LiveViewCanvas", () => {
+  it("isolates nested canvas stores from the parent Live View canvas", async () => {
+    render(
+      <ReactFlowProvider>
+        <CanvasHarness />
+        <EmbeddedCanvasHarness />
+      </ReactFlowProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("canvas-block-focus-time")).toBeTruthy(),
+    );
+    expect(screen.getAllByTestId("live-view-canvas")).toHaveLength(2);
+  });
+
+  it("gives nested canvas gestures to exactly one surface at a time", () => {
+    render(<EmbeddedCanvasHarness />);
+
+    const canvas = screen.getByTestId("live-view-canvas");
+    expect(canvas).toHaveAttribute("data-embedded", "true");
+    expect(canvas).toHaveAttribute("data-active", "false");
+    expect(screen.queryByTestId("canvas-tool-note")).toBeNull();
+
+    fireEvent.doubleClick(screen.getByTestId("whiteboard-activate"));
+    expect(canvas).toHaveAttribute("data-active", "true");
+    expect(screen.getByTestId("canvas-tool-note")).toBeTruthy();
+    expect(screen.getByText("editing whiteboard")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("whiteboard-exit"));
+    expect(canvas).toHaveAttribute("data-active", "false");
+    expect(screen.queryByTestId("canvas-tool-note")).toBeNull();
+  });
+
   it("keeps the source-backed Live View cards interactive inside the canvas", () => {
     render(<CanvasHarness />);
 
@@ -169,6 +231,8 @@ describe("LiveViewCanvas", () => {
           onFeedback={vi.fn().mockResolvedValue(true)}
           onRegenerate={vi.fn()}
           onAiEdit={vi.fn().mockResolvedValue(true)}
+          onItemAction={vi.fn().mockResolvedValue(true)}
+          onItemHandoff={vi.fn()}
         />
       </React.StrictMode>,
     );

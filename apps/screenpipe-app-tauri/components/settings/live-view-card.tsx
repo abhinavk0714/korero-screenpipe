@@ -4,6 +4,7 @@
 "use client";
 
 import React, { useState } from "react";
+import dynamic from "next/dynamic";
 import {
   Loader2,
   RotateCcw,
@@ -51,7 +52,16 @@ const COMPONENT_LABELS: Record<BrainViewComponent, string> = {
   "table.v1": "Table",
   "timeline.v1": "Timeline",
   "markdown.v1": "Text",
+  "whiteboard.v1": "Whiteboard",
 };
+
+const LiveViewWhiteboardBlock = dynamic(
+  () =>
+    import("@/components/settings/live-view-whiteboard-block").then(
+      (module) => module.LiveViewWhiteboardBlock,
+    ),
+  { ssr: false },
+);
 
 function timeAgo(iso: string): string {
   const elapsed = Date.now() - new Date(iso).getTime();
@@ -85,13 +95,24 @@ function LiveViewCardBody({
   refreshing = false,
   onItemAction,
   onItemHandoff,
+  viewId,
 }: {
   slot: BrainViewSlot;
   preview?: boolean;
   refreshing?: boolean;
   onItemAction?: (request: LiveViewItemActionRequest) => Promise<boolean>;
   onItemHandoff?: (item: LiveViewListItem) => void;
+  viewId?: string;
 }) {
+  if (slot.component === "whiteboard.v1") {
+    return (
+      <LiveViewWhiteboardBlock
+        key={`${viewId ?? "preview"}:${slot.id}`}
+        viewId={viewId}
+        blockId={slot.id}
+      />
+    );
+  }
   const rawPayload = slot.value?.payload;
   const payload = isRecord(rawPayload) ? rawPayload : null;
   if (!payload) {
@@ -380,8 +401,10 @@ export function LiveViewCard({
   onAiEdit,
   onItemAction,
   onItemHandoff,
+  viewId,
 }: {
   slot: BrainViewSlot;
+  viewId?: string;
   timeRange?: BrainViewTimeRange;
   preview?: boolean;
   refreshing?: boolean;
@@ -404,7 +427,9 @@ export function LiveViewCard({
   const [feedbackSaving, setFeedbackSaving] = useState<
     "up" | "down" | "clear" | null
   >(null);
-  const hasActions = Boolean(onFeedback || onRegenerate || onAiEdit);
+  const hasActions =
+    slot.component !== "whiteboard.v1" &&
+    Boolean(onFeedback || onRegenerate || onAiEdit);
   const busy = refreshing || aiEditing || feedbackSaving !== null;
 
   const submitAiEdit = async (event: React.FormEvent) => {
@@ -442,7 +467,9 @@ export function LiveViewCard({
           <h3 className="truncate text-sm font-medium">{slot.title}</h3>
           <p className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
             {COMPONENT_LABELS[slot.component]} ·{" "}
-            {getLiveViewTimeRangeOption(timeRange).label}
+            {slot.component === "whiteboard.v1"
+              ? "local document"
+              : getLiveViewTimeRangeOption(timeRange).label}
           </p>
         </div>
         {slot.value && !hasActions && (
@@ -636,6 +663,7 @@ export function LiveViewCard({
       >
         <LiveViewCardBody
           slot={slot}
+          viewId={viewId}
           preview={preview}
           refreshing={refreshing}
           onItemAction={onItemAction}
@@ -644,9 +672,11 @@ export function LiveViewCard({
       </div>
       <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-2 text-[10px] text-muted-foreground">
         <span className="truncate">
-          {slot.binding
-            ? `Pipe: ${slot.binding.pipeName}`
-            : "No Pipe connected"}
+          {slot.component === "whiteboard.v1"
+            ? "Stored locally"
+            : slot.binding
+              ? `Pipe: ${slot.binding.pipeName}`
+              : "No Pipe connected"}
         </span>
         {slot.value && (
           <span className="shrink-0">

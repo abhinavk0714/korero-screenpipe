@@ -197,6 +197,9 @@ fn render_html(view: &LiveView) -> String {
 }
 
 fn render_block_html(block: &LiveViewBlock) -> String {
+    if block.kind == LiveViewBlockKind::WhiteboardV1 {
+        return "<p class=\"muted\">Interactive whiteboard. Open this Live View in the Screenpipe desktop app to edit it.</p>".to_string();
+    }
     let Some(value) = &block.value else {
         let message = block
             .source
@@ -343,6 +346,7 @@ fn render_block_html(block: &LiveViewBlock) -> String {
                 format!("<table class=\"table\"><tbody>{rows}</tbody></table>")
             })
             .unwrap_or_default(),
+        LiveViewBlockKind::WhiteboardV1 => unreachable!("handled before value rendering"),
     };
     format!(
         "{body}<div class=\"meta\">updated by {} at {}</div>",
