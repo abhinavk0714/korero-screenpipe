@@ -11712,6 +11712,8 @@ name = "screenpipe-sqlite-coordinator"
 version = "0.4.35"
 dependencies = [
  "libsqlite3-sys",
+ "serde",
+ "serde_json",
  "sqlx",
  "tokio",
  "tracing",
