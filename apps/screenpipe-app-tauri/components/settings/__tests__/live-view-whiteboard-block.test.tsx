@@ -169,4 +169,44 @@ describe("LiveViewWhiteboardBlock", () => {
     );
     expect(mocks.apply).not.toHaveBeenCalled();
   });
+
+  it("does not roll a whiteboard back to an older artifact version", async () => {
+    mocks.load.mockResolvedValue({
+      status: "ok",
+      data: {
+        ...emptyDocument,
+        notes: [
+          {
+            id: "newer",
+            text: "Keep the newer artifact",
+            x: 40,
+            y: 40,
+            width: 240,
+            height: 160,
+          },
+        ],
+        source: {
+          sourcePipe: value.sourcePipe,
+          artifactOutputId: value.artifactOutputId,
+          artifactVersion: value.artifactVersion + 1,
+          updatedAt: "2026-08-02T20:00:00Z",
+        },
+      },
+    });
+
+    render(
+      <LiveViewWhiteboardBlock
+        viewId="daily"
+        blockId="decision-map"
+        value={value}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("whiteboard-document")).toHaveTextContent(
+        "Keep the newer artifact",
+      ),
+    );
+    expect(mocks.apply).not.toHaveBeenCalled();
+  });
 });

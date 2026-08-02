@@ -75,6 +75,27 @@ type ChangeOptions = { persist: boolean };
 const MAX_CANVAS_NOTES = 64;
 const MAX_CANVAS_ARROWS = 128;
 const MAX_CANVAS_STROKES = 64;
+const MIN_CANVAS_COORDINATE = -100_000;
+const MAX_CANVAS_COORDINATE = 100_000;
+const MAX_CANVAS_BLOCK_WIDTH = 1_600;
+const MAX_CANVAS_BLOCK_HEIGHT = 1_200;
+const MAX_CANVAS_NOTE_WIDTH = 1_200;
+const MAX_CANVAS_NOTE_HEIGHT = 1_000;
+
+function clampCanvasCoordinate(value: number): number {
+  return Math.min(
+    MAX_CANVAS_COORDINATE,
+    Math.max(MIN_CANVAS_COORDINATE, value),
+  );
+}
+
+function boundedCanvasViewport(viewport: Viewport): Viewport {
+  return {
+    x: clampCanvasCoordinate(viewport.x),
+    y: clampCanvasCoordinate(viewport.y),
+    zoom: clampCanvasZoom(viewport.zoom),
+  };
+}
 
 type CanvasNodeActions = {
   tool: CanvasTool;
@@ -192,17 +213,23 @@ function CanvasNodeResizer({
   tool,
   minWidth,
   minHeight,
+  maxWidth,
+  maxHeight,
   onResize,
 }: Pick<CanvasNodeActions, "selected" | "tool" | "onResize"> & {
   id: string;
   minWidth: number;
   minHeight: number;
+  maxWidth: number;
+  maxHeight: number;
 }) {
   return (
     <NodeResizer
       isVisible={selected && tool === "select"}
       minWidth={minWidth}
       minHeight={minHeight}
+      maxWidth={maxWidth}
+      maxHeight={maxHeight}
       handleStyle={RESIZE_HANDLE_STYLE}
       lineStyle={{ borderColor: "hsl(var(--foreground))" }}
       onResize={(_, params) => onResize(id, params, false)}
@@ -234,6 +261,8 @@ function LiveViewBlockNode({ id, data }: NodeProps<LiveViewFlowNode>) {
         tool={data.tool}
         minWidth={220}
         minHeight={160}
+        maxWidth={MAX_CANVAS_BLOCK_WIDTH}
+        maxHeight={MAX_CANVAS_BLOCK_HEIGHT}
         onResize={data.onResize}
       />
       <CanvasConnectionHandles tool={data.tool} />
@@ -305,6 +334,8 @@ function CanvasNoteNode({ id, data }: NodeProps<NoteFlowNode>) {
         tool={data.tool}
         minWidth={140}
         minHeight={80}
+        maxWidth={MAX_CANVAS_NOTE_WIDTH}
+        maxHeight={MAX_CANVAS_NOTE_HEIGHT}
         onResize={data.onResize}
       />
       <CanvasConnectionHandles tool={data.tool} />
@@ -436,8 +467,8 @@ export function LiveViewCanvas({
     ) => {
       const current = latestDocumentRef.current;
       const snapped = {
-        x: snapCanvasValue(geometry.x),
-        y: snapCanvasValue(geometry.y),
+        x: clampCanvasCoordinate(snapCanvasValue(geometry.x)),
+        y: clampCanvasCoordinate(snapCanvasValue(geometry.y)),
         width: snapCanvasValue(geometry.width),
         height: snapCanvasValue(geometry.height),
       };
@@ -451,8 +482,14 @@ export function LiveViewCanvas({
                 ? {
                     ...block,
                     ...snapped,
-                    width: Math.max(220, snapped.width),
-                    height: Math.max(160, snapped.height),
+                    width: Math.min(
+                      MAX_CANVAS_BLOCK_WIDTH,
+                      Math.max(220, snapped.width),
+                    ),
+                    height: Math.min(
+                      MAX_CANVAS_BLOCK_HEIGHT,
+                      Math.max(160, snapped.height),
+                    ),
                   }
                 : block,
             ),
@@ -471,8 +508,14 @@ export function LiveViewCanvas({
                 ? {
                     ...note,
                     ...snapped,
-                    width: Math.max(140, snapped.width),
-                    height: Math.max(80, snapped.height),
+                    width: Math.min(
+                      MAX_CANVAS_NOTE_WIDTH,
+                      Math.max(140, snapped.width),
+                    ),
+                    height: Math.min(
+                      MAX_CANVAS_NOTE_HEIGHT,
+                      Math.max(80, snapped.height),
+                    ),
                   }
                 : note,
             ),
@@ -742,8 +785,8 @@ export function LiveViewCanvas({
       for (const change of positions) {
         if (change.type !== "position" || !change.position) continue;
         const position = {
-          x: snapCanvasValue(change.position.x),
-          y: snapCanvasValue(change.position.y),
+          x: clampCanvasCoordinate(snapCanvasValue(change.position.x)),
+          y: clampCanvasCoordinate(snapCanvasValue(change.position.y)),
         };
         if (change.id.startsWith("block:")) {
           const slotId = change.id.slice("block:".length);
@@ -792,12 +835,16 @@ export function LiveViewCanvas({
   const worldPoint = useCallback((clientX: number, clientY: number) => {
     const bounds = surfaceRef.current?.getBoundingClientRect();
     if (!bounds) return { x: 0, y: 0 };
-    return canvasWorldPoint(
+    const point = canvasWorldPoint(
       clientX,
       clientY,
       bounds,
       latestDocumentRef.current.viewport,
     );
+    return {
+      x: clampCanvasCoordinate(point.x),
+      y: clampCanvasCoordinate(point.y),
+    };
   }, []);
 
   const addNote = useCallback(
@@ -969,11 +1016,11 @@ export function LiveViewCanvas({
       applyDocument(
         {
           ...current,
-          viewport: {
+          viewport: boundedCanvasViewport({
             x: centerX - worldX * zoom,
             y: centerY - worldY * zoom,
             zoom,
-          },
+          }),
         },
         true,
       );
@@ -999,11 +1046,11 @@ export function LiveViewCanvas({
     applyDocument(
       {
         ...current,
-        viewport: {
+        viewport: boundedCanvasViewport({
           zoom,
           x: (surface.width - width * zoom) / 2 - bounds.left * zoom,
           y: (surface.height - height * zoom) / 2 - bounds.top * zoom,
-        },
+        }),
       },
       true,
     );
@@ -1099,14 +1146,15 @@ export function LiveViewCanvas({
   const handleViewportChange = useCallback(
     (viewport: Viewport) => {
       const current = latestDocumentRef.current;
+      const bounded = boundedCanvasViewport(viewport);
       if (
-        current.viewport.x === viewport.x &&
-        current.viewport.y === viewport.y &&
-        current.viewport.zoom === viewport.zoom
+        current.viewport.x === bounded.x &&
+        current.viewport.y === bounded.y &&
+        current.viewport.zoom === bounded.zoom
       ) {
         return;
       }
-      applyDocument({ ...current, viewport }, false);
+      applyDocument({ ...current, viewport: bounded }, false);
     },
     [applyDocument],
   );
@@ -1115,7 +1163,10 @@ export function LiveViewCanvas({
     (event: MouseEvent | TouchEvent | null, viewport: Viewport) => {
       if (!event) return;
       const current = latestDocumentRef.current;
-      applyDocument({ ...current, viewport }, true);
+      applyDocument(
+        { ...current, viewport: boundedCanvasViewport(viewport) },
+        true,
+      );
     },
     [applyDocument],
   );

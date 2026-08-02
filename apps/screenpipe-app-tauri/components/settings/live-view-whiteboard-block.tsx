@@ -49,6 +49,17 @@ function asCanvasDocument(
   };
 }
 
+function isNewerWhiteboardArtifact(
+  incoming: BrainViewValue,
+  applied: BrainViewWhiteboardDocument["source"],
+): boolean {
+  if (!applied) return true;
+  const sameOutput =
+    incoming.sourcePipe === applied.sourcePipe &&
+    incoming.artifactOutputId === applied.artifactOutputId;
+  return !sameOutput || incoming.artifactVersion > applied.artifactVersion;
+}
+
 export function LiveViewWhiteboardBlock({
   viewId,
   blockId,
@@ -117,17 +128,13 @@ export function LiveViewWhiteboardBlock({
   const incomingSourceKey = value
     ? `${value.sourcePipe}:${value.artifactOutputId}:${value.artifactVersion}`
     : null;
-  const appliedSourceKey = document.source
-    ? `${document.source.sourcePipe}:${document.source.artifactOutputId}:${document.source.artifactVersion}`
-    : null;
-
   useEffect(() => {
     if (
       !viewId ||
       loading ||
       !value ||
       !incomingSourceKey ||
-      incomingSourceKey === appliedSourceKey ||
+      !isNewerWhiteboardArtifact(value, document.source) ||
       importAttemptRef.current === incomingSourceKey
     ) {
       return;
@@ -160,7 +167,7 @@ export function LiveViewWhiteboardBlock({
         setError(null);
       })
       .finally(() => setImporting(false));
-  }, [appliedSourceKey, blockId, incomingSourceKey, loading, value, viewId]);
+  }, [blockId, document.source, incomingSourceKey, loading, value, viewId]);
 
   const pumpSaves = useCallback((): Promise<void> => {
     if (!viewId) return Promise.resolve();

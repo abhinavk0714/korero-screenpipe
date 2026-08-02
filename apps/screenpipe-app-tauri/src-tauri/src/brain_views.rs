@@ -1069,19 +1069,40 @@ fn apply_whiteboard_output(
             payload.schema
         ));
     }
-    save_whiteboard_document(
+    let save_request = SaveBrainViewWhiteboardRequest {
+        view_id: request.view_id,
+        block_id: request.block_id,
+        expected_revision: request.expected_revision,
+        viewport: payload.viewport,
+        notes: payload.notes,
+        arrows: payload.arrows,
+        strokes: payload.strokes,
+        source: Some(request.source),
+    };
+    let _guard = canvas_store_lock()
+        .lock()
+        .map_err(|_| "canvas store lock was poisoned".to_string())?;
+    validate_whiteboard_request(&save_request)?;
+    require_whiteboard_block(
         screenpipe_dir,
-        SaveBrainViewWhiteboardRequest {
-            view_id: request.view_id,
-            block_id: request.block_id,
-            expected_revision: request.expected_revision,
-            viewport: payload.viewport,
-            notes: payload.notes,
-            arrows: payload.arrows,
-            strokes: payload.strokes,
-            source: Some(request.source),
-        },
-    )
+        &save_request.view_id,
+        &save_request.block_id,
+    )?;
+    let existing = read_whiteboard_document(
+        screenpipe_dir,
+        &save_request.view_id,
+        &save_request.block_id,
+    )?;
+    if let (Some(document), Some(incoming)) = (&existing, &save_request.source) {
+        if document.source.as_ref().is_some_and(|applied| {
+            applied.source_pipe == incoming.source_pipe
+                && applied.artifact_output_id == incoming.artifact_output_id
+                && applied.artifact_version >= incoming.artifact_version
+        }) {
+            return Ok(document.clone());
+        }
+    }
+    save_whiteboard_document_locked(screenpipe_dir, save_request, existing)
 }
 
 fn require_whiteboard_block(
@@ -1141,6 +1162,16 @@ fn save_whiteboard_document(
     validate_whiteboard_request(&request)?;
     require_whiteboard_block(screenpipe_dir, &request.view_id, &request.block_id)?;
     let existing = read_whiteboard_document(screenpipe_dir, &request.view_id, &request.block_id)?;
+    save_whiteboard_document_locked(screenpipe_dir, request, existing)
+}
+
+fn save_whiteboard_document_locked(
+    screenpipe_dir: &Path,
+    request: SaveBrainViewWhiteboardRequest,
+    existing: Option<BrainViewWhiteboardDocument>,
+) -> Result<BrainViewWhiteboardDocument, String> {
+    validate_whiteboard_request(&request)?;
+    require_whiteboard_block(screenpipe_dir, &request.view_id, &request.block_id)?;
     match &existing {
         Some(document) if request.expected_revision != Some(document.revision) => {
             return Err(format!(
@@ -1202,6 +1233,47 @@ fn remove_whiteboard_documents(screenpipe_dir: &Path, view_id: &str) -> Result<(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("failed to remove {}: {error}", directory.display())),
     }
+}
+
+fn prune_whiteboard_documents(
+    screenpipe_dir: &Path,
+    view_id: &str,
+    active_block_ids: &HashSet<String>,
+) -> Result<(), String> {
+    let _guard = canvas_store_lock()
+        .lock()
+        .map_err(|_| "canvas store lock was poisoned".to_string())?;
+    let directory = whiteboard_view_directory(screenpipe_dir, view_id);
+    let entries = match std::fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("failed to read {}: {error}", directory.display())),
+    };
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("failed to read {}: {error}", directory.display()))?;
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(block_id) = path.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if active_block_ids.contains(block_id) {
+            continue;
+        }
+        std::fs::remove_file(&path)
+            .map_err(|error| format!("failed to remove {}: {error}", path.display()))?;
+    }
+    if std::fs::read_dir(&directory)
+        .map_err(|error| format!("failed to read {}: {error}", directory.display()))?
+        .next()
+        .is_none()
+    {
+        std::fs::remove_dir(&directory)
+            .map_err(|error| format!("failed to remove {}: {error}", directory.display()))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1317,10 +1389,18 @@ pub async fn install_brain_view_template_kit(
         })?;
     }
 
-    save_live_view(
+    let view_id = request.target_view_id;
+    let active_whiteboard_ids = kit
+        .template
+        .blocks
+        .iter()
+        .filter(|block| block.kind == LiveViewBlockKind::WhiteboardV1)
+        .map(|block| block.id.clone())
+        .collect::<HashSet<_>>();
+    let saved = save_live_view(
         &screenpipe_dir,
         SaveLiveViewRequest {
-            id: request.target_view_id,
+            id: view_id.clone(),
             title: kit.template.title,
             expected_revision: request.expected_revision,
             time_range: kit.template.time_range,
@@ -1328,8 +1408,9 @@ pub async fn install_brain_view_template_kit(
             blocks: kit.template.blocks,
         },
     )
-    .map(Into::into)
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    prune_whiteboard_documents(&screenpipe_dir, &view_id, &active_whiteboard_ids)?;
+    Ok(saved.into())
 }
 
 #[tauri::command]
@@ -1338,9 +1419,18 @@ pub async fn save_brain_view(
     app: tauri::AppHandle,
     request: SaveBrainViewRequest,
 ) -> Result<BrainViewDefinition, String> {
-    save_live_view(&active_screenpipe_dir(&app)?, request.into())
-        .map(Into::into)
-        .map_err(|error| error.to_string())
+    let screenpipe_dir = active_screenpipe_dir(&app)?;
+    let view_id = request.id.clone();
+    let active_whiteboard_ids = request
+        .slots
+        .iter()
+        .filter(|slot| slot.component == BrainViewComponent::WhiteboardV1)
+        .map(|slot| slot.id.clone())
+        .collect::<HashSet<_>>();
+    let saved = save_live_view(&screenpipe_dir, request.into())
+        .map_err(|error| error.to_string())?;
+    prune_whiteboard_documents(&screenpipe_dir, &view_id, &active_whiteboard_ids)?;
+    Ok(saved.into())
 }
 
 #[tauri::command]
@@ -1679,6 +1769,30 @@ mod tests {
         assert_eq!(updated.notes[0].text, "Published by the Pipe");
         assert_eq!(updated.source.as_ref().unwrap().artifact_output_id, 42);
 
+        let older = apply_whiteboard_output(
+            dir.path(),
+            ApplyBrainViewWhiteboardOutputRequest {
+                view_id: "whiteboard-test".to_string(),
+                block_id: "strategy-map".to_string(),
+                expected_revision: Some(initial.revision),
+                payload: serde_json::json!({
+                    "schema": "live-view-whiteboard.v1",
+                    "viewport": { "x": 0.0, "y": 0.0, "zoom": 1.0 },
+                    "notes": [],
+                    "arrows": [],
+                    "strokes": []
+                }),
+                source: BrainViewWhiteboardSource {
+                    source_pipe: "daily-summary".to_string(),
+                    artifact_output_id: 42,
+                    artifact_version: 2,
+                    updated_at: "2026-08-02T18:55:00Z".to_string(),
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(older, updated);
+
         let stale = apply_whiteboard_output(
             dir.path(),
             ApplyBrainViewWhiteboardOutputRequest {
@@ -1719,5 +1833,23 @@ mod tests {
         delete_live_view(dir.path(), "whiteboard-test").unwrap();
         remove_whiteboard_documents(dir.path(), "whiteboard-test").unwrap();
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn removing_a_whiteboard_block_prunes_its_document() {
+        let dir = tempfile::tempdir().unwrap();
+        create_whiteboard_test_view(dir.path());
+        save_whiteboard_document(
+            dir.path(),
+            whiteboard_request("whiteboard-test", "strategy-map", None),
+        )
+        .unwrap();
+        let path = whiteboard_document_path(dir.path(), "whiteboard-test", "strategy-map");
+        assert!(path.exists());
+
+        prune_whiteboard_documents(dir.path(), "whiteboard-test", &HashSet::new()).unwrap();
+
+        assert!(!path.exists());
+        assert!(!whiteboard_view_directory(dir.path(), "whiteboard-test").exists());
     }
 }
