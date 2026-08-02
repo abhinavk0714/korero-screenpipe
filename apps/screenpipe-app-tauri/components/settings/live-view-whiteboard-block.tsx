@@ -4,6 +4,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Loader2 } from "lucide-react";
 import { LiveViewCanvas } from "@/components/settings/live-view-canvas";
 import { DEFAULT_CANVAS_VIEWPORT } from "@/lib/live-views/canvas-layout";
@@ -237,6 +238,27 @@ export function LiveViewWhiteboardBlock({
     [pumpSaves, viewId],
   );
 
+  useEffect(() => {
+    if (!active) return;
+    const exitFocusMode = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setActive(false);
+    };
+    window.addEventListener("keydown", exitFocusMode);
+    const focusFrame = requestAnimationFrame(() => {
+      globalThis.document
+        .querySelector<HTMLElement>(
+          "[data-testid='whiteboard-focus-editor'] [data-testid='live-view-canvas-surface']",
+        )
+        ?.focus();
+    });
+    return () => {
+      cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", exitFocusMode);
+    };
+  }, [active]);
+
   if (loading) {
     return (
       <div className="flex h-[360px] min-h-[320px] items-center justify-center border border-border font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -254,9 +276,8 @@ export function LiveViewWhiteboardBlock({
         refreshingSlotIds={new Set()}
         aiEditingSlotId={null}
         embedded
-        active={active}
+        active={false}
         onActivate={() => setActive(true)}
-        onExit={() => setActive(false)}
         onChange={changeDocument}
         onFeedback={async () => false}
         onRegenerate={() => {}}
@@ -264,6 +285,38 @@ export function LiveViewWhiteboardBlock({
         onItemAction={async () => false}
         onItemHandoff={() => {}}
       />
+      {active &&
+        createPortal(
+          <div
+            data-testid="whiteboard-focus-editor"
+            role="dialog"
+            aria-label="Whiteboard focus editor"
+            aria-modal="true"
+            className="fixed inset-0 z-[100] bg-background p-3"
+            onPointerDown={(event) => event.stopPropagation()}
+            onWheel={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <LiveViewCanvas
+              document={asCanvasDocument(document)}
+              slots={[]}
+              timeRange="today"
+              refreshingSlotIds={new Set()}
+              aiEditingSlotId={null}
+              embedded
+              active
+              focusMode
+              onExit={() => setActive(false)}
+              onChange={changeDocument}
+              onFeedback={async () => false}
+              onRegenerate={() => {}}
+              onAiEdit={async () => false}
+              onItemAction={async () => false}
+              onItemHandoff={() => {}}
+            />
+          </div>,
+          globalThis.document.body,
+        )}
       {(saving || importing) && (
         <span className="sr-only" role="status">
           {importing ? "applying Pipe whiteboard JSON" : "saving whiteboard"}

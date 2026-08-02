@@ -111,8 +111,8 @@ function CanvasHarness({
   );
 }
 
-function EmbeddedCanvasHarness() {
-  const [active, setActive] = useState(false);
+function EmbeddedCanvasHarness({ focusMode = false }: { focusMode?: boolean }) {
+  const [active, setActive] = useState(focusMode);
   const [document, setDocument] = useState<BrainViewCanvasDocument>({
     ...createCanvasDocument({ ...view, slots: [] }),
     mode: "canvas",
@@ -126,6 +126,7 @@ function EmbeddedCanvasHarness() {
       aiEditingSlotId={null}
       embedded
       active={active}
+      focusMode={focusMode}
       onActivate={() => setActive(true)}
       onExit={() => setActive(false)}
       onChange={(next) => setDocument(next)}
@@ -192,6 +193,14 @@ describe("LiveViewCanvas", () => {
     fireEvent.click(screen.getByTestId("whiteboard-exit"));
     expect(canvas).toHaveAttribute("data-active", "false");
     expect(screen.queryByTestId("canvas-tool-note")).toBeNull();
+  });
+
+  it("fills the focused editor instead of inheriting the inline Block height", () => {
+    render(<EmbeddedCanvasHarness focusMode />);
+
+    const canvas = screen.getByTestId("live-view-canvas");
+    expect(canvas).toHaveClass("h-full", "min-h-0");
+    expect(canvas).not.toHaveClass("h-[360px]", "min-h-[320px]");
   });
 
   it("keeps the source-backed Live View cards interactive inside the canvas", () => {

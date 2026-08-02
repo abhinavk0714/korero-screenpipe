@@ -4,7 +4,7 @@
 
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { LiveViewWhiteboardBlock } from "../live-view-whiteboard-block";
 import type {
   BrainViewValue,
@@ -26,8 +26,30 @@ vi.mock("@/lib/utils/tauri", () => ({
 }));
 
 vi.mock("@/components/settings/live-view-canvas", () => ({
-  LiveViewCanvas: ({ document }: { document: unknown }) => (
-    <pre data-testid="whiteboard-document">{JSON.stringify(document)}</pre>
+  LiveViewCanvas: ({
+    document,
+    active,
+    focusMode,
+    onActivate,
+  }: {
+    document: unknown;
+    active?: boolean;
+    focusMode?: boolean;
+    onActivate?: () => void;
+  }) => (
+    <div
+      data-testid={
+        focusMode ? "focused-whiteboard-canvas" : "whiteboard-preview"
+      }
+      data-active={String(Boolean(active))}
+    >
+      <pre data-testid="whiteboard-document">{JSON.stringify(document)}</pre>
+      {onActivate && (
+        <button type="button" onClick={onActivate}>
+          activate whiteboard
+        </button>
+      )}
+    </div>
   ),
 }));
 
@@ -91,6 +113,27 @@ beforeEach(() => {
 });
 
 describe("LiveViewWhiteboardBlock", () => {
+  it("enters a focused editor and returns to the parent with Escape", async () => {
+    render(<LiveViewWhiteboardBlock viewId="daily" blockId="decision-map" />);
+
+    await screen.findByTestId("whiteboard-preview");
+    fireEvent.click(
+      screen.getByRole("button", { name: "activate whiteboard" }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "Whiteboard focus editor" }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("focused-whiteboard-canvas")).toHaveAttribute(
+      "data-active",
+      "true",
+    );
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByTestId("whiteboard-focus-editor")).toBeNull(),
+    );
+  });
+
   it("applies each complete Pipe JSON artifact once", async () => {
     const view = render(
       <LiveViewWhiteboardBlock

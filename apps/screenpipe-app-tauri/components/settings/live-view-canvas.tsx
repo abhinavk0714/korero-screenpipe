@@ -394,6 +394,7 @@ export function LiveViewCanvas({
   onItemHandoff,
   embedded = false,
   active = true,
+  focusMode = false,
   onActivate,
   onExit,
 }: {
@@ -417,6 +418,7 @@ export function LiveViewCanvas({
   onItemHandoff: (slot: BrainViewSlot, item: LiveViewListItem) => void;
   embedded?: boolean;
   active?: boolean;
+  focusMode?: boolean;
   onActivate?: () => void;
   onExit?: () => void;
 }) {
@@ -1181,7 +1183,9 @@ export function LiveViewCanvas({
       data-active={embedded ? String(active) : undefined}
       className={`relative w-full overflow-hidden border bg-background ${
         embedded
-          ? `nodrag nowheel nopan h-[360px] min-h-[320px] ${
+          ? `nodrag nowheel nopan ${
+              focusMode ? "h-full min-h-0" : "h-[360px] min-h-[320px]"
+            } ${
               active
                 ? "border-foreground outline outline-2 outline-foreground outline-offset-2"
                 : "border-border"

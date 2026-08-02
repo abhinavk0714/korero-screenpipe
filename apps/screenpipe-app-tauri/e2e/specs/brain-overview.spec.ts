@@ -853,18 +853,31 @@ Refresh the assigned Live View output targets from source-backed activity.
       if (!target) throw new Error("whiteboard activation surface is missing");
       target.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     });
-    await waitForTestId("whiteboard-exit", 10_000);
-    expect(await $("[data-testid='canvas-tool-note']").isExisting()).toBe(true);
-    expect(await $("[data-testid='canvas-note-problem']").getText()).toContain(
-      "Where does the handoff break?",
+    const focusedWhiteboard = await waitForTestId(
+      "whiteboard-focus-editor",
+      10_000,
     );
-    await $("[data-testid='canvas-fit']").click();
+    expect(
+      await focusedWhiteboard
+        .$("[data-testid='canvas-tool-note']")
+        .isExisting(),
+    ).toBe(true);
+    expect(
+      await focusedWhiteboard
+        .$("[data-testid='canvas-note-problem']")
+        .getText(),
+    ).toContain("Where does the handoff break?");
+    await focusedWhiteboard.$("[data-testid='canvas-fit']").click();
     await browser.pause(250);
 
-    const whiteboardNoteTool = await $("[data-testid='canvas-tool-note']");
+    const whiteboardNoteTool = await focusedWhiteboard.$(
+      "[data-testid='canvas-tool-note']",
+    );
     await whiteboardNoteTool.click();
     await clickEmptyCanvasSpace();
-    const noteInputs = await $$("textarea[aria-label='Canvas note']");
+    const noteInputs = await focusedWhiteboard.$$(
+      "textarea[aria-label='Canvas note']",
+    );
     let experimentNote: WebdriverIO.Element | undefined;
     for (const noteInput of noteInputs) {
       if ((await noteInput.getValue()) === "") {
@@ -875,7 +888,7 @@ Refresh the assigned Live View output targets from source-backed activity.
     expect(experimentNote).toBeDefined();
     await experimentNote!.setValue("Next experiment\nAutomate one handoff");
     expect(await experimentNote!.getValue()).toContain("Automate one handoff");
-    await $("[data-testid='canvas-fit']").click();
+    await focusedWhiteboard.$("[data-testid='canvas-fit']").click();
     await browser.waitUntil(
       async () => {
         const saved = await invokeOrThrow<WhiteboardDocument | null>(
@@ -894,15 +907,18 @@ Refresh the assigned Live View output targets from source-backed activity.
         timeoutMsg: "the embedded whiteboard edit was not durably saved",
       },
     );
-    await $("[data-testid='canvas-fit']").click();
+    await focusedWhiteboard.$("[data-testid='canvas-fit']").click();
     await browser.pause(250);
     const whiteboardScreenshot = await saveScreenshot(
       "brain-overview-whiteboard-editing",
     );
     expect(existsSync(whiteboardScreenshot)).toBe(true);
-    await $("[data-testid='whiteboard-exit']").click();
-    expect(await $("[data-testid='canvas-tool-note']").isExisting()).toBe(
-      false,
+    await focusedWhiteboard.$("[data-testid='whiteboard-exit']").click();
+    expect(
+      await $("[data-testid='whiteboard-focus-editor']").isExisting(),
+    ).toBe(false);
+    expect(await $("[data-testid='whiteboard-activate']").isExisting()).toBe(
+      true,
     );
 
     const timeRange = await waitForTestId("overview-time-range", 10_000);
