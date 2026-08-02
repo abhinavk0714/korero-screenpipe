@@ -602,8 +602,15 @@ Refresh the assigned Live View output targets from source-backed activity.
         const content = document.querySelector<HTMLElement>(
           "[data-testid='brain-content']",
         );
-        if (!section || !content) return null;
+        const overview = document.querySelector<HTMLElement>(
+          "[data-testid='brain-overview-scroll']",
+        );
+        const canvas = document.querySelector<HTMLElement>(
+          "[data-testid='live-view-canvas']",
+        );
+        if (!section || !content || !overview || !canvas) return null;
         const sectionRect = section.getBoundingClientRect();
+        const canvasRect = canvas.getBoundingClientRect();
         const firstContentTop =
           content.firstElementChild?.getBoundingClientRect().top ?? 0;
         const visibleControls = Array.from(
@@ -624,8 +631,14 @@ Refresh the assigned Live View output targets from source-backed activity.
         return {
           viewportWidth: document.documentElement.clientWidth,
           documentWidth: document.documentElement.scrollWidth,
+          viewportHeight: document.documentElement.clientHeight,
+          documentHeight: document.documentElement.scrollHeight,
           sectionLeft: sectionRect.left,
           sectionRight: sectionRect.right,
+          sectionBottom: sectionRect.bottom,
+          canvasBottom: canvasRect.bottom,
+          canvasHeight: canvasRect.height,
+          overviewOverflowY: getComputedStyle(overview).overflowY,
           firstContentTop,
           clippedControls: visibleControls
             .filter((element) => {
@@ -653,8 +666,14 @@ Refresh the assigned Live View output targets from source-backed activity.
       })) as {
         viewportWidth: number;
         documentWidth: number;
+        viewportHeight: number;
+        documentHeight: number;
         sectionLeft: number;
         sectionRight: number;
+        sectionBottom: number;
+        canvasBottom: number;
+        canvasHeight: number;
+        overviewOverflowY: string;
         firstContentTop: number;
         clippedControls: Array<{
           label: string;
@@ -673,6 +692,14 @@ Refresh the assigned Live View output targets from source-backed activity.
       expect(layout!.documentWidth).toBeLessThanOrEqual(
         layout!.viewportWidth + 1,
       );
+      expect(layout!.documentHeight).toBeLessThanOrEqual(
+        layout!.viewportHeight + 1,
+      );
+      expect(layout!.overviewOverflowY).toBe("hidden");
+      expect(layout!.canvasBottom).toBeLessThanOrEqual(
+        layout!.sectionBottom + 1,
+      );
+      expect(layout!.canvasHeight).toBeGreaterThan(200);
       expect(layout!.clippedControls).toEqual([]);
       if (size.label === "minimum") {
         await saveScreenshot("brain-overview-minimum-window");
@@ -905,7 +932,6 @@ Refresh the assigned Live View output targets from source-backed activity.
 
     for (const size of [SUPPORTED_WINDOW_SIZES[0], SUPPORTED_WINDOW_SIZES[5]]) {
       await setCssWindowSize(size.width, size.height);
-      await canvas.scrollIntoView();
       await browser.pause(150);
       const canvasLayout = (await browser.execute(() => {
         const canvasElement = document.querySelector<HTMLElement>(

@@ -873,8 +873,11 @@ describe("BrainOverview", () => {
     );
     expect(screen.getByTestId("overview-refresh-data").textContent).toBe("");
     expect(screen.queryByTestId("overview-edit")).toBeNull();
-    expect(screen.getByTestId("brain-overview-scroll").className).toContain(
-      "pb-24",
+    const overviewShell = screen.getByTestId("brain-overview-scroll");
+    expect(overviewShell.className).toContain("overflow-hidden");
+    expect(overviewShell.className).not.toContain("overflow-y-auto");
+    expect(screen.getByTestId("live-view-canvas").className).toContain(
+      "flex-1",
     );
     expect(
       screen.getByTestId("overview-floating-composer").className,

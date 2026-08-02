@@ -2571,14 +2571,14 @@ export function BrainOverview({
   );
   const onboardingColdStart = showOnboardingActivation && !onboardingHasResult;
   return (
-    <div className="relative min-h-0 flex-1 overflow-hidden">
+    <div className="relative flex min-h-0 flex-1 overflow-hidden">
       <div
         data-testid="brain-overview-scroll"
-        className="h-full overflow-y-auto pb-24 pr-2 [scrollbar-gutter:stable]"
+        className="flex h-full min-h-0 w-full flex-col overflow-hidden pr-2"
       >
         <div
           data-onboarding-guide-target="dashboard"
-          className="mb-3 flex flex-col gap-2 border-b border-border pb-2 lg:flex-row lg:items-center lg:justify-between"
+          className="mb-3 flex shrink-0 flex-col gap-2 border-b border-border pb-2 lg:flex-row lg:items-center lg:justify-between"
         >
           <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
           <LiveViewDashboardSwitcher
@@ -2685,7 +2685,7 @@ export function BrainOverview({
         </p>
       )}
       {templateGalleryOpen && !onboardingColdStart && (
-        <div className="relative mb-5 border border-border p-4 pr-12">
+        <div className="relative mb-5 max-h-[min(50vh,32rem)] shrink-0 overflow-y-auto border border-border p-4 pr-12">
           <Button
             aria-label="close templates"
             variant="ghost"
@@ -2766,7 +2766,7 @@ export function BrainOverview({
       !onboardingHasResult ? null : slots.length === 0 ? (
         <button
           type="button"
-          className="flex min-h-48 w-full items-center justify-center border border-dashed border-border text-xs text-muted-foreground hover:text-foreground"
+          className="flex min-h-0 w-full flex-1 items-center justify-center border border-dashed border-border text-xs text-muted-foreground hover:text-foreground"
           onClick={beginEdit}
         >
           add your first Block
@@ -2790,7 +2790,7 @@ export function BrainOverview({
       ) : canvasLoading ? (
         <div
           data-testid="live-view-canvas-loading"
-          className="flex min-h-[480px] items-center justify-center border border-border font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
+          className="flex min-h-0 flex-1 items-center justify-center border border-border font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
         >
           loading process map
         </div>

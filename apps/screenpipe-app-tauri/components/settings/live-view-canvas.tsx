@@ -1095,7 +1095,7 @@ export function LiveViewCanvas({
   return (
     <section
       data-testid="live-view-canvas"
-      className="relative h-[calc(100vh-11.5rem)] min-h-[480px] w-full overflow-hidden border border-border bg-background"
+      className="relative min-h-0 w-full flex-1 overflow-hidden border border-border bg-background"
       aria-label="Live View process canvas"
     >
       <div
