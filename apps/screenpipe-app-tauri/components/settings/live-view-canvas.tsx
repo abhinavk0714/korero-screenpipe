@@ -72,6 +72,10 @@ import type {
 type CanvasTool = "select" | "pan" | "note" | "arrow" | "draw";
 type ChangeOptions = { persist: boolean };
 
+const MAX_CANVAS_NOTES = 64;
+const MAX_CANVAS_ARROWS = 128;
+const MAX_CANVAS_STROKES = 64;
+
 type CanvasNodeActions = {
   tool: CanvasTool;
   selected: boolean;
@@ -533,6 +537,7 @@ export function LiveViewCanvas({
         setArrowSource(null);
         return;
       }
+      if (current.arrows.length >= MAX_CANVAS_ARROWS) return;
       const used = new Set(current.arrows.map((arrow) => arrow.id));
       const id = uniqueCanvasId("arrow", used);
       applyDocument(
@@ -798,6 +803,7 @@ export function LiveViewCanvas({
   const addNote = useCallback(
     (point: BrainViewCanvasPoint) => {
       const current = latestDocumentRef.current;
+      if (current.notes.length >= MAX_CANVAS_NOTES) return;
       const used = new Set(current.notes.map((note) => note.id));
       const id = uniqueCanvasId("note", used);
       applyDocument(
@@ -845,6 +851,7 @@ export function LiveViewCanvas({
       event.preventDefault();
       event.stopPropagation();
       const current = latestDocumentRef.current;
+      if (current.strokes.length >= MAX_CANVAS_STROKES) return;
       const used = new Set(current.strokes.map((stroke) => stroke.id));
       const stroke = {
         id: uniqueCanvasId("stroke", used),
@@ -888,11 +895,13 @@ export function LiveViewCanvas({
       event.stopPropagation();
       if (session.stroke.points.length >= 2) {
         const current = latestDocumentRef.current;
-        applyDocument(
-          { ...current, strokes: [...current.strokes, session.stroke] },
-          true,
-        );
-        setCanvasSelection([`stroke:${session.stroke.id}`]);
+        if (current.strokes.length < MAX_CANVAS_STROKES) {
+          applyDocument(
+            { ...current, strokes: [...current.strokes, session.stroke] },
+            true,
+          );
+          setCanvasSelection([`stroke:${session.stroke.id}`]);
+        }
       }
       setDraftStroke(null);
       if (surfaceRef.current?.hasPointerCapture?.(event.pointerId)) {

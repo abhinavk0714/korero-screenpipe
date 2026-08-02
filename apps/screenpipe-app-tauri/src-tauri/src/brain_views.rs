@@ -137,7 +137,28 @@ pub struct BrainViewWhiteboardDocument {
     pub notes: Vec<BrainViewCanvasNote>,
     pub arrows: Vec<BrainViewCanvasArrow>,
     pub strokes: Vec<BrainViewCanvasStroke>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<BrainViewWhiteboardSource>,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainViewWhiteboardSource {
+    pub source_pipe: String,
+    pub artifact_output_id: i64,
+    pub artifact_version: i64,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BrainViewWhiteboardPayload {
+    pub schema: String,
+    pub viewport: BrainViewCanvasViewport,
+    pub notes: Vec<BrainViewCanvasNote>,
+    pub arrows: Vec<BrainViewCanvasArrow>,
+    pub strokes: Vec<BrainViewCanvasStroke>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
@@ -150,6 +171,18 @@ pub struct SaveBrainViewWhiteboardRequest {
     pub notes: Vec<BrainViewCanvasNote>,
     pub arrows: Vec<BrainViewCanvasArrow>,
     pub strokes: Vec<BrainViewCanvasStroke>,
+    #[serde(default)]
+    pub source: Option<BrainViewWhiteboardSource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyBrainViewWhiteboardOutputRequest {
+    pub view_id: String,
+    pub block_id: String,
+    pub expected_revision: Option<u64>,
+    pub payload: Value,
+    pub source: BrainViewWhiteboardSource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
@@ -827,6 +860,18 @@ fn validate_whiteboard_request(request: &SaveBrainViewWhiteboardRequest) -> Resu
             "a whiteboard may contain at most {MAX_CANVAS_STROKES} strokes"
         ));
     }
+    if let Some(source) = &request.source {
+        let pipe_name_length = source.source_pipe.trim().chars().count();
+        if pipe_name_length == 0 || pipe_name_length > 120 {
+            return Err("whiteboard source Pipe name must be between 1 and 120 characters".to_string());
+        }
+        if source.artifact_output_id < 1 || source.artifact_version < 1 {
+            return Err("whiteboard source artifact ids must be greater than zero".to_string());
+        }
+        if source.updated_at.trim().is_empty() || source.updated_at.chars().count() > 128 {
+            return Err("whiteboard source timestamp must be between 1 and 128 characters".to_string());
+        }
+    }
 
     let mut note_ids = HashSet::new();
     for note in &request.notes {
@@ -908,6 +953,7 @@ fn validate_whiteboard_document(document: &BrainViewWhiteboardDocument) -> Resul
         notes: document.notes.clone(),
         arrows: document.arrows.clone(),
         strokes: document.strokes.clone(),
+        source: document.source.clone(),
     })
 }
 
@@ -1011,6 +1057,33 @@ fn save_canvas_document(
     Ok(document)
 }
 
+fn apply_whiteboard_output(
+    screenpipe_dir: &Path,
+    request: ApplyBrainViewWhiteboardOutputRequest,
+) -> Result<BrainViewWhiteboardDocument, String> {
+    let payload: BrainViewWhiteboardPayload = serde_json::from_value(request.payload)
+        .map_err(|error| format!("Pipe output is not a valid whiteboard document: {error}"))?;
+    if payload.schema != BRAIN_VIEW_WHITEBOARD_SCHEMA {
+        return Err(format!(
+            "unsupported whiteboard schema '{}'; expected '{BRAIN_VIEW_WHITEBOARD_SCHEMA}'",
+            payload.schema
+        ));
+    }
+    save_whiteboard_document(
+        screenpipe_dir,
+        SaveBrainViewWhiteboardRequest {
+            view_id: request.view_id,
+            block_id: request.block_id,
+            expected_revision: request.expected_revision,
+            viewport: payload.viewport,
+            notes: payload.notes,
+            arrows: payload.arrows,
+            strokes: payload.strokes,
+            source: Some(request.source),
+        },
+    )
+}
+
 fn require_whiteboard_block(
     screenpipe_dir: &Path,
     view_id: &str,
@@ -1092,6 +1165,7 @@ fn save_whiteboard_document(
         notes: request.notes,
         arrows: request.arrows,
         strokes: request.strokes,
+        source: request.source,
         updated_at: chrono::Utc::now().to_rfc3339(),
     };
     let path = whiteboard_document_path(screenpipe_dir, &document.view_id, &document.block_id);
@@ -1202,6 +1276,15 @@ pub async fn save_brain_view_whiteboard(
     request: SaveBrainViewWhiteboardRequest,
 ) -> Result<BrainViewWhiteboardDocument, String> {
     save_whiteboard_document(&active_screenpipe_dir(&app)?, request)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn apply_brain_view_whiteboard_output(
+    app: tauri::AppHandle,
+    request: ApplyBrainViewWhiteboardOutputRequest,
+) -> Result<BrainViewWhiteboardDocument, String> {
+    apply_whiteboard_output(&active_screenpipe_dir(&app)?, request)
 }
 
 #[tauri::command]
@@ -1382,6 +1465,7 @@ mod tests {
                     BrainViewCanvasPoint { x: 280.0, y: 240.0 },
                 ],
             }],
+            source: None,
         }
     }
 
@@ -1549,6 +1633,75 @@ mod tests {
         dangling.arrows[0].to_id = "note:missing".to_string();
         let error = save_whiteboard_document(dir.path(), dangling).unwrap_err();
         assert!(error.contains("invalid endpoint"));
+    }
+
+    #[test]
+    fn pipe_output_replaces_whiteboard_json_once_with_source_provenance() {
+        let dir = tempfile::tempdir().unwrap();
+        create_whiteboard_test_view(dir.path());
+        let initial = save_whiteboard_document(
+            dir.path(),
+            whiteboard_request("whiteboard-test", "strategy-map", None),
+        )
+        .unwrap();
+        let payload = serde_json::json!({
+            "schema": "live-view-whiteboard.v1",
+            "viewport": { "x": 12.0, "y": 18.0, "zoom": 1.25 },
+            "notes": [{
+                "id": "generated",
+                "text": "Published by the Pipe",
+                "x": 96.0,
+                "y": 112.0,
+                "width": 280.0,
+                "height": 160.0
+            }],
+            "arrows": [],
+            "strokes": []
+        });
+        let updated = apply_whiteboard_output(
+            dir.path(),
+            ApplyBrainViewWhiteboardOutputRequest {
+                view_id: "whiteboard-test".to_string(),
+                block_id: "strategy-map".to_string(),
+                expected_revision: Some(initial.revision),
+                payload,
+                source: BrainViewWhiteboardSource {
+                    source_pipe: "daily-summary".to_string(),
+                    artifact_output_id: 42,
+                    artifact_version: 3,
+                    updated_at: "2026-08-02T19:00:00Z".to_string(),
+                },
+            },
+        )
+        .unwrap();
+
+        assert_eq!(updated.revision, initial.revision + 1);
+        assert_eq!(updated.notes[0].text, "Published by the Pipe");
+        assert_eq!(updated.source.as_ref().unwrap().artifact_output_id, 42);
+
+        let stale = apply_whiteboard_output(
+            dir.path(),
+            ApplyBrainViewWhiteboardOutputRequest {
+                view_id: "whiteboard-test".to_string(),
+                block_id: "strategy-map".to_string(),
+                expected_revision: Some(initial.revision),
+                payload: serde_json::json!({
+                    "schema": "live-view-whiteboard.v1",
+                    "viewport": { "x": 0.0, "y": 0.0, "zoom": 1.0 },
+                    "notes": [],
+                    "arrows": [],
+                    "strokes": []
+                }),
+                source: BrainViewWhiteboardSource {
+                    source_pipe: "daily-summary".to_string(),
+                    artifact_output_id: 43,
+                    artifact_version: 4,
+                    updated_at: "2026-08-02T19:05:00Z".to_string(),
+                },
+            },
+        )
+        .unwrap_err();
+        assert!(stale.contains("whiteboard revision changed"));
     }
 
     #[test]

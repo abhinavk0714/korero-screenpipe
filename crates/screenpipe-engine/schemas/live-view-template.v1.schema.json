@@ -84,15 +84,6 @@
     "block": {
       "type": "object",
       "additionalProperties": false,
-      "allOf": [
-        {
-          "if": {
-            "properties": { "kind": { "const": "whiteboard.v1" } },
-            "required": ["kind"]
-          },
-          "then": { "not": { "required": ["source"] } }
-        }
-      ],
       "required": ["id", "title", "kind", "width", "order"],
       "properties": {
         "id": {

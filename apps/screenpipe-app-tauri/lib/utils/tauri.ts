@@ -15,6 +15,14 @@ export const commands = {
 async activateAppAfterOauth() : Promise<void> {
     await TAURI_INVOKE("activate_app_after_oauth");
 },
+async applyBrainViewWhiteboardOutput(request: ApplyBrainViewWhiteboardOutputRequest) : Promise<Result<BrainViewWhiteboardDocument, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("apply_brain_view_whiteboard_output", { request }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Reconcile the live app + the next-boot config with the current enterprise
  * hidden-UI policy. The frontend calls this right after pushing a freshly
@@ -2795,6 +2803,7 @@ args?: string[];
  */
 env?: { [key in string]: string } }
 export type AecMode = "off" | "screenpipe" | "macos" | "windows"
+export type ApplyBrainViewWhiteboardOutputRequest = { viewId: string; blockId: string; expectedRevision: number | null; payload: JsonValue; source: BrainViewWhiteboardSource }
 export type AudioDeviceInfo = { name: string; isDefault: boolean;
 /**
  * True for a Bluetooth *input* device that is also a combo headset (the
@@ -2860,7 +2869,8 @@ export type BrainViewTemplateKit = { id: string; title: string; description: str
 export type BrainViewTemplatePipe = { name: string; distribution: string }
 export type BrainViewTimeRange = "today" | "24h" | "7d" | "30d"
 export type BrainViewValue = { payload: JsonValue; evidence: BrainViewEvidenceRef[]; sourcePipe: string; artifactOutputId: number; artifactVersion: number; updatedAt: string }
-export type BrainViewWhiteboardDocument = { schema: string; viewId: string; blockId: string; revision: number; viewport: BrainViewCanvasViewport; notes: BrainViewCanvasNote[]; arrows: BrainViewCanvasArrow[]; strokes: BrainViewCanvasStroke[]; updatedAt: string }
+export type BrainViewWhiteboardDocument = { schema: string; viewId: string; blockId: string; revision: number; viewport: BrainViewCanvasViewport; notes: BrainViewCanvasNote[]; arrows: BrainViewCanvasArrow[]; strokes: BrainViewCanvasStroke[]; source?: BrainViewWhiteboardSource | null; updatedAt: string }
+export type BrainViewWhiteboardSource = { sourcePipe: string; artifactOutputId: number; artifactVersion: number; updatedAt: string }
 /**
  * Per-browser automation status: "granted", "denied", or "not_asked".
  * Also includes whether the browser is currently running.
@@ -3149,7 +3159,7 @@ export type RemoteSyncConfig = { host: string; port: number; user: string; key_p
 export type RemoteSyncResult = { ok: boolean; files_transferred: number; bytes_transferred: number; error: string | null }
 export type SaveBrainViewCanvasRequest = { viewId: string; expectedRevision: number | null; mode: BrainViewDisplayMode; viewport: BrainViewCanvasViewport; blocks: BrainViewCanvasBlock[]; notes: BrainViewCanvasNote[]; arrows: BrainViewCanvasArrow[]; strokes: BrainViewCanvasStroke[] }
 export type SaveBrainViewRequest = { id: string; title: string; expectedRevision: number | null; timeRange: BrainViewTimeRange; periodPolicy: BrainViewPeriodPolicy; slots: BrainViewSlotInput[] }
-export type SaveBrainViewWhiteboardRequest = { viewId: string; blockId: string; expectedRevision: number | null; viewport: BrainViewCanvasViewport; notes: BrainViewCanvasNote[]; arrows: BrainViewCanvasArrow[]; strokes: BrainViewCanvasStroke[] }
+export type SaveBrainViewWhiteboardRequest = { viewId: string; blockId: string; expectedRevision: number | null; viewport: BrainViewCanvasViewport; notes: BrainViewCanvasNote[]; arrows: BrainViewCanvasArrow[]; strokes: BrainViewCanvasStroke[]; source?: BrainViewWhiteboardSource | null }
 /**
  * A single schedule rule: a day-of-week + time range + what to record.
  */

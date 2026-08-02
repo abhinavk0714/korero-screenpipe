@@ -370,10 +370,6 @@ export function LiveViewLayoutEditor({
                       ...slot,
                       component,
                       width: component === "whiteboard.v1" ? 12 : slot.width,
-                      intent:
-                        component === "whiteboard.v1" ? null : slot.intent,
-                      binding:
-                        component === "whiteboard.v1" ? null : slot.binding,
                       value: null,
                     };
                   })
@@ -386,8 +382,7 @@ export function LiveViewLayoutEditor({
                 ))}
               </select>
             </label>
-            {selectedSlot.component !== "whiteboard.v1" && (
-              <label className="space-y-1">
+            <label className="space-y-1">
                 <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
                   Connected Pipe
                 </span>
@@ -412,8 +407,7 @@ export function LiveViewLayoutEditor({
                     </option>
                   ))}
                 </select>
-              </label>
-            )}
+            </label>
             <label className="space-y-1">
               <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
                 Width
@@ -434,8 +428,7 @@ export function LiveViewLayoutEditor({
                 <option value={12}>Full</option>
               </select>
             </label>
-            {selectedSlot.component !== "whiteboard.v1" && (
-              <label className="space-y-1 md:col-span-2 xl:col-span-4">
+            <label className="space-y-1 md:col-span-2 xl:col-span-4">
                 <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
                   What this Block should show
                 </span>
@@ -454,8 +447,7 @@ export function LiveViewLayoutEditor({
                     }))
                   }
                 />
-              </label>
-            )}
+            </label>
           </div>
           <p className="mt-2 text-[10px] text-muted-foreground">
             {
@@ -465,7 +457,7 @@ export function LiveViewLayoutEditor({
             }
             .{" "}
             {selectedSlot.component === "whiteboard.v1"
-              ? "This document stays local and is edited directly inside the Block."
+              ? "Connect a Pipe to publish a complete live-view-whiteboard.v1 JSON document, or leave it unbound. Each new artifact is imported once and remains directly editable."
               : "The title is display copy. The instruction above is the data contract the connected Pipe receives on its next run."}
           </p>
         </section>

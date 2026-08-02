@@ -110,6 +110,7 @@ function LiveViewCardBody({
         key={`${viewId ?? "preview"}:${slot.id}`}
         viewId={viewId}
         blockId={slot.id}
+        value={slot.value}
       />
     );
   }
@@ -427,9 +428,7 @@ export function LiveViewCard({
   const [feedbackSaving, setFeedbackSaving] = useState<
     "up" | "down" | "clear" | null
   >(null);
-  const hasActions =
-    slot.component !== "whiteboard.v1" &&
-    Boolean(onFeedback || onRegenerate || onAiEdit);
+  const hasActions = Boolean(onFeedback || onRegenerate || onAiEdit);
   const busy = refreshing || aiEditing || feedbackSaving !== null;
 
   const submitAiEdit = async (event: React.FormEvent) => {
@@ -468,7 +467,9 @@ export function LiveViewCard({
           <p className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
             {COMPONENT_LABELS[slot.component]} ·{" "}
             {slot.component === "whiteboard.v1"
-              ? "local document"
+              ? slot.binding
+                ? "editable document · Pipe JSON"
+                : "local document"
               : getLiveViewTimeRangeOption(timeRange).label}
           </p>
         </div>
@@ -673,7 +674,9 @@ export function LiveViewCard({
       <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-2 text-[10px] text-muted-foreground">
         <span className="truncate">
           {slot.component === "whiteboard.v1"
-            ? "Stored locally"
+            ? slot.binding
+              ? `Pipe: ${slot.binding.pipeName} · editable locally`
+              : "Stored locally"
             : slot.binding
               ? `Pipe: ${slot.binding.pipeName}`
               : "No Pipe connected"}

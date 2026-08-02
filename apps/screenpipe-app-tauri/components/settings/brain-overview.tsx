@@ -262,12 +262,11 @@ function serializedSlots(slots: ViewSlot[]): BrainViewSlotInput[] {
   return normalizedSlots(slots).map((slot) => ({
     id: slot.id,
     title: slot.title.trim(),
-    intent:
-      slot.component === "whiteboard.v1" ? null : slot.intent?.trim() || null,
+    intent: slot.intent?.trim() || null,
     component: slot.component,
     width: slot.width,
     order: slot.order,
-    binding: slot.component === "whiteboard.v1" ? null : slot.binding,
+    binding: slot.binding,
   }));
 }
 

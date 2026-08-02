@@ -10,6 +10,7 @@ import { DEFAULT_CANVAS_VIEWPORT } from "@/lib/live-views/canvas-layout";
 import {
   commands,
   type BrainViewCanvasDocument,
+  type BrainViewValue,
   type BrainViewWhiteboardDocument,
 } from "@/lib/utils/tauri";
 
@@ -26,6 +27,7 @@ function createWhiteboardDocument(
     notes: [],
     arrows: [],
     strokes: [],
+    source: null,
     updatedAt: "",
   };
 }
@@ -50,9 +52,11 @@ function asCanvasDocument(
 export function LiveViewWhiteboardBlock({
   viewId,
   blockId,
+  value,
 }: {
   viewId?: string;
   blockId: string;
+  value?: BrainViewValue | null;
 }) {
   const resolvedViewId = viewId ?? "whiteboard-preview";
   const [document, setDocument] = useState<BrainViewWhiteboardDocument>(() =>
@@ -60,12 +64,14 @@ export function LiveViewWhiteboardBlock({
   );
   const [loading, setLoading] = useState(Boolean(viewId));
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState(false);
   const latestRef = useRef(document);
   const serverRevisionRef = useRef<number | null>(null);
   const pendingRef = useRef<BrainViewWhiteboardDocument | null>(null);
   const savePumpRef = useRef<Promise<void> | null>(null);
+  const importAttemptRef = useRef<string | null>(null);
 
   useEffect(() => {
     latestRef.current = document;
@@ -76,6 +82,7 @@ export function LiveViewWhiteboardBlock({
     setError(null);
     pendingRef.current = null;
     serverRevisionRef.current = null;
+    importAttemptRef.current = null;
     if (!viewId) {
       const preview = createWhiteboardDocument(resolvedViewId, blockId);
       latestRef.current = preview;
@@ -107,6 +114,54 @@ export function LiveViewWhiteboardBlock({
     };
   }, [blockId, resolvedViewId, viewId]);
 
+  const incomingSourceKey = value
+    ? `${value.sourcePipe}:${value.artifactOutputId}:${value.artifactVersion}`
+    : null;
+  const appliedSourceKey = document.source
+    ? `${document.source.sourcePipe}:${document.source.artifactOutputId}:${document.source.artifactVersion}`
+    : null;
+
+  useEffect(() => {
+    if (
+      !viewId ||
+      loading ||
+      !value ||
+      !incomingSourceKey ||
+      incomingSourceKey === appliedSourceKey ||
+      importAttemptRef.current === incomingSourceKey
+    ) {
+      return;
+    }
+    importAttemptRef.current = incomingSourceKey;
+    setImporting(true);
+    void commands
+      .applyBrainViewWhiteboardOutput({
+        viewId,
+        blockId,
+        expectedRevision: serverRevisionRef.current,
+        payload: value.payload,
+        source: {
+          sourcePipe: value.sourcePipe,
+          artifactOutputId: value.artifactOutputId,
+          artifactVersion: value.artifactVersion,
+          updatedAt: value.updatedAt,
+        },
+      })
+      .then((result) => {
+        if (result.status === "error") {
+          setError(
+            `Pipe JSON was not applied because the whiteboard changed: ${result.error}`,
+          );
+          return;
+        }
+        serverRevisionRef.current = result.data.revision;
+        latestRef.current = result.data;
+        setDocument(result.data);
+        setError(null);
+      })
+      .finally(() => setImporting(false));
+  }, [appliedSourceKey, blockId, incomingSourceKey, loading, value, viewId]);
+
   const pumpSaves = useCallback((): Promise<void> => {
     if (!viewId) return Promise.resolve();
     if (savePumpRef.current) return savePumpRef.current;
@@ -123,6 +178,7 @@ export function LiveViewWhiteboardBlock({
           notes: pending.notes,
           arrows: pending.arrows,
           strokes: pending.strokes,
+          source: pending.source,
         });
         if (result.status === "error") {
           setError(result.error);
@@ -201,9 +257,9 @@ export function LiveViewWhiteboardBlock({
         onItemAction={async () => false}
         onItemHandoff={() => {}}
       />
-      {saving && (
+      {(saving || importing) && (
         <span className="sr-only" role="status">
-          saving whiteboard
+          {importing ? "applying Pipe whiteboard JSON" : "saving whiteboard"}
         </span>
       )}
       {error && (
