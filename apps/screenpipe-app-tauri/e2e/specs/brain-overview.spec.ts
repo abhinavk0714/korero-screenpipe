@@ -122,15 +122,38 @@ async function openHomeWithDiagnostics() {
 }
 
 async function clickEmptyCanvasSpace() {
-  const surfaceElement = await waitForTestId(
-    "live-view-canvas-surface",
-    10_000,
+  await browser.waitUntil(
+    async () =>
+      Boolean(
+        await browser.execute(() => {
+          const activeEmbedded = document.querySelector<HTMLElement>(
+            "[data-embedded='true'][data-active='true'] [data-testid='live-view-canvas-surface']",
+          );
+          const parent = Array.from(
+            document.querySelectorAll<HTMLElement>(
+              "[data-testid='live-view-canvas-surface']",
+            ),
+          ).find((surface) => !surface.closest("[data-embedded='true']"));
+          const surface = activeEmbedded ?? parent;
+          surface?.scrollIntoView({ block: "center", inline: "center" });
+          return Boolean(surface);
+        }),
+      ),
+    {
+      timeout: t(10_000),
+      timeoutMsg: "an interactive Canvas surface did not become available",
+    },
   );
-  await surfaceElement.scrollIntoView({ block: "center", inline: "center" });
   const point = (await browser.execute(() => {
-    const surface = document.querySelector<HTMLElement>(
-      "[data-testid='live-view-canvas-surface']",
+    const activeEmbedded = document.querySelector<HTMLElement>(
+      "[data-embedded='true'][data-active='true'] [data-testid='live-view-canvas-surface']",
     );
+    const parent = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        "[data-testid='live-view-canvas-surface']",
+      ),
+    ).find((candidate) => !candidate.closest("[data-embedded='true']"));
+    const surface = activeEmbedded ?? parent;
     if (!surface) return null;
     const surfaceRect = surface.getBoundingClientRect();
     const obstacles = Array.from(
@@ -938,9 +961,9 @@ Refresh the assigned Live View output targets from source-backed activity.
     await waitForTestId("whiteboard-activate", 10_000);
 
     const canvas = await waitForTestId("live-view-canvas", 10_000);
-    expect(
-      await $("[data-testid='overview-display-mode']").isExisting(),
-    ).toBe(false);
+    expect(await $("[data-testid='overview-display-mode']").isExisting()).toBe(
+      false,
+    );
     await waitForTestId("canvas-block-focus-time", 10_000);
     expect(await canvas.getText()).toContain("4.5");
     expect(await canvas.getText()).toContain("Automation opportunities");
