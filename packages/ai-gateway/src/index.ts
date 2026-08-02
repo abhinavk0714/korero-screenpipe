@@ -193,6 +193,9 @@ async function handleMeteredTinfoilRequest(
 		),
 		endpoint: `/v1/tinfoil${subPath}`,
 		stream: usage === null,
+		lane: reservation.reservation?.lane,
+		cost_ledger_epoch: reservation.reservation?.ledgerEpoch,
+		cost_total_ledger_epoch: reservation.reservation?.totalLedgerEpoch,
 	}) : logReservedCost(env, reservation.reservation, attribution);
 	return withDailyCostSettlement(response, env, reservation.reservation, settlement);
 }
@@ -249,6 +252,9 @@ async function handleMeteredVoiceAiRequest(
 		),
 		endpoint,
 		stream: false,
+		lane: reservation.reservation?.lane,
+		cost_ledger_epoch: reservation.reservation?.ledgerEpoch,
+		cost_total_ledger_epoch: reservation.reservation?.totalLedgerEpoch,
 	}) : logReservedCost(env, reservation.reservation, attribution);
 	return withDailyCostSettlement(response, env, reservation.reservation, settlement);
 }
@@ -678,6 +684,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						stream: true,
 						latency_ms: latencyMs,
 						router_tier: routerTier,
+						lane: dailyCostReservation?.lane,
+						cost_ledger_epoch: dailyCostReservation?.ledgerEpoch,
+						cost_total_ledger_epoch: dailyCostReservation?.totalLedgerEpoch,
 					}));
 				} else {
 					costSettlement = settleActualOrReservedCost(
@@ -718,6 +727,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 								stream: false,
 								latency_ms: latencyMs,
 								router_tier: routerTier,
+								lane: dailyCostReservation?.lane,
+								cost_ledger_epoch: dailyCostReservation?.ledgerEpoch,
+								cost_total_ledger_epoch: dailyCostReservation?.totalLedgerEpoch,
 							});
 						},
 					);
@@ -809,6 +821,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				),
 				endpoint: '/v1/web-search',
 				stream: false,
+				lane: costReservation.reservation?.lane,
+				cost_ledger_epoch: costReservation.reservation?.ledgerEpoch,
+				cost_total_ledger_epoch: costReservation.reservation?.totalLedgerEpoch,
 			}) : logReservedCost(env, costReservation.reservation, attribution);
 			return withDailyCostSettlement(
 				webSearchResponse,
@@ -1042,6 +1057,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					}, costReservation.reservation?.reservedMicroUsd),
 					endpoint: '/v1/messages',
 					stream: true,
+					lane: costReservation.reservation?.lane,
+					cost_ledger_epoch: costReservation.reservation?.ledgerEpoch,
+					cost_total_ledger_epoch: costReservation.reservation?.totalLedgerEpoch,
 				}));
 			} else {
 				costSettlement = settleActualOrReservedCost(
@@ -1075,6 +1093,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 							}, costReservation.reservation?.reservedMicroUsd),
 							endpoint: '/v1/messages',
 							stream: false,
+							lane: costReservation.reservation?.lane,
+							cost_ledger_epoch: costReservation.reservation?.ledgerEpoch,
+							cost_total_ledger_epoch: costReservation.reservation?.totalLedgerEpoch,
 						});
 					},
 				);
@@ -1190,6 +1211,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					}, costReservation.reservation?.reservedMicroUsd),
 					endpoint: '/anthropic/v1/messages',
 					stream: true,
+					lane: costReservation.reservation?.lane,
+					cost_ledger_epoch: costReservation.reservation?.ledgerEpoch,
+					cost_total_ledger_epoch: costReservation.reservation?.totalLedgerEpoch,
 				}));
 			} else {
 				costSettlement = settleActualOrReservedCost(
@@ -1223,6 +1247,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 							}, costReservation.reservation?.reservedMicroUsd),
 							endpoint: '/anthropic/v1/messages',
 							stream: false,
+							lane: costReservation.reservation?.lane,
+							cost_ledger_epoch: costReservation.reservation?.ledgerEpoch,
+							cost_total_ledger_epoch: costReservation.reservation?.totalLedgerEpoch,
 						});
 					},
 				);

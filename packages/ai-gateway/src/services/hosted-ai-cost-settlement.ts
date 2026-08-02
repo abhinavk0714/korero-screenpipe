@@ -65,6 +65,9 @@ export function logReservedCost(
 		stream: attribution.stream,
 		latency_ms: attribution.latencyMs,
 		router_tier: attribution.routerTier,
+		lane: reservation.lane,
+		cost_ledger_epoch: reservation.ledgerEpoch,
+		cost_total_ledger_epoch: reservation.totalLedgerEpoch,
 	});
 }
 
