@@ -112,10 +112,11 @@ fn sqlite_quarantine_reserve_path(database_path: impl AsRef<Path>) -> Option<Pat
 
 /// Return the operating-system identity of an existing database file.
 pub fn sqlite_file_identity(path: impl AsRef<Path>) -> io::Result<SqliteFileIdentity> {
-    let metadata = fs::metadata(path)?;
+    let path = path.as_ref();
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        let metadata = fs::metadata(path)?;
         Ok(SqliteFileIdentity::Unix {
             device: metadata.dev(),
             inode: metadata.ino(),
@@ -123,24 +124,26 @@ pub fn sqlite_file_identity(path: impl AsRef<Path>) -> io::Result<SqliteFileIden
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+
+        let file = fs::File::open(path)?;
+        let mut information = BY_HANDLE_FILE_INFORMATION::default();
+        unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut information) }
+            .map_err(io::Error::other)?;
+
         Ok(SqliteFileIdentity::Windows {
-            volume_serial_number: metadata.volume_serial_number().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "filesystem does not expose a SQLite volume serial number",
-                )
-            })?,
-            file_index: metadata.file_index().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "filesystem does not expose a stable SQLite file index",
-                )
-            })?,
+            volume_serial_number: information.dwVolumeSerialNumber,
+            file_index: ((information.nFileIndexHigh as u64) << 32)
+                | information.nFileIndexLow as u64,
         })
     }
     #[cfg(not(any(unix, windows)))]
     {
+        let metadata = fs::metadata(path)?;
         let created_unix_nanos = metadata
             .created()
             .ok()
