@@ -586,12 +586,12 @@ Refresh the assigned Live View output targets from source-backed activity.
       })
       .catch(() => {});
     await waitForTestId("section-brain", 15_000);
-    await waitForTestId("brain-overview-grid", 15_000);
     const dashboardSelector = await waitForTestId(
       "overview-dashboard-selector",
       15_000,
     );
     await selectDashboard(SELECTABLE_VIEW_ID);
+    await waitForTestId("live-view-canvas", 15_000);
     for (const size of SUPPORTED_WINDOW_SIZES) {
       await setCssWindowSize(size.width, size.height);
       await browser.pause(150);
@@ -612,7 +612,14 @@ Refresh the assigned Live View output targets from source-backed activity.
           ),
         ).filter((element) => {
           const rect = element.getBoundingClientRect();
-          return rect.width > 0 && rect.height > 0;
+          // Canvas nodes live in a transformed, clipped world and may extend
+          // beyond the page viewport by design. Their own geometry is checked
+          // below; this scan covers page-level controls only.
+          return (
+            !element.closest("[data-testid='live-view-canvas']") &&
+            rect.width > 0 &&
+            rect.height > 0
+          );
         });
         return {
           viewportWidth: document.documentElement.clientWidth,
@@ -757,9 +764,10 @@ Refresh the assigned Live View output targets from source-backed activity.
     await cancelFixedEditor.click();
     await selectDashboard(SELECTABLE_VIEW_ID);
 
-    const canvasMode = await $("[data-testid='overview-mode-canvas']");
-    await canvasMode.click();
     const canvas = await waitForTestId("live-view-canvas", 10_000);
+    expect(
+      await $("[data-testid='overview-display-mode']").isExisting(),
+    ).toBe(false);
     await waitForTestId("canvas-block-focus-time", 10_000);
     expect(await canvas.getText()).toContain("4.5");
     expect(await canvas.getText()).toContain("Automation opportunities");
@@ -981,11 +989,6 @@ Refresh the assigned Live View output targets from source-backed activity.
     expect(await $("[data-testid^='canvas-arrow-']").isExisting()).toBe(true);
 
     await setCssWindowSize(1440, 900);
-    const dashboardMode = await $("[data-testid='overview-mode-dashboard']");
-    await dashboardMode.waitForEnabled({ timeout: t(15_000) });
-    await dashboardMode.click();
-    await waitForTestId("brain-overview-grid", 10_000);
-
     await openDashboardMenu();
     await waitForTestId("overview-edit", 10_000).then((element) =>
       element.click(),

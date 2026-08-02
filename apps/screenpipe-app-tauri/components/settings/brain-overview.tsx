@@ -17,9 +17,7 @@ import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
 import {
   AlertCircle,
   CheckCircle2,
-  LayoutDashboard,
   Loader2,
-  Network,
   RefreshCw,
   Undo2,
   X,
@@ -77,7 +75,6 @@ import {
 } from "@/lib/active-ai-preset";
 import { Input } from "@/components/ui/input";
 import {
-  createCanvasDocument,
   reconcileCanvasDocument,
   toSaveCanvasRequest,
 } from "@/lib/live-views/canvas-layout";
@@ -101,7 +98,6 @@ import {
   type BrainViewCanvasDocument,
   type BrainViewComponent,
   type BrainViewDefinition,
-  type BrainViewDisplayMode,
   type BrainViewSlot,
   type BrainViewSlotInput,
   type BrainViewTemplateKit,
@@ -640,23 +636,6 @@ export function BrainOverview({
       persist: canvasDocument.revision > 0,
     });
   }, [canvasDocument, canvasSlotSignature, changeCanvasDocument, view]);
-
-  const changeDisplayMode = (mode: BrainViewDisplayMode) => {
-    if (!view || canvasLoading || canvasError) return;
-    const current = reconcileCanvasDocument(
-      view,
-      canvasLatestRef.current ?? createCanvasDocument(view),
-    );
-    if (current.mode === mode) return;
-    const next = { ...current, mode };
-    changeCanvasDocument(next, { persist: true });
-    posthog.capture("live_view_layout_mode_changed", {
-      analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
-      mode,
-      block_count: view.slots.length,
-      has_result: view.slots.some((slot) => slot.value !== null),
-    });
-  };
 
   const load = useCallback(
     async (silent = false, preferredDashboardId?: string | null) => {
@@ -2581,7 +2560,6 @@ export function BrainOverview({
     dataRefresh?.viewId === view.id &&
     (dataRefresh.status === "starting" || dataRefresh.status === "running");
   const dashboardBusy = saving || refreshIsActive || generating;
-  const displayMode = canvasDocument?.mode ?? "dashboard";
   const canvasReady =
     !canvasLoading && canvasDocument?.viewId === view.id && !canvasError;
   const refreshingSlotIds = new Set(
@@ -2646,55 +2624,6 @@ export function BrainOverview({
             data-testid="overview-header-controls"
             className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end"
           >
-          {!onboardingColdStart && (
-            <div
-              data-testid="overview-display-mode"
-              className="inline-flex h-9 flex-1 border border-border sm:flex-none"
-              aria-label="Live View layout"
-            >
-              <Button
-                data-testid="overview-mode-dashboard"
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-pressed={displayMode === "dashboard"}
-                disabled={
-                  dashboardBusy || canvasLoading || Boolean(canvasError)
-                }
-                className={`h-8 rounded-none border-r border-border px-2 text-xs ${
-                  displayMode === "dashboard"
-                    ? "bg-foreground text-background"
-                    : ""
-                }`}
-                onClick={() => changeDisplayMode("dashboard")}
-              >
-                <LayoutDashboard className="mr-1.5 h-3.5 w-3.5" /> dashboard
-              </Button>
-              <Button
-                data-testid="overview-mode-canvas"
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-pressed={displayMode === "canvas"}
-                disabled={
-                  dashboardBusy || canvasLoading || Boolean(canvasError)
-                }
-                className={`h-8 rounded-none px-2 text-xs ${
-                  displayMode === "canvas"
-                    ? "bg-foreground text-background"
-                    : ""
-                }`}
-                onClick={() => changeDisplayMode("canvas")}
-              >
-                {canvasLoading ? (
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Network className="mr-1.5 h-3.5 w-3.5" />
-                )}
-                canvas
-              </Button>
-            </div>
-          )}
           {view.periodPolicy.type !== "fixed.v1" && (
             <Select
               value={view.timeRange}
@@ -2746,11 +2675,11 @@ export function BrainOverview({
         >
           <AlertCircle className="h-3.5 w-3.5 shrink-0" />
           <span>
-            Canvas could not be loaded. Dashboard mode is still available.
+            Canvas could not be loaded. Reopen Live Views to try again.
           </span>
         </div>
       )}
-      {canvasSaving && displayMode === "canvas" && (
+      {canvasSaving && (
         <p className="sr-only" role="status">
           saving canvas
         </p>
@@ -2842,7 +2771,7 @@ export function BrainOverview({
         >
           add your first Block
         </button>
-      ) : displayMode === "canvas" && canvasReady && canvasDocument ? (
+      ) : canvasReady && canvasDocument ? (
         <LiveViewCanvas
           document={canvasDocument}
           slots={slots}
@@ -2858,33 +2787,14 @@ export function BrainOverview({
           onItemAction={recordItemAction}
           onItemHandoff={handoffItem}
         />
-      ) : (
+      ) : canvasLoading ? (
         <div
-          data-testid="brain-overview-grid"
-          className="grid grid-cols-12 gap-4"
+          data-testid="live-view-canvas-loading"
+          className="flex min-h-[480px] items-center justify-center border border-border font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
         >
-          {slots.map((slot) => (
-            <OverviewCard
-              key={slot.id}
-              slot={slot}
-              timeRange={view.timeRange}
-              refreshing={refreshingSlotIds.has(slot.id)}
-              feedback={slot.feedback?.current?.rating ?? null}
-              feedbackCorrection={slot.feedback?.current?.correction ?? null}
-              aiEditing={aiEditingSlotId === slot.id}
-              onFeedback={(rating, correction) =>
-                recordCardFeedback(slot, rating, correction)
-              }
-              onRegenerate={() =>
-                void refreshConnectedPipes(view, [slot], "card_regenerated")
-              }
-              onAiEdit={(prompt) => editSlotWithAi(slot, prompt)}
-              onItemAction={(request) => recordItemAction(slot, request)}
-              onItemHandoff={(item) => void handoffItem(slot, item)}
-            />
-          ))}
+          loading process map
         </div>
-      )}
+      ) : null}
       </div>
       {!onboardingColdStart && (
         <div
