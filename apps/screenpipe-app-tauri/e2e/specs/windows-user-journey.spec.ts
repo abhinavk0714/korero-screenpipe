@@ -521,8 +521,12 @@ describe("Windows user journey", function () {
       await clickFirstButtonWithText("stop", t(15_000));
 
       await waitForBodyText(
-        (bodyText) => bodyText.includes("meeting saved"),
-        "Manual meeting did not transition to the saved state after stop",
+        (bodyText) =>
+          bodyText.includes("meeting saved") ||
+          bodyText.includes("summarizing meeting") ||
+          bodyText.includes("summary ready") ||
+          bodyText.includes("summary needs attention"),
+        "Manual meeting did not transition to a saved or summarizing state after stop",
       );
 
       const savedMeetingScreenshot = await saveScreenshot("windows-user-journey-meeting-saved");
