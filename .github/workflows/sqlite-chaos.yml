@@ -29,6 +29,10 @@ concurrency:
 
 env:
   GIT_LFS_SKIP_SMUDGE: 1
+  # This workflow tests SQLite behavior. The repository's dedicated Code
+  # Quality workflow owns warnings; setup-rust-toolchain otherwise injects
+  # `-D warnings` and turns unrelated existing deprecations into test failures.
+  RUSTFLAGS: ''
 
 jobs:
   sqlite-chaos:
