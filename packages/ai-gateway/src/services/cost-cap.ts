@@ -29,7 +29,7 @@ import {
 	getPlanDailyCostCap,
 	resolveHostedAiTextCostLimits,
 } from './hosted-ai-cost-controls';
-import { getHostedAiPlan } from './hosted-ai-policy';
+import { hasBusinessHostedAiAccess } from './hosted-ai-policy';
 import { loadHostedAiReservationControls } from './hosted-ai-reservation-controls';
 
 const COST_BASELINE_TIER = 'daily_cost_baseline_v1';
@@ -419,7 +419,7 @@ export async function reserveDailyCostCap(
 				: '__no_monthly_cost_baseline__';
 		// Non-Business Auto is constrained to the efficient waterfall. Reserving it
 		// against Sol would reject legitimate requests before the provider runs.
-		const reservationModel = model === 'auto' && getHostedAiPlan(accountPlan) !== 'business'
+		const reservationModel = model === 'auto' && !hasBusinessHostedAiAccess(accountPlan)
 			? 'gpt-5.6-luna'
 			: model;
 		const reservedMicroUsd = getCostReservationMicroUsd(reservationModel, shape);

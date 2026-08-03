@@ -23,14 +23,16 @@ describe('hosted AI plan budget math', () => {
 		expect(privateControls.daily.free).toBe(101);
 		expect(privateControls.monthly.basic).toBe(202);
 		expect(privateControls.request.business).toBe(53);
-		expect(privateControls.trial).toEqual({ total: 301, daily: 104, request: 54 });
+		expect(privateControls.trial).toEqual({ total: 301, daily: 106, request: 56 });
 
 		expect(getPlanDailyCostCap('free', TEST_PRIVATE_COST_CONTROLS)).toBe(0.1);
-		expect(getPlanMonthlyCostCap('basic', TEST_PRIVATE_COST_CONTROLS)).toBe(1.5);
-		expect(getPlanRequestCostCap('business', TEST_PRIVATE_COST_CONTROLS)).toBe(4);
-		expect(getPlanMonthlyCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(4);
-		expect(getPlanDailyCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(4);
-		expect(getPlanRequestCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(4);
+		expect(getPlanMonthlyCostCap('basic', TEST_PRIVATE_COST_CONTROLS)).toBe(3);
+		expect(getPlanRequestCostCap('business', TEST_PRIVATE_COST_CONTROLS)).toBe(8);
+		expect(getPlanMonthlyCostCap('business_max', TEST_PRIVATE_COST_CONTROLS)).toBe(20);
+		expect(getPlanMonthlyCostCap('business_ultra', TEST_PRIVATE_COST_CONTROLS)).toBe(50);
+		expect(getPlanMonthlyCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(1.5);
+		expect(getPlanDailyCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(1.5);
+		expect(getPlanRequestCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(1.5);
 		expect(getGlobalHourlyCostCap(TEST_PRIVATE_COST_CONTROLS)).toBe(401);
 		expect(getGlobalDailyCostCap(TEST_PRIVATE_COST_CONTROLS)).toBe(402);
 	});

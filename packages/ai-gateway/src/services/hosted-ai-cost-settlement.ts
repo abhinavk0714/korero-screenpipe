@@ -35,7 +35,7 @@ export function reservedCostAttribution(
 	return {
 		deviceId: auth.deviceId,
 		userId: auth.userId,
-		tier: auth.tier,
+		tier: auth.usageTier ?? auth.tier,
 		hostedAiTrial: auth.hostedAiTrial === true,
 		model,
 		endpoint,

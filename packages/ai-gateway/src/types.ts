@@ -233,12 +233,18 @@ export interface Env {
 	MAX_DAILY_FREE_TEXT_COST?: string;
 	MAX_DAILY_BASIC_TEXT_COST?: string;
 	MAX_DAILY_BUSINESS_TEXT_COST?: string;
+	MAX_DAILY_BUSINESS_MAX_TEXT_COST?: string;
+	MAX_DAILY_BUSINESS_ULTRA_TEXT_COST?: string;
 	MAX_MONTHLY_FREE_TEXT_COST?: string;
 	MAX_MONTHLY_BASIC_TEXT_COST?: string;
 	MAX_MONTHLY_BUSINESS_TEXT_COST?: string;
+	MAX_MONTHLY_BUSINESS_MAX_TEXT_COST?: string;
+	MAX_MONTHLY_BUSINESS_ULTRA_TEXT_COST?: string;
 	MAX_REQUEST_FREE_TEXT_COST?: string;
 	MAX_REQUEST_BASIC_TEXT_COST?: string;
 	MAX_REQUEST_BUSINESS_TEXT_COST?: string;
+	MAX_REQUEST_BUSINESS_MAX_TEXT_COST?: string;
+	MAX_REQUEST_BUSINESS_ULTRA_TEXT_COST?: string;
 	MAX_GLOBAL_HOURLY_TEXT_COST?: string;
 	MAX_GLOBAL_DAILY_TEXT_COST?: string;
 	MAX_TRIAL_TEXT_COST?: string;
@@ -247,6 +253,8 @@ export interface Env {
 	MAX_DAILY_FREE_TRANSCRIPTION_COST?: string;
 	MAX_DAILY_BASIC_TRANSCRIPTION_COST?: string;
 	MAX_DAILY_BUSINESS_TRANSCRIPTION_COST?: string;
+	MAX_DAILY_BUSINESS_MAX_TRANSCRIPTION_COST?: string;
+	MAX_DAILY_BUSINESS_ULTRA_TRANSCRIPTION_COST?: string;
 	FREE_CHAT_COST_RESERVATION_MICRO_USD?: string;
 	FREE_CHAT_DAILY_BUDGET_MICRO_USD?: string;
 	// Per-minute RPM for free (weight-0) models — a separate, much higher bucket
@@ -262,8 +270,8 @@ export interface Env {
 export type UserTier = 'anonymous' | 'logged_in' | 'subscribed';
 
 // Capacity is deliberately separate from model access and provider-cost credit.
-// All Business variants use the same reviewed model catalog and included-credit
-// policy; Max and Ultra receive larger usage/RPM buckets only.
+// Business variants share the reviewed model catalog while keeping distinct
+// included provider budgets and usage/RPM buckets.
 export type UsageTier = UserTier | 'business_max' | 'business_ultra';
 
 // Server-verified commercial plan. This is intentionally separate from

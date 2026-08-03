@@ -6,6 +6,7 @@ import type { AccountPlan, Env } from '../types';
 import {
 	getHostedAiIncludedProviderCostUsd,
 	getHostedAiPlan,
+	getHostedAiTrialIncludedProviderCostUsd,
 	type HostedAiPlan,
 } from './hosted-ai-policy';
 
@@ -13,12 +14,18 @@ export type HostedAiCostControlEnv = Pick<Env,
 	| 'MAX_DAILY_FREE_TEXT_COST'
 	| 'MAX_DAILY_BASIC_TEXT_COST'
 	| 'MAX_DAILY_BUSINESS_TEXT_COST'
+	| 'MAX_DAILY_BUSINESS_MAX_TEXT_COST'
+	| 'MAX_DAILY_BUSINESS_ULTRA_TEXT_COST'
 	| 'MAX_MONTHLY_FREE_TEXT_COST'
 	| 'MAX_MONTHLY_BASIC_TEXT_COST'
 	| 'MAX_MONTHLY_BUSINESS_TEXT_COST'
+	| 'MAX_MONTHLY_BUSINESS_MAX_TEXT_COST'
+	| 'MAX_MONTHLY_BUSINESS_ULTRA_TEXT_COST'
 	| 'MAX_REQUEST_FREE_TEXT_COST'
 	| 'MAX_REQUEST_BASIC_TEXT_COST'
 	| 'MAX_REQUEST_BUSINESS_TEXT_COST'
+	| 'MAX_REQUEST_BUSINESS_MAX_TEXT_COST'
+	| 'MAX_REQUEST_BUSINESS_ULTRA_TEXT_COST'
 	| 'MAX_TRIAL_TEXT_COST'
 	| 'MAX_DAILY_TRIAL_TEXT_COST'
 	| 'MAX_REQUEST_TRIAL_TEXT_COST'
@@ -27,6 +34,8 @@ export type HostedAiCostControlEnv = Pick<Env,
 	| 'MAX_DAILY_FREE_TRANSCRIPTION_COST'
 	| 'MAX_DAILY_BASIC_TRANSCRIPTION_COST'
 	| 'MAX_DAILY_BUSINESS_TRANSCRIPTION_COST'
+	| 'MAX_DAILY_BUSINESS_MAX_TRANSCRIPTION_COST'
+	| 'MAX_DAILY_BUSINESS_ULTRA_TRANSCRIPTION_COST'
 >;
 
 type PlanControls = Record<HostedAiPlan, number>;
@@ -83,7 +92,12 @@ function requireNonDecreasing(
 	controls: PlanControls,
 	name: string,
 ): void {
-	if (controls.free > controls.basic || controls.basic > controls.business) {
+	if (
+		controls.free > controls.basic ||
+		controls.basic > controls.business ||
+		controls.business > controls.business_max ||
+		controls.business_max > controls.business_ultra
+	) {
 		throw new PrivateCostControlError(name, 'misordered');
 	}
 }
@@ -103,12 +117,26 @@ function planControls(
 	free: string | undefined,
 	basic: string | undefined,
 	business: string | undefined,
-	names: readonly [string, string, string],
+	businessMax: string | undefined,
+	businessUltra: string | undefined,
+	names: readonly [string, string, string, string, string],
 ): PlanControls {
+	const parsedFree = requiredPrivateDecimal(free, names[0]);
+	const parsedBasic = requiredPrivateDecimal(basic, names[1]);
+	const parsedBusiness = requiredPrivateDecimal(business, names[2]);
 	return {
-		free: requiredPrivateDecimal(free, names[0]),
-		basic: requiredPrivateDecimal(basic, names[1]),
-		business: requiredPrivateDecimal(business, names[2]),
+		free: parsedFree,
+		basic: parsedBasic,
+		business: parsedBusiness,
+		// Missing power-plan controls inherit the lower Business ceiling. This
+		// keeps an old deployment safe while allowing an operator to raise each
+		// envelope explicitly before promoting the new public allowance.
+		business_max: businessMax === undefined
+			? parsedBusiness
+			: requiredPrivateDecimal(businessMax, names[3]),
+		business_ultra: businessUltra === undefined
+			? parsedBusiness
+			: requiredPrivateDecimal(businessUltra, names[4]),
 	};
 }
 
@@ -118,19 +146,43 @@ export function loadHostedAiTextCostControls(env: HostedAiCostControlEnv): Hoste
 		env.MAX_DAILY_FREE_TEXT_COST,
 		env.MAX_DAILY_BASIC_TEXT_COST,
 		env.MAX_DAILY_BUSINESS_TEXT_COST,
-		['MAX_DAILY_FREE_TEXT_COST', 'MAX_DAILY_BASIC_TEXT_COST', 'MAX_DAILY_BUSINESS_TEXT_COST'],
+		env.MAX_DAILY_BUSINESS_MAX_TEXT_COST,
+		env.MAX_DAILY_BUSINESS_ULTRA_TEXT_COST,
+		[
+			'MAX_DAILY_FREE_TEXT_COST',
+			'MAX_DAILY_BASIC_TEXT_COST',
+			'MAX_DAILY_BUSINESS_TEXT_COST',
+			'MAX_DAILY_BUSINESS_MAX_TEXT_COST',
+			'MAX_DAILY_BUSINESS_ULTRA_TEXT_COST',
+		],
 	);
 	const monthly = planControls(
 		env.MAX_MONTHLY_FREE_TEXT_COST,
 		env.MAX_MONTHLY_BASIC_TEXT_COST,
 		env.MAX_MONTHLY_BUSINESS_TEXT_COST,
-		['MAX_MONTHLY_FREE_TEXT_COST', 'MAX_MONTHLY_BASIC_TEXT_COST', 'MAX_MONTHLY_BUSINESS_TEXT_COST'],
+		env.MAX_MONTHLY_BUSINESS_MAX_TEXT_COST,
+		env.MAX_MONTHLY_BUSINESS_ULTRA_TEXT_COST,
+		[
+			'MAX_MONTHLY_FREE_TEXT_COST',
+			'MAX_MONTHLY_BASIC_TEXT_COST',
+			'MAX_MONTHLY_BUSINESS_TEXT_COST',
+			'MAX_MONTHLY_BUSINESS_MAX_TEXT_COST',
+			'MAX_MONTHLY_BUSINESS_ULTRA_TEXT_COST',
+		],
 	);
 	const request = planControls(
 		env.MAX_REQUEST_FREE_TEXT_COST,
 		env.MAX_REQUEST_BASIC_TEXT_COST,
 		env.MAX_REQUEST_BUSINESS_TEXT_COST,
-		['MAX_REQUEST_FREE_TEXT_COST', 'MAX_REQUEST_BASIC_TEXT_COST', 'MAX_REQUEST_BUSINESS_TEXT_COST'],
+		env.MAX_REQUEST_BUSINESS_MAX_TEXT_COST,
+		env.MAX_REQUEST_BUSINESS_ULTRA_TEXT_COST,
+		[
+			'MAX_REQUEST_FREE_TEXT_COST',
+			'MAX_REQUEST_BASIC_TEXT_COST',
+			'MAX_REQUEST_BUSINESS_TEXT_COST',
+			'MAX_REQUEST_BUSINESS_MAX_TEXT_COST',
+			'MAX_REQUEST_BUSINESS_ULTRA_TEXT_COST',
+		],
 	);
 	const controls: HostedAiTextCostControls = {
 		daily,
@@ -150,7 +202,7 @@ export function loadHostedAiTextCostControls(env: HostedAiCostControlEnv): Hoste
 	requireNonDecreasing(daily, 'daily plan ceilings');
 	requireNonDecreasing(monthly, 'monthly plan ceilings');
 	requireNonDecreasing(request, 'request plan ceilings');
-	for (const plan of ['free', 'basic', 'business'] as const) {
+	for (const plan of ['free', 'basic', 'business', 'business_max', 'business_ultra'] as const) {
 		requireWindowOrder(request[plan], daily[plan], monthly[plan], `${plan} plan windows`);
 	}
 	requireWindowOrder(
@@ -172,10 +224,14 @@ export function loadHostedTranscriptionCostControls(
 		env.MAX_DAILY_FREE_TRANSCRIPTION_COST,
 		env.MAX_DAILY_BASIC_TRANSCRIPTION_COST,
 		env.MAX_DAILY_BUSINESS_TRANSCRIPTION_COST,
+		env.MAX_DAILY_BUSINESS_MAX_TRANSCRIPTION_COST,
+		env.MAX_DAILY_BUSINESS_ULTRA_TRANSCRIPTION_COST,
 		[
 			'MAX_DAILY_FREE_TRANSCRIPTION_COST',
 			'MAX_DAILY_BASIC_TRANSCRIPTION_COST',
 			'MAX_DAILY_BUSINESS_TRANSCRIPTION_COST',
+			'MAX_DAILY_BUSINESS_MAX_TRANSCRIPTION_COST',
+			'MAX_DAILY_BUSINESS_ULTRA_TRANSCRIPTION_COST',
 		],
 	);
 	requireNonDecreasing(controls, 'transcription plan ceilings');
@@ -216,8 +272,8 @@ function clampWindowsToIncludedAllowance(
 	request: number,
 	daily: number,
 	total: number,
+	includedAllowance = getHostedAiIncludedProviderCostUsd(accountPlan),
 ): Pick<ResolvedHostedAiTextCostLimits, 'request' | 'daily' | 'monthly'> {
-	const includedAllowance = getHostedAiIncludedProviderCostUsd(accountPlan);
 	if (includedAllowance <= 0) {
 		throw new PrivateCostControlError('account plan', 'unknown');
 	}
@@ -245,6 +301,7 @@ export function resolveHostedAiTextCostLimits(
 			controls.trial.request,
 			controls.trial.daily,
 			controls.trial.total,
+			getHostedAiTrialIncludedProviderCostUsd(),
 		);
 		return {
 			...windows,

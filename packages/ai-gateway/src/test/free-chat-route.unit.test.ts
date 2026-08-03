@@ -414,7 +414,7 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(result.hosted_ai).toMatchObject({
 			plan: 'business',
 			trial: true,
-			included_credits: 400,
+			included_credits: 150,
 		});
 		expect(result.hosted_ai.model_access).toContain('claude-fable-5');
 		expect(result.hosted_ai.model_access).not.toContain('*');
@@ -457,9 +457,9 @@ describe('/v1/chat/completions free-plan route policy', () => {
 	});
 
 	it('returns canonical Max and Ultra capacity from desktop-compatible user responses', async () => {
-		for (const [billingPlan, usageTier, dailyLimit] of [
-			['pro_max', 'business_max', 120],
-			['pro_ultra', 'business_ultra', 240],
+		for (const [billingPlan, usageTier, dailyLimit, includedCredits] of [
+			['pro_max', 'business_max', 120, 2_000],
+			['pro_ultra', 'business_ultra', 240, 5_000],
 		] as const) {
 			const clerkId = `user_${billingPlan}`;
 			verifyTokenMock.mockImplementation(async () => ({ sub: clerkId }) as any);
@@ -484,6 +484,10 @@ describe('/v1/chat/completions free-plan route policy', () => {
 			expect(body).toMatchObject({
 				tier: usageTier,
 				limit_today: dailyLimit,
+				hosted_ai: {
+					plan: usageTier,
+					included_credits: includedCredits,
+				},
 				remaining: dailyLimit,
 				upsell_banner: false,
 				upgrade_eligible: false,

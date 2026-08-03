@@ -37,10 +37,12 @@ describe('private hosted AI cost controls', () => {
 	});
 
 	it('rejects request, daily, and monthly windows that can invert enforcement', () => {
-		expect(() => loadHostedAiTextCostControls(privateCostControls({
-			MAX_REQUEST_FREE_TEXT_COST: '102',
-			MAX_REQUEST_BASIC_TEXT_COST: '102',
-			MAX_REQUEST_BUSINESS_TEXT_COST: '102',
+			expect(() => loadHostedAiTextCostControls(privateCostControls({
+				MAX_REQUEST_FREE_TEXT_COST: '102',
+				MAX_REQUEST_BASIC_TEXT_COST: '102',
+				MAX_REQUEST_BUSINESS_TEXT_COST: '102',
+				MAX_REQUEST_BUSINESS_MAX_TEXT_COST: '102',
+				MAX_REQUEST_BUSINESS_ULTRA_TEXT_COST: '102',
 		}))).toThrow('inconsistent private hosted AI cost control: free plan windows');
 		expect(() => loadHostedAiTextCostControls(privateCostControls({
 			MAX_MONTHLY_FREE_TEXT_COST: '102.5',
@@ -51,7 +53,7 @@ describe('private hosted AI cost controls', () => {
 
 	it('rejects inconsistent trial and global windows', () => {
 		expect(() => loadHostedAiTextCostControls(privateCostControls({
-			MAX_REQUEST_TRIAL_TEXT_COST: '105',
+			MAX_REQUEST_TRIAL_TEXT_COST: '107',
 		}))).toThrow('inconsistent private hosted AI cost control: trial windows');
 		expect(() => loadHostedAiTextCostControls(privateCostControls({
 			MAX_GLOBAL_HOURLY_TEXT_COST: '403',
@@ -66,18 +68,52 @@ describe('private hosted AI cost controls', () => {
 
 	it('keeps permissive private controls inside the public credit allowance', () => {
 		expect(resolveHostedAiTextCostLimits('basic', privateCostControls())).toEqual({
+			daily: 3,
+			monthly: 3,
+			request: 3,
+			globalHourly: 401,
+			globalDaily: 402,
+		});
+		expect(resolveHostedAiTextCostLimits('business', privateCostControls(), true)).toEqual({
 			daily: 1.5,
 			monthly: 1.5,
 			request: 1.5,
 			globalHourly: 401,
 			globalDaily: 402,
 		});
-		expect(resolveHostedAiTextCostLimits('business', privateCostControls(), true)).toEqual({
-			daily: 4,
-			monthly: 4,
-			request: 4,
-			globalHourly: 401,
-			globalDaily: 402,
+	});
+
+	it('resolves distinct Business, Max, and Ultra public cash envelopes', () => {
+		expect(resolveHostedAiTextCostLimits('business', privateCostControls())).toMatchObject({
+			daily: 8,
+			monthly: 8,
+			request: 8,
+		});
+		expect(resolveHostedAiTextCostLimits('business_max', privateCostControls())).toMatchObject({
+			daily: 20,
+			monthly: 20,
+			request: 20,
+		});
+		expect(resolveHostedAiTextCostLimits('business_ultra', privateCostControls())).toMatchObject({
+			daily: 50,
+			monthly: 50,
+			request: 50,
+		});
+	});
+
+	it('safely inherits Business private controls until power-plan bindings are configured', () => {
+		const env = privateCostControls({
+			MAX_DAILY_BUSINESS_MAX_TEXT_COST: undefined,
+			MAX_DAILY_BUSINESS_ULTRA_TEXT_COST: undefined,
+			MAX_MONTHLY_BUSINESS_MAX_TEXT_COST: undefined,
+			MAX_MONTHLY_BUSINESS_ULTRA_TEXT_COST: undefined,
+			MAX_REQUEST_BUSINESS_MAX_TEXT_COST: undefined,
+			MAX_REQUEST_BUSINESS_ULTRA_TEXT_COST: undefined,
+		});
+		expect(loadHostedAiTextCostControls(env).monthly).toMatchObject({
+			business: 203,
+			business_max: 203,
+			business_ultra: 203,
 		});
 	});
 
@@ -104,7 +140,7 @@ describe('private hosted AI cost controls', () => {
 		expect(resolveHostedAiTextCostLimits('business', env, true)).toMatchObject({
 			request: 0.04,
 			daily: 0.3,
-			monthly: 2,
+			monthly: 1.5,
 		});
 	});
 

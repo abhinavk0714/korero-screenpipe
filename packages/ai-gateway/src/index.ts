@@ -62,6 +62,8 @@ import {
 	getHostedAiAllowedModels,
 	getHostedAiIncludedCredits,
 	getHostedAiPlan,
+	getHostedAiTrialIncludedCredits,
+	hasBusinessHostedAiAccess,
 	hasPaidHostedAiPlan,
 	isHostedAiUpgradeEligible,
 } from './services/hosted-ai-policy';
@@ -184,7 +186,7 @@ async function handleMeteredTinfoilRequest(
 		settlement_id: reservation.reservation?.key,
 		device_id: auth.deviceId,
 		user_id: auth.userId,
-		tier: auth.tier,
+		tier: auth.usageTier ?? auth.tier,
 		hosted_ai_trial: auth.hostedAiTrial === true,
 		provider: 'tinfoil',
 		model,
@@ -244,7 +246,7 @@ async function handleMeteredVoiceAiRequest(
 		settlement_id: reservation.reservation?.key,
 		device_id: auth.deviceId,
 		user_id: auth.userId,
-		tier: auth.tier,
+		tier: auth.usageTier ?? auth.tier,
 		hosted_ai_trial: auth.hostedAiTrial === true,
 		provider: inferProvider(model),
 		model,
@@ -287,7 +289,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 		const authResult = await validateAuth(request, env);
 		const usageTier = authResult.usageTier ?? authResult.tier;
 		console.log('auth result:', {
-			tier: authResult.tier,
+			tier: usageTier,
 			usageTier,
 			deviceId: authResult.deviceId,
 		});
@@ -356,7 +358,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				// Admission still fails closed. The status route stays available but
 				// marks usage unknown instead of pretending the customer spent zero.
 			}
-			const includedCredits = getHostedAiIncludedCredits(usageAccountPlan);
+			const includedCredits = authResult.hostedAiTrial === true
+				? getHostedAiTrialIncludedCredits()
+				: getHostedAiIncludedCredits(usageAccountPlan);
 			const usedCredits = monthlyCost === null ? null : Math.ceil(monthlyCost * 100);
 			const enriched = {
 				...status,
@@ -513,7 +517,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			if (!rateLimit.allowed && rateLimit.response) {
 				console.warn('hosted AI admission rejected', {
 					gate: 'per_minute',
-					tier: authResult.tier,
+					tier: usageTier,
 					accountPlan: authResult.accountPlan,
 				});
 				return rateLimit.response;
@@ -525,7 +529,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			if (!usage.allowed) {
 				console.warn('hosted AI admission rejected', {
 					gate: 'daily_query',
-					tier: authResult.tier,
+					tier: usageTier,
 					accountPlan: authResult.accountPlan,
 				});
 				const creditsExhausted = (usage.creditsRemaining ?? 0) <= 0;
@@ -601,7 +605,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				console.warn('hosted AI admission rejected', {
 					gate: 'cost_reservation',
 					reason: rejectionReason,
-					tier: authResult.tier,
+					tier: usageTier,
 					accountPlan: authResult.accountPlan,
 					hostedAiTrial: authResult.hostedAiTrial === true,
 					status: costReservation.response.status,
@@ -678,7 +682,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					authResult.service === true,
 					{
 						freePreview: freeChat.mode === 'metered',
-						efficientOnly: getHostedAiPlan(authResult.accountPlan) !== 'business',
+						efficientOnly: !hasBusinessHostedAiAccess(authResult.accountPlan),
 					},
 				);
 				const latencyMs = Date.now() - reqStart;
@@ -707,7 +711,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						settlement_id: dailyCostReservation?.key,
 						device_id: authResult.deviceId,
 						user_id: authResult.userId,
-						tier: authResult.tier,
+						tier: usageTier,
 						hosted_ai_trial: authResult.hostedAiTrial === true,
 						provider: inferProvider(servedModel),
 						model: pricedModel,
@@ -754,7 +758,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 								settlement_id: dailyCostReservation?.key,
 								device_id: authResult.deviceId,
 								user_id: authResult.userId,
-								tier: authResult.tier,
+								tier: usageTier,
 								hosted_ai_trial: authResult.hostedAiTrial === true,
 								provider: inferProvider(servedModel),
 								model: pricedModel,
@@ -850,7 +854,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				settlement_id: costReservation.reservation?.key,
 				device_id: authResult.deviceId,
 				user_id: authResult.userId,
-				tier: authResult.tier,
+				tier: usageTier,
 				hosted_ai_trial: authResult.hostedAiTrial === true,
 				provider: 'google',
 				model: 'gemini-2.5-flash',
@@ -910,7 +914,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				ctx.waitUntil(logCost(env, {
 					device_id: authResult.deviceId,
 					user_id: authResult.userId,
-					tier: authResult.tier,
+					tier: usageTier,
 					provider: 'deepgram',
 					model: 'nova-3',
 					input_tokens: Math.round(estimatedSeconds),
@@ -1085,7 +1089,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					settlement_id: costReservation.reservation?.key,
 					device_id: authResult.deviceId,
 					user_id: authResult.userId,
-					tier: authResult.tier,
+					tier: usageTier,
 					hosted_ai_trial: authResult.hostedAiTrial === true,
 					provider: inferProvider(parsedModel),
 					model: parsedModel,
@@ -1125,7 +1129,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 							settlement_id: costReservation.reservation?.key,
 							device_id: authResult.deviceId,
 							user_id: authResult.userId,
-							tier: authResult.tier,
+							tier: usageTier,
 							hosted_ai_trial: authResult.hostedAiTrial === true,
 							provider: inferProvider(parsedModel),
 							model: parsedModel,
@@ -1241,7 +1245,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					settlement_id: costReservation.reservation?.key,
 					device_id: authResult.deviceId,
 					user_id: authResult.userId,
-					tier: authResult.tier,
+					tier: usageTier,
 					hosted_ai_trial: authResult.hostedAiTrial === true,
 					provider: inferProvider(ocModel),
 					model: ocModel,
@@ -1281,7 +1285,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 							settlement_id: costReservation.reservation?.key,
 							device_id: authResult.deviceId,
 							user_id: authResult.userId,
-							tier: authResult.tier,
+							tier: usageTier,
 							hosted_ai_trial: authResult.hostedAiTrial === true,
 							provider: inferProvider(ocModel),
 							model: ocModel,
@@ -1321,7 +1325,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					message: 'OpenCode requires authentication. Please log in to screenpipe.',
 				})));
 			}
-			if (getHostedAiPlan(authResult.accountPlan) !== 'business') {
+			if (!hasBusinessHostedAiAccess(authResult.accountPlan)) {
 				return modelNotAllowedResponse(authResult, 'anthropic frontier models');
 			}
 			console.log('OpenCode Anthropic models request');

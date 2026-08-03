@@ -6,7 +6,7 @@ import { Env, UserTier, UsageTier, TierLimits, UsageResult, UsageStatus, type Ac
 import { isGooglePolicyBlockedModel } from '../utils/model-policy';
 import {
   getHostedAiAllowedModels,
-  getHostedAiPlan,
+  hasBusinessHostedAiAccess,
   isHostedAiModelAllowed,
 } from './hosted-ai-policy';
 import { hasPricing } from './cost-tracker';
@@ -508,7 +508,7 @@ export async function getUsageStatus(
     model_access: [...getHostedAiAllowedModels(accountPlan)],
     // Server-controlled visibility for the app's at-the-cap banner. Only
     // non-Business tiers, and suppressed entirely by the master kill-switch.
-    upsell_banner: getHostedAiPlan(accountPlan) !== 'business' && isModelGatingEnabled(env),
+    upsell_banner: !hasBusinessHostedAiAccess(accountPlan) && isModelGatingEnabled(env),
   };
 
   // Fetch credit balance if user is logged in

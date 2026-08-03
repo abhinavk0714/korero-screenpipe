@@ -9,6 +9,8 @@ import {
 	getHostedAiIncludedCredits,
 	getHostedAiIncludedProviderCostUsd,
 	getHostedAiPlan,
+	getHostedAiTrialIncludedCredits,
+	getHostedAiTrialIncludedProviderCostUsd,
 	hasPaidHostedAiPlan,
 	isHostedAiModelAllowed,
 	isHostedAiUpgradeEligible,
@@ -52,9 +54,15 @@ describe('hosted AI model products', () => {
 		expect(isHostedAiModelAllowed('claude-opus-5', 'basic')).toBe(false);
 	});
 
-	it('maps Business, Team, and Enterprise to frontier access', () => {
-		for (const plan of ['business', 'business_max', 'business_ultra', 'team', 'enterprise'] as const) {
-			expect(getHostedAiPlan(plan)).toBe('business');
+	it('keeps power-plan identity while sharing frontier model access', () => {
+		for (const [plan, hostedPlan] of [
+			['business', 'business'],
+			['business_max', 'business_max'],
+			['business_ultra', 'business_ultra'],
+			['team', 'business'],
+			['enterprise', 'business'],
+		] as const) {
+			expect(getHostedAiPlan(plan)).toBe(hostedPlan);
 			expect(isHostedAiModelAllowed('claude-fable-5', plan)).toBe(true);
 			expect(isHostedAiModelAllowed('gpt-5.6-sol', plan)).toBe(true);
 			expect(isHostedAiModelAllowed('future-unpriced-frontier', plan)).toBe(false);
@@ -63,14 +71,19 @@ describe('hosted AI model products', () => {
 
 	it.each([
 		['free', 10, 0.1],
-		['basic', 150, 1.5],
-		['business', 400, 4],
-		['business_max', 400, 4],
-		['business_ultra', 400, 4],
-		['team', 400, 4],
-		['enterprise', 400, 4],
+		['basic', 300, 3],
+		['business', 800, 8],
+		['business_max', 2_000, 20],
+		['business_ultra', 5_000, 50],
+		['team', 800, 8],
+		['enterprise', 800, 8],
 	] as const)('keeps %s credits and provider-cost allowance aligned', (plan, credits, costUsd) => {
 		expect(getHostedAiIncludedCredits(plan)).toBe(credits);
 		expect(getHostedAiIncludedProviderCostUsd(plan)).toBe(costUsd);
+	});
+
+	it('keeps temporary trials on one bounded allowance regardless of paid-plan label', () => {
+		expect(getHostedAiTrialIncludedCredits()).toBe(150);
+		expect(getHostedAiTrialIncludedProviderCostUsd()).toBe(1.5);
 	});
 });

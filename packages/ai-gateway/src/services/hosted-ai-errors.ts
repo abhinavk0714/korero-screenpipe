@@ -13,6 +13,7 @@ import {
 import {
 	getHostedAiAllowedModels,
 	getHostedAiPlan,
+	hasBusinessHostedAiAccess,
 	hasPaidHostedAiPlan,
 	isHostedAiModelAllowed,
 } from './hosted-ai-policy';
@@ -33,7 +34,7 @@ export function modelNotAllowedResponse(auth: AuthResult, model: string): Respon
 	const currentPlan = getHostedAiPlan(auth.accountPlan);
 	const requiredPlan = auth.accountPlan === 'free' && isHostedAiModelAllowed(model, 'basic')
 		? 'basic'
-		: currentPlan === 'business'
+		: hasBusinessHostedAiAccess(auth.accountPlan)
 			? null
 			: 'business';
 	return addCorsHeaders(createErrorResponse(403, JSON.stringify({

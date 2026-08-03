@@ -4,7 +4,12 @@
 
 import type { AccountPlan, AuthResult } from '../types';
 
-export type HostedAiPlan = 'free' | 'basic' | 'business';
+export type HostedAiPlan =
+	| 'free'
+	| 'basic'
+	| 'business'
+	| 'business_max'
+	| 'business_ultra';
 
 const BASIC_HOSTED_MODELS = [
 	'auto',
@@ -49,14 +54,14 @@ export function hasPaidHostedAiPlan(auth: AuthResult): boolean {
 	return PAID_HOSTED_AI_PLANS.has(auth.accountPlan);
 }
 
-/** Collapse commercial variants to the three model-access and credit policies. */
+/** Keep paid power plans distinct so their included provider budgets cannot collapse. */
 export function getHostedAiPlan(accountPlan: AccountPlan): HostedAiPlan | null {
 	switch (accountPlan) {
 		case 'free': return 'free';
 		case 'basic': return 'basic';
-		case 'business':
-		case 'business_max':
-		case 'business_ultra':
+		case 'business': return 'business';
+		case 'business_max': return 'business_max';
+		case 'business_ultra': return 'business_ultra';
 		case 'team':
 		case 'enterprise':
 			return 'business';
@@ -70,24 +75,44 @@ export function getHostedAiAllowedModels(accountPlan: AccountPlan): readonly str
 	switch (getHostedAiPlan(accountPlan)) {
 		case 'free': return FREE_HOSTED_MODELS;
 		case 'basic': return BASIC_HOSTED_MODELS;
-		case 'business': return BUSINESS_HOSTED_MODELS;
+		case 'business':
+		case 'business_max':
+		case 'business_ultra':
+			return BUSINESS_HOSTED_MODELS;
 		default: return [];
 	}
+}
+
+/** Business-family plans share the reviewed frontier catalog, not the cash envelope. */
+export function hasBusinessHostedAiAccess(accountPlan: AccountPlan): boolean {
+	const plan = getHostedAiPlan(accountPlan);
+	return plan === 'business' || plan === 'business_max' || plan === 'business_ultra';
 }
 
 /** Customer-facing credits advertised by the public plan contract. */
 export function getHostedAiIncludedCredits(accountPlan: AccountPlan): number {
 	switch (getHostedAiPlan(accountPlan)) {
 		case 'free': return 10;
-		case 'basic': return 150;
-		case 'business': return 400;
+		case 'basic': return 300;
+		case 'business': return 800;
+		case 'business_max': return 2_000;
+		case 'business_ultra': return 5_000;
 		default: return 0;
 	}
+}
+
+/** Temporary trials and manual grants share one bounded, non-resetting pool. */
+export function getHostedAiTrialIncludedCredits(): number {
+	return 150;
 }
 
 /** One hosted-AI credit is one cent of screenpipe-paid provider usage. */
 export function getHostedAiIncludedProviderCostUsd(accountPlan: AccountPlan): number {
 	return getHostedAiIncludedCredits(accountPlan) / 100;
+}
+
+export function getHostedAiTrialIncludedProviderCostUsd(): number {
+	return getHostedAiTrialIncludedCredits() / 100;
 }
 
 export function isHostedAiModelAllowed(model: string, accountPlan: AccountPlan): boolean {
