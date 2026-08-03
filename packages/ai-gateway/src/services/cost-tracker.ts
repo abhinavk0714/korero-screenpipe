@@ -585,6 +585,9 @@ export async function logCost(env: Env, entry: CostLogEntry): Promise<boolean> {
     const lane = entry.lane ?? 'interactive';
     const hostedAiTrial = entry.hosted_ai_trial === true;
     const deviceId = entry.device_id ?? '';
+    const ledgerEpoch = entry.cost_ledger_epoch?.trim() || costLedgerEpoch(env);
+    const totalLedgerEpoch = entry.cost_total_ledger_epoch?.trim()
+      || totalCostLedgerEpoch(env, hostedAiTrial);
     return recordHostedAiSettlement(env, {
       settlementId: entry.settlement_id,
       deviceId,
@@ -594,19 +597,20 @@ export async function logCost(env: Env, entry: CostLogEntry): Promise<boolean> {
       hour: utcHour(now),
       lane,
       hostedAiTrial,
-      ledgerEpoch: costLedgerEpoch(env),
+      ledgerEpoch,
       monthlyKey: hostedAiTrial
         ? trialCostKey(deviceId)
         : monthlyCostKey(deviceId),
       backgroundDailyKey: dailyLaneCostKey(
         deviceId,
         'background',
-        costLedgerEpoch(env),
+        ledgerEpoch,
       ),
       backgroundTotalKey: totalLaneCostKey(
         deviceId,
         'background',
         hostedAiTrial,
+        totalLedgerEpoch,
       ),
       globalDailyKey: GLOBAL_DAILY_COST_KEY,
       globalHourlyKey: GLOBAL_HOURLY_COST_KEY,

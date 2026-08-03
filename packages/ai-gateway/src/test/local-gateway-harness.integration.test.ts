@@ -102,7 +102,8 @@ describe('local AI gateway harness', () => {
 		expect(contract).toMatchObject({
 			error: 'daily_cost_limit_exceeded',
 			plan: 'business',
-			required_plan: 'business_max',
+			required_plan: null,
+			upgrade_url: null,
 			can_buy_credits: false,
 			byok_supported: true,
 		});
