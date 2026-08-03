@@ -142,8 +142,9 @@ pub async fn store_cloud_token(token: Option<&str>) -> anyhow::Result<()> {
 /// into the SecretStore, seed the cache, then scrub the plaintext copies.
 /// Idempotent and best-effort — safe to call on every startup.
 pub async fn migrate_plaintext_token(data_dir: &Path) -> Option<String> {
+    let read_key = screenpipe_secrets::keychain::get_key_for_read();
     match write_encryption_key() {
-        Ok(key) => migrate_at(data_dir, key).await,
+        Ok(write_key) => migrate_at(data_dir, read_key, write_key).await,
         Err(e) => {
             // Encryption is on but the keychain is denying access right now.
             // Don't write secrets at a lower protection level and don't touch
@@ -157,7 +158,11 @@ pub async fn migrate_plaintext_token(data_dir: &Path) -> Option<String> {
     }
 }
 
-async fn migrate_at(data_dir: &Path, key: Option<[u8; 32]>) -> Option<String> {
+async fn migrate_at(
+    data_dir: &Path,
+    read_key: Option<[u8; 32]>,
+    write_key: Option<[u8; 32]>,
+) -> Option<String> {
     let store_path = data_dir.join("store.bin");
 
     // Resolve the token, in priority order: SecretStore (already migrated) →
@@ -167,7 +172,7 @@ async fn migrate_at(data_dir: &Path, key: Option<[u8; 32]>) -> Option<String> {
     let from_secret = if data_dir.join("db.sqlite").exists()
         || screenpipe_secrets::secrets_database_path(data_dir).exists()
     {
-        load_session_token_at(data_dir, key).await
+        load_session_token_at(data_dir, read_key).await
     } else {
         None
     };
@@ -177,7 +182,7 @@ async fn migrate_at(data_dir: &Path, key: Option<[u8; 32]>) -> Option<String> {
     // is GATED on this succeeding — never drop the last plaintext copy.
     if from_secret.is_none() {
         if let Some(ref t) = token {
-            if let Err(e) = store_token_at(data_dir, key, Some(t)).await {
+            if let Err(e) = store_token_at(data_dir, write_key, Some(t)).await {
                 tracing::warn!(
                     "auth-token migration: failed to persist to secret store, \
                      leaving plaintext in place (#3943): {}",
@@ -533,7 +538,7 @@ mod tests {
         )
         .unwrap();
 
-        let got = migrate_at(&dir, None).await;
+        let got = migrate_at(&dir, None, None).await;
         assert_eq!(got, Some(JWT.to_string()));
         assert_eq!(read_back(&dir, None).await, Some(JWT.to_string()));
         let after = std::fs::read(dir.join("store.bin")).unwrap();
@@ -692,7 +697,7 @@ mod tests {
             Some("jwt-enc".to_string())
         );
         // Raw db bytes must not contain the plaintext token.
-        let raw = std::fs::read(dir.join("db.sqlite")).unwrap();
+        let raw = std::fs::read(screenpipe_secrets::secrets_database_path(&dir)).unwrap();
         assert!(
             !raw.windows(7).any(|w| w == b"jwt-enc"),
             "token must not appear in plaintext in the encrypted db"
@@ -716,7 +721,7 @@ mod tests {
         )
         .unwrap();
 
-        let got = migrate_at(&dir, None).await;
+        let got = migrate_at(&dir, None, None).await;
         assert_eq!(got, Some(JWT.to_string()));
         // Now in the SecretStore...
         assert_eq!(read_back(&dir, None).await, Some(JWT.to_string()));
@@ -731,7 +736,7 @@ mod tests {
     async fn migrate_from_auth_json_moves_token() {
         let dir = unique_dir("mig_auth");
         std::fs::write(dir.join("auth.json"), format!(r#"{{"token":"{JWT}"}}"#)).unwrap();
-        let got = migrate_at(&dir, None).await;
+        let got = migrate_at(&dir, None, None).await;
         assert_eq!(got, Some(JWT.to_string()));
         assert_eq!(read_back(&dir, None).await, Some(JWT.to_string()));
     }
@@ -745,7 +750,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.join("auth.json"), format!(r#"{{"token":"{JWT_ALT}"}}"#)).unwrap();
-        assert_eq!(migrate_at(&dir, None).await, Some(JWT.to_string()));
+        assert_eq!(migrate_at(&dir, None, None).await, Some(JWT.to_string()));
         assert_eq!(read_back(&dir, None).await, Some(JWT.to_string()));
     }
 
@@ -761,7 +766,7 @@ mod tests {
         )
         .unwrap();
 
-        let got = migrate_at(&dir, None).await;
+        let got = migrate_at(&dir, None, None).await;
         // SecretStore wins — the stale plaintext does NOT overwrite it.
         assert_eq!(got, Some(JWT.to_string()));
         assert_eq!(read_back(&dir, None).await, Some(JWT.to_string()));
@@ -776,7 +781,7 @@ mod tests {
     async fn migrate_no_token_anywhere_is_noop() {
         let dir = unique_dir("mig_empty");
         // No store.bin, no auth.json, empty db → resolves to nothing, no panic.
-        assert_eq!(migrate_at(&dir, None).await, None);
+        assert_eq!(migrate_at(&dir, None, None).await, None);
         assert!(!dir.join("store.bin.scrub.tmp").exists());
     }
 
@@ -786,7 +791,7 @@ mod tests {
         // not create db.sqlite (the engine owns that), avoiding a bare-connection
         // db ahead of the engine's setup.
         let dir = unique_dir("mig_fresh");
-        assert_eq!(migrate_at(&dir, None).await, None);
+        assert_eq!(migrate_at(&dir, None, None).await, None);
         assert!(
             !dir.join("db.sqlite").exists(),
             "migration must not create db.sqlite when there's nothing to migrate"
@@ -806,7 +811,7 @@ mod tests {
             br#"{"settings":{"user":{"token":"jwt"},"aiPresets":[{"id":"x"}]}}"#,
         )
         .unwrap();
-        migrate_at(&dir, None).await;
+        migrate_at(&dir, None, None).await;
         assert_eq!(
             token_from_store_bytes(&std::fs::read(dir.join("store.bin.last-good")).unwrap()),
             None,
@@ -825,7 +830,7 @@ mod tests {
         let store_json = format!(r#"{{"settings":{{"user":{{"token":"{JWT}"}}}}}}"#);
         std::fs::write(dir.join("store.bin"), store_json.as_bytes()).unwrap();
 
-        let got = migrate_at(&dir, None).await;
+        let got = migrate_at(&dir, None, None).await;
         // Token is still resolved (from store.bin) and cached for the session...
         assert_eq!(got, Some(JWT.to_string()));
         // ...but the plaintext copy is preserved because persistence failed.

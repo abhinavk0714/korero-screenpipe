@@ -55,13 +55,7 @@ pub struct ChatGptOAuthStatus {
 /// SQLx chain reaches the log.
 async fn open_secret_store() -> Result<screenpipe_secrets::SecretStore, String> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-
-    let secret_key = match crate::secrets::get_key_if_encryption_enabled() {
-        crate::secrets::KeyResult::Found(k) => Some(k),
-        _ => None,
-    };
-
-    screenpipe_secrets::SecretStore::open_for_data_dir(&data_dir, secret_key)
+    screenpipe_secrets::SecretStore::open_for_data_dir_with_vault_key(&data_dir)
         .await
         .map_err(|e| format!("failed to init secret store: {:#}", e))
 }

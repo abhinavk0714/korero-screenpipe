@@ -3101,11 +3101,7 @@ async fn await_prompt_start(
 
 async fn open_secret_store_for_connection_context() -> Option<screenpipe_secrets::SecretStore> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-    let secret_key = match crate::secrets::get_key_if_encryption_enabled() {
-        crate::secrets::KeyResult::Found(k) => Some(k),
-        _ => None,
-    };
-    screenpipe_secrets::SecretStore::open_for_data_dir(&data_dir, secret_key)
+    screenpipe_secrets::SecretStore::open_for_data_dir_with_vault_key(&data_dir)
         .await
         .ok()
 }

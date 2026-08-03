@@ -1406,26 +1406,20 @@ fn read_chatgpt_token_from_legacy_file() -> Option<String> {
 /// Read and refresh ChatGPT token from the encrypted secrets store.
 #[cfg(feature = "secrets")]
 fn read_chatgpt_token_from_secrets() -> Option<String> {
-    use screenpipe_secrets::keychain::{get_key, KeyResult};
-
     let data_dir = crate::paths::default_screenpipe_data_dir();
     let db_path = data_dir.join("db.sqlite");
     if !db_path.exists() && !screenpipe_secrets::secrets_database_path(&data_dir).exists() {
         return None;
     }
 
-    let secret_key = match get_key() {
-        KeyResult::Found(k) => Some(k),
-        _ => None,
-    };
-
     // We're in a sync context but need async for sqlx. Use block_in_place
     // since the caller is always on a tokio runtime.
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let store = screenpipe_secrets::SecretStore::open_for_data_dir(&data_dir, secret_key)
-                .await
-                .ok()?;
+            let store =
+                screenpipe_secrets::SecretStore::open_for_data_dir_with_vault_key(&data_dir)
+                    .await
+                    .ok()?;
             let bytes = store.get("oauth:chatgpt").await.ok()??;
             let mut token_data: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
 
