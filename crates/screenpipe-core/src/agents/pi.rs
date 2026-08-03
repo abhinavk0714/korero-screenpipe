@@ -428,10 +428,10 @@ impl PiExecutor {
     ///
     /// This skill teaches pi how to query org-wide telemetry (devices,
     /// search, records) via `https://screenpi.pe/api/enterprise/v1/*`. It
-    /// MUST only be present when the user is an enterprise admin with an
-    /// active license, because exposing the prompts to non-admins is
-    /// misleading (every call would 403) and dropping it onto a personal
-    /// build leaks our enterprise affordances.
+    /// MUST only be present inside the separately distributed Enterprise app
+    /// when the user is an admin with an active license, because exposing the
+    /// prompts to non-admins is misleading (every call would 403) and dropping
+    /// it onto the consumer app leaks our enterprise affordances.
     ///
     /// Source of truth: `~/.screenpipe/enterprise.json`. The Tauri host
     /// keeps that file populated with `{is_admin, license_active,
@@ -488,10 +488,12 @@ impl PiExecutor {
         }
     }
 
-    /// True when `~/.screenpipe/enterprise.json` declares this user as an
-    /// active admin AND the user is signed into screenpipe cloud (the
-    /// Clerk JWT at `~/.screenpipe/auth.json` is what authenticates the
-    /// skill's HTTP calls to `screenpi.pe/api/enterprise/v1`).
+    /// True only in the Enterprise app when `~/.screenpipe/enterprise.json`
+    /// declares this user as an active admin AND the user is signed into
+    /// screenpipe cloud (the Clerk JWT at `~/.screenpipe/auth.json` is what
+    /// authenticates the skill's HTTP calls to
+    /// `screenpi.pe/api/enterprise/v1`). The app-build check matters when the
+    /// consumer and Enterprise apps share `~/.screenpipe` on one machine.
     ///
     /// Conservative: any I/O or parse error means "no" so we fail closed —
     /// we'd rather under-install the skill than show team affordances to
@@ -500,6 +502,10 @@ impl PiExecutor {
     /// admin status on every call and returns 403, so this client-side
     /// check is defense-in-depth, not the security boundary.
     fn is_enterprise_admin() -> bool {
+        if !cfg!(feature = "enterprise-build") {
+            return false;
+        }
+
         let home = match dirs::home_dir() {
             Some(h) => h,
             None => return false,
@@ -3662,6 +3668,24 @@ pub fn ensure_bash_available() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_pipe_guidance_only_ships_in_enterprise_team_skill() {
+        let consumer_skill = include_str!("../../assets/skills/screenpipe-cli/SKILL.md");
+        let enterprise_skill = include_str!("../../assets/skills/screenpipe-team/SKILL.md");
+
+        assert!(!consumer_skill.contains("Enterprise Team Pipes"));
+        assert!(!consumer_skill.contains("screenpipe team pipes"));
+        assert!(enterprise_skill.contains("screenpipe team pipes list"));
+        assert!(enterprise_skill.contains("screenpipe team pipes schedule"));
+        assert!(enterprise_skill.contains("only inside the Enterprise app"));
+    }
+
+    #[cfg(not(feature = "enterprise-build"))]
+    #[test]
+    fn consumer_build_never_enables_enterprise_team_skill() {
+        assert!(!PiExecutor::is_enterprise_admin());
+    }
 
     #[cfg(windows)]
     #[test]

@@ -146,54 +146,6 @@ Pipes can produce user-facing output files that appear in the Artifacts library.
 
 ---
 
-## Enterprise Team Pipes
-
-Organization admins can deploy and schedule hosted managed Pipes through the
-same CLI. These commands call the Enterprise control plane directly; the local
-screenpipe daemon does not need to be running.
-
-Mint an admin token with `write:pipes` at
-`https://screenpi.pe/enterprise?tab=tokens`, store it as `team_api_token` in
-`~/.screenpipe/enterprise.json`, or export `SCREENPIPE_TEAM_API_TOKEN`.
-
-```bash
-bun x screenpipe@latest team pipes list
-bun x screenpipe@latest team pipes preview ./daily-review/pipe.md
-bun x screenpipe@latest team pipes deploy ./daily-review/pipe.md
-bun x screenpipe@latest team pipes schedule daily-review "every 1h"
-```
-
-`deploy` and `schedule` always preview first, showing the version transition,
-execution scope, schedule, and changed fields. They then require an interactive
-confirmation. For reviewed CI/agent automation, add `--yes`; the API still uses
-the previewed `expected_version` and returns `409 version_conflict` instead of
-overwriting a teammate's newer edit.
-
-New deployments default to **Cloud Runner only**. Broaden the target only when
-the user explicitly asks:
-
-```bash
-# selected devices only
-bun x screenpipe@latest team pipes deploy ./pipe.md --device DEVICE_ID
-
-# Cloud Runner plus selected devices
-bun x screenpipe@latest team pipes deploy ./pipe.md --cloud --device DEVICE_ID
-
-# selected members' devices
-bun x screenpipe@latest team pipes deploy ./pipe.md --member admin@example.com
-
-# every runtime in the organization
-bun x screenpipe@latest team pipes deploy ./pipe.md --all-runtimes
-```
-
-Use `preview` when the user has not approved a deployment. Use `--json` for
-machine-readable list or receipt output. `SCREENPIPE_TEAM_API_URL` can override
-the full Enterprise v1 base for staging; managed Pipe writes otherwise stay on
-the hosted control plane even when the organization has a customer query
-gateway.
-
----
-
 ## Connection Management
 
 Manage integrations (Telegram, Slack, Discord, Email, Todoist, Teams) from the CLI.

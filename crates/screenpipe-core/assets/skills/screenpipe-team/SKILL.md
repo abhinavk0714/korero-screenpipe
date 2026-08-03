@@ -1,6 +1,6 @@
 ---
 name: screenpipe-team
-description: Query the org's screenpipe telemetry and manage hosted team Pipes as an enterprise admin. Use for team devices, recent activity, organization search, or creating, previewing, deploying, and scheduling managed Pipes. The skill is only installed for enterprise admins; ordinary users won't see it.
+description: Query the org's screenpipe telemetry and manage hosted team Pipes as an enterprise admin. Use for team devices, recent activity, organization search, or creating, previewing, deploying, and scheduling managed Pipes. Screenpipe installs this skill only inside the Enterprise app after verifying an active admin license and admin API token; consumer-app users never receive it.
 ---
 
 # Screenpipe Team
