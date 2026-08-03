@@ -20,8 +20,8 @@ export function buildPipeStoreSubmissionMailto({
   const label = cleanName || cleanSlug;
   const action = kind === "update" ? "update" : "submission";
   const subject = label
-    ? `Scheduled Store ${action}: ${label}`
-    : `Scheduled Store ${action}`;
+    ? `Screenpipe Store ${action}: ${label}`
+    : `Screenpipe Store ${action}`;
 
   const body = [
     "Hi Louis,",

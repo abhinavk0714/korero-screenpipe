@@ -353,12 +353,19 @@ export function PipeStoreView() {
   }, [installedCount]);
 
   const tabs = [
-    { key: "my-pipes" as const, label: "My Scheduled" },
+    { key: "my-pipes" as const, label: "My tasks" },
     { key: "discover" as const, label: "Discover" },
   ];
 
   return (
     <div className="space-y-4">
+      <div className="space-y-1">
+        <h1 className="text-2xl font-semibold tracking-tight">Scheduled tasks</h1>
+        <p className="text-sm text-muted-foreground">
+          Run tasks on a schedule, after meetings, or when events happen.
+        </p>
+      </div>
+
       {/* Tab bar */}
       <div className="flex items-center gap-6 border-b border-border pb-0 mb-6">
         {tabs.map(({ key, label }) => (
@@ -722,7 +729,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
 
       toast({
         title: `"${pipeName}" installed`,
-        description: "switch to my scheduled to configure and run it",
+        description: "open My tasks to configure and run it",
       });
       // Invalidate cache and update installed names
       apiCache.invalidate("pipes/installed");
@@ -929,7 +936,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
             scheduled tasks are AI automations that run on your screen data
           </p>
           <p className="text-sm text-muted-foreground mt-1">
-            they can summarize your day, track your time, build a digital memory, sync notes to obsidian, auto-update your CRM, and more. install one below to get started — click GET, then enable it in My Scheduled.
+            they can summarize your day, track your time, build a digital memory, sync notes to obsidian, auto-update your CRM, and more. install one below to get started — click GET, then enable it in My tasks.
           </p>
         </div>
       )}

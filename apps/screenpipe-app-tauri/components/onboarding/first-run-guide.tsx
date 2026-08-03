@@ -31,6 +31,8 @@ interface FirstRunGuideProps {
 }
 
 const PROMPT = "create a scheduled task that tracks what i do every hour";
+const LEGACY_PROMPT = "create a pipe that tracks what i do every hour";
+const GUIDE_PROMPTS = new Set([PROMPT, LEGACY_PROMPT]);
 const SKIP_BUTTON_CLASS =
   "mt-3 w-full border border-foreground/40 py-2 font-mono text-[11px] uppercase tracking-widest text-foreground transition-colors hover:bg-foreground hover:text-background focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2";
 
@@ -241,7 +243,7 @@ export default function FirstRunGuide({
       const ta = document.querySelector<HTMLTextAreaElement>(
         '[data-firstrun-target="composer"] textarea',
       );
-      if (ta && ta.value === PROMPT) {
+      if (ta && GUIDE_PROMPTS.has(ta.value)) {
         // Go through the native setter + input event so React's controlled
         // state stays in sync with the DOM.
         const setter = Object.getOwnPropertyDescriptor(

@@ -119,7 +119,7 @@ export function NotificationPipeControls({
   if (pipeRows.length === 0) {
     return (
       <div className="px-3 py-4 text-xs text-muted-foreground">
-        no scheduled tasks installed yet. install one from the Scheduled Store and it&apos;ll
+        no scheduled tasks installed yet. install one from the Store and it&apos;ll
         show up here.
       </div>
     );

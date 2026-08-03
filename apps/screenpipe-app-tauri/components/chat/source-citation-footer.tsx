@@ -50,7 +50,7 @@ const KIND_LABEL: Record<SourceCitationKind, string> = {
   web: "web",
   file: "file",
   memory: "memory",
-  pipe: "scheduled",
+  pipe: "scheduled task",
   command: "cmd",
 };
 

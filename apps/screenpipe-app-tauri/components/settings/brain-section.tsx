@@ -1496,7 +1496,7 @@ export function BrainSection() {
               href="?section=pipes&tab=discover&q=memory"
               className="underline hover:opacity-80 transition-opacity"
             >
-              browse scheduled
+              browse scheduled tasks
             </a>
             .
           </span>
@@ -1983,7 +1983,7 @@ export function BrainSection() {
                   href="?section=pipes&tab=discover"
                   className="underline text-foreground hover:text-foreground/80 transition-colors"
                 >
-                  Scheduled Store
+                  Store
                 </a>{" "}
                 to start building memories.
               </p>

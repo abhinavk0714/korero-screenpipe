@@ -357,7 +357,7 @@ async function loadStoreCandidates(
       throw new OnboardingLiveViewSetupError(
         "store_unavailable",
         "planning",
-        "The Scheduled Store is unavailable. Check your connection and try again.",
+        "The Store is unavailable. Check your connection and try again.",
       );
     }
   }

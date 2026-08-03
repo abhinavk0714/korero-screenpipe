@@ -332,8 +332,8 @@ export function UsageSection() {
   const sourceIcon = (s: "chat" | "pipe" | "both") => {
     switch (s) {
       case "chat": return "Chat";
-      case "pipe": return "Scheduled";
-      case "both": return "Chat + Scheduled";
+      case "pipe": return "Scheduled tasks";
+      case "both": return "Chat + scheduled tasks";
     }
   };
 

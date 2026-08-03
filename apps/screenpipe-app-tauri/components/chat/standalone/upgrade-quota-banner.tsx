@@ -119,7 +119,7 @@ export function UpgradeQuotaBanner() {
               className="h-7 px-2 text-[12px]"
               onClick={onReviewPipes}
             >
-              Review scheduled
+              Review scheduled tasks
             </Button>
           )}
           <Button

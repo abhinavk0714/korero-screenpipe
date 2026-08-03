@@ -38,7 +38,7 @@ export function PipeStoreSubmissionDialog({
         <DialogHeader>
           <DialogTitle>submit your scheduled task</DialogTitle>
           <DialogDescription>
-            Scheduled Store publishing is curated
+            Store publishing is curated
           </DialogDescription>
         </DialogHeader>
 
@@ -79,7 +79,7 @@ export function PipeStoreSubmissionDialog({
           <Button
             size="sm"
             className="text-xs"
-            aria-label={`Email ${PIPE_STORE_SUBMISSION_EMAIL} about a Scheduled Store submission`}
+            aria-label={`Email ${PIPE_STORE_SUBMISSION_EMAIL} about a Screenpipe Store submission`}
             onClick={() => void openUrl(contactHref)}
           >
             <Mail className="h-3.5 w-3.5 mr-1.5" />

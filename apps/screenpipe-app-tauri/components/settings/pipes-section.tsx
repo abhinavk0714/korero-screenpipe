@@ -2311,7 +2311,7 @@ export function PipesSection() {
                   }}
                   className="inline-flex items-center gap-2 px-4 py-2 border border-border text-sm font-medium hover:bg-muted transition-colors"
                 >
-                  or browse the Scheduled Store →
+                  or browse the Store →
                 </button>
               </div>
             )}

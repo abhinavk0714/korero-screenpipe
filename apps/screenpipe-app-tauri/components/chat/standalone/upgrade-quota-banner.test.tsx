@@ -142,7 +142,7 @@ describe("UpgradeQuotaBanner", () => {
       ),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Review scheduled" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review scheduled tasks" }));
     expect(mocks.routerPush).toHaveBeenCalledWith("/?section=pipes");
   });
 

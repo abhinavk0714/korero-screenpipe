@@ -849,7 +849,7 @@ export function ChatHistoryView({
                     ref={searchInputRef}
                     placeholder={
                       tab === "chats" ? "search chats"
-                      : tab === "pipes" ? "search scheduled"
+                      : tab === "pipes" ? "search scheduled tasks"
                       : tab === "archived" ? "search archived"
                       : "search all"
                     }
@@ -904,7 +904,7 @@ export function ChatHistoryView({
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
               <span>
                 {tab === "chats" ? "Loading chats…"
-                  : tab === "pipes" ? "Loading scheduled…"
+                  : tab === "pipes" ? "Loading scheduled tasks…"
                   : "Loading…"}
               </span>
             </div>

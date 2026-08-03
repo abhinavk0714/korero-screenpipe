@@ -382,7 +382,7 @@ export function endpointFamily(path: string): string {
   }
   if (path.startsWith("/meetings")) return "Meetings";
   if (path.startsWith("/speakers")) return "Speakers";
-  if (path.startsWith("/pipes")) return "Scheduled";
+  if (path.startsWith("/pipes")) return "Scheduled tasks";
   return "Screenpipe";
 }
 

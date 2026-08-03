@@ -196,7 +196,7 @@ describe("Hosted AI cost-limit Business recovery", function () {
     await banner.$("button=Upgrade to Business").waitForDisplayed({
       timeout: t(10_000),
     });
-    const reviewPipes = await banner.$("button=Review scheduled");
+    const reviewPipes = await banner.$("button=Review scheduled tasks");
     await reviewPipes.waitForDisplayed({ timeout: t(10_000) });
 
     const screenshot = await saveScreenshot("chat-cost-limit-business-upgrade");
@@ -209,7 +209,7 @@ describe("Hosted AI cost-limit Business recovery", function () {
       {
         timeout: t(10_000),
         interval: 100,
-        timeoutMsg: "Review scheduled did not navigate to the Scheduled section",
+        timeoutMsg: "Review scheduled tasks did not navigate to the Scheduled section",
       },
     );
   });
