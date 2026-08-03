@@ -125,6 +125,7 @@ jobs:
           BASELINE_VERSION: ${{ inputs.baseline_version }}
           ROLLOUT_PERCENTAGE: ${{ inputs.rollout_percentage }}
         run: |
+          set -euo pipefail
           if [[ ! "$CANDIDATE_VERSION" =~ ^[0-9a-fA-F-]{36}$ ]]; then
             echo "candidate_version must be a Cloudflare Worker version UUID" >&2
             exit 2
@@ -135,6 +136,13 @@ jobs:
           fi
           if [[ "$CANDIDATE_VERSION" == "$BASELINE_VERSION" ]]; then
             echo "candidate_version and baseline_version must differ" >&2
+            exit 2
+          fi
+          if ! bunx wrangler deployments status --json \
+            | jq -e --arg baseline "$BASELINE_VERSION" \
+              'any(.versions[]; .version_id == $baseline and .percentage > 0)' \
+              >/dev/null; then
+            echo "baseline_version is not receiving production traffic; refresh before promoting" >&2
             exit 2
           fi
           case "$ROLLOUT_PERCENTAGE" in
