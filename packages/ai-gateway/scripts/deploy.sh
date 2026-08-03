@@ -44,6 +44,11 @@ if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
   exit 1
 fi
 
+# The hosted-AI gates fail closed when private controls are incomplete. Verify
+# every required secret binding exists before changing D1 or uploading code.
+# This reads binding names only; Wrangler never returns secret values.
+bun run bindings:required
+
 # Settlement writes require the additive idempotency ledger. Apply and verify
 # it after local prerequisites pass but before creating a Sentry release or
 # changing Worker traffic. Re-running this migration is safe, and an old Worker
