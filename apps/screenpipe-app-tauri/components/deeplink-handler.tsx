@@ -427,7 +427,7 @@ export function DeeplinkHandler() {
 
         toast({
           title: "recording paused",
-          description: "capture paused — pipes and search still available",
+          description: "capture paused — scheduled tasks and search still available",
         });
       }),
 
