@@ -107,6 +107,28 @@ describe('isModelAllowed', () => {
     expect(isModelAllowed('any-random-model', 'subscribed')).toBe(false);
   });
 
+	it('applies partner model policy even when the normal gate kill-switch is off', () => {
+		const partnerGrant = {
+			campaignId: '33333333-3333-4333-8333-333333333333',
+			redemptionId: '22222222-2222-4222-8222-222222222222',
+			offerVersion: 'partner-business-365d-v1',
+			entitlementPolicy: 'partner_business_v1' as const,
+			aiBudgetUsd: 10_000,
+		};
+		const off = mockEnv({ MODEL_GATING_ENABLED: 'false' });
+		expect(isModelAllowed('auto', 'subscribed', off, 'business', partnerGrant)).toBe(true);
+		expect(isModelAllowed('gpt-5.6-luna', 'subscribed', off, 'business', partnerGrant)).toBe(true);
+		expect(isModelAllowed('claude-fable-5', 'subscribed', off, 'business', partnerGrant)).toBe(false);
+		expect(resolveModelGate(
+			'claude-fable-5',
+			'subscribed',
+			off,
+			true,
+			'business',
+			partnerGrant,
+		)).toBe('downgrade');
+	});
+
   it('should deny DeepSeek models for every tier due to Google user-data policy', () => {
     expect(isModelAllowed('deepseek/deepseek-chat', 'anonymous')).toBe(false);
     expect(isModelAllowed('deepseek-v3.2', 'logged_in')).toBe(false);

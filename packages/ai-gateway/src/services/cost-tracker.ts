@@ -364,9 +364,12 @@ export interface CostLogEntry {
 	transcription_budgeted?: boolean;
 	/** Keep temporary-trial spend in a non-resetting allowance ledger. */
 	hosted_ai_trial?: boolean;
-  // Instrumentation (migration 0007). latency_ms = time to response object
-  // (≈ TTFB for stream, total for non-stream). router_tier = the difficulty
-  // router's decision: 'trivial'|'normal'|'hard' (arm on), 'control' (arm off,
+	/** Privacy-bounded partner attribution; no invite token or member identity. */
+	partner_campaign_id?: string;
+	partner_entitlement_policy?: string;
+	// Instrumentation (migration 0007). latency_ms = time to response object
+	// (≈ TTFB for stream, total for non-stream). router_tier = the difficulty
+	// router's decision: 'trivial'|'normal'|'hard' (arm on), 'control' (arm off,
   // A/B baseline), or null (router N/A: vision/background/explicit/off).
   latency_ms?: number | null;
   router_tier?: string | null;
@@ -614,6 +617,8 @@ export async function logCost(env: Env, entry: CostLogEntry): Promise<boolean> {
       ),
       globalDailyKey: GLOBAL_DAILY_COST_KEY,
       globalHourlyKey: GLOBAL_HOURLY_COST_KEY,
+      partnerCampaignId: entry.partner_campaign_id,
+      partnerEntitlementPolicy: entry.partner_entitlement_policy,
       telemetry: {
         tier: boundedDimension(entry.tier, 'unknown'),
         provider: boundedDimension(entry.provider, 'unknown'),
@@ -794,6 +799,28 @@ export interface SpendSummary {
   };
 }
 
+export interface PartnerSpendSummary {
+  campaign_id: string;
+  range_days: number;
+  lifetime_cost_usd: number;
+  range_cost_usd: number;
+  range_requests: number;
+  daily: Array<{ date: string; cost_usd: number; requests: number }>;
+  by_model: Array<{ model: string; cost_usd: number; requests: number }>;
+  by_provider: Array<{ provider: string; cost_usd: number; requests: number }>;
+}
+
+export interface PartnerSpendOverview {
+  range_days: number;
+  campaigns: Array<{
+    campaign_id: string;
+    entitlement_policy: string;
+    lifetime_cost_usd: number;
+    range_cost_usd: number;
+    range_requests: number;
+  }>;
+}
+
 // One row per (date × model × provider × tier) group — a few hundred rows
 // for a 30-day window, cheap to re-aggregate in JS.
 interface SpendGroupRow {
@@ -899,5 +926,114 @@ export async function getSpendSummary(env: Env, days: number): Promise<SpendSumm
       creation_tokens: cacheCreationTokens,
       estimated_net_savings_usd: cacheSavings,
     },
+  };
+}
+
+export async function getPartnerSpendSummary(
+  env: Env,
+  campaignId: string,
+  days: number,
+): Promise<PartnerSpendSummary> {
+  const rangeDays = Number.isFinite(days) ? Math.min(90, Math.max(1, Math.floor(days))) : 30;
+  const since = new Date();
+  since.setUTCDate(since.getUTCDate() - (rangeDays - 1));
+  const sinceStr = since.toISOString().slice(0, 10);
+  const [lifetime, grouped] = await Promise.all([
+    env.DB.prepare(`
+      SELECT estimated_cost_usd FROM partner_campaign_costs WHERE campaign_id = ?
+    `).bind(campaignId).first<{ estimated_cost_usd: number }>(),
+    env.DB.prepare(`
+      SELECT date, model, provider,
+        COALESCE(SUM(estimated_cost_usd), 0) AS cost_usd,
+        COALESCE(SUM(requests), 0) AS requests
+      FROM partner_cost_daily
+      WHERE campaign_id = ? AND date >= ?
+      GROUP BY date, model, provider
+    `).bind(campaignId, sinceStr).all<{
+      date: string;
+      model: string;
+      provider: string;
+      cost_usd: number;
+      requests: number;
+    }>(),
+  ]);
+  const rows = grouped.results ?? [];
+  const daily = new Map<string, { date: string; cost_usd: number; requests: number }>();
+  const byModel = new Map<string, { model: string; cost_usd: number; requests: number }>();
+  const byProvider = new Map<string, { provider: string; cost_usd: number; requests: number }>();
+  let rangeCost = 0;
+  let rangeRequests = 0;
+  for (const row of rows) {
+    rangeCost += row.cost_usd;
+    rangeRequests += row.requests;
+    const day = daily.get(row.date) ?? { date: row.date, cost_usd: 0, requests: 0 };
+    day.cost_usd += row.cost_usd;
+    day.requests += row.requests;
+    daily.set(row.date, day);
+    const model = byModel.get(row.model) ?? { model: row.model, cost_usd: 0, requests: 0 };
+    model.cost_usd += row.cost_usd;
+    model.requests += row.requests;
+    byModel.set(row.model, model);
+    const provider = byProvider.get(row.provider) ?? { provider: row.provider, cost_usd: 0, requests: 0 };
+    provider.cost_usd += row.cost_usd;
+    provider.requests += row.requests;
+    byProvider.set(row.provider, provider);
+  }
+  return {
+    campaign_id: campaignId,
+    range_days: rangeDays,
+    lifetime_cost_usd: Number(lifetime?.estimated_cost_usd ?? 0),
+    range_cost_usd: rangeCost,
+    range_requests: rangeRequests,
+    daily: [...daily.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    by_model: [...byModel.values()].sort((a, b) => b.cost_usd - a.cost_usd),
+    by_provider: [...byProvider.values()].sort((a, b) => b.cost_usd - a.cost_usd),
+  };
+}
+
+export async function getPartnerSpendOverview(
+  env: Env,
+  days: number,
+): Promise<PartnerSpendOverview> {
+  const rangeDays = Number.isFinite(days) ? Math.min(90, Math.max(1, Math.floor(days))) : 30;
+  const since = new Date();
+  since.setUTCDate(since.getUTCDate() - (rangeDays - 1));
+  const [lifetime, recent] = await Promise.all([
+    env.DB.prepare(`
+      SELECT campaign_id, entitlement_policy, estimated_cost_usd
+      FROM partner_campaign_costs
+    `).all<{
+      campaign_id: string;
+      entitlement_policy: string;
+      estimated_cost_usd: number;
+    }>(),
+    env.DB.prepare(`
+      SELECT campaign_id,
+        COALESCE(SUM(estimated_cost_usd), 0) AS cost_usd,
+        COALESCE(SUM(requests), 0) AS requests
+      FROM partner_cost_daily
+      WHERE date >= ?
+      GROUP BY campaign_id
+    `).bind(since.toISOString().slice(0, 10)).all<{
+      campaign_id: string;
+      cost_usd: number;
+      requests: number;
+    }>(),
+  ]);
+  const recentByCampaign = new Map(
+    (recent.results ?? []).map((row) => [row.campaign_id, row]),
+  );
+  return {
+    range_days: rangeDays,
+    campaigns: (lifetime.results ?? []).map((row) => {
+      const range = recentByCampaign.get(row.campaign_id);
+      return {
+        campaign_id: row.campaign_id,
+        entitlement_policy: row.entitlement_policy,
+        lifetime_cost_usd: Number(row.estimated_cost_usd || 0),
+        range_cost_usd: Number(range?.cost_usd || 0),
+        range_requests: Number(range?.requests || 0),
+      };
+    }).sort((a, b) => b.lifetime_cost_usd - a.lifetime_cost_usd),
   };
 }

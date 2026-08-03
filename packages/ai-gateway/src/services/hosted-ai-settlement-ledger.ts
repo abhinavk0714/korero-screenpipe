@@ -5,6 +5,7 @@
 import type { Env } from '../types';
 
 const MICRO_CENTS_PER_USD = 100_000_000;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type HostedAiSettlementTelemetry = {
 	tier: string;
@@ -36,6 +37,8 @@ export type HostedAiSettlementInput = {
 	backgroundTotalKey: string;
 	globalDailyKey: string;
 	globalHourlyKey: string;
+	partnerCampaignId?: string;
+	partnerEntitlementPolicy?: string;
 	telemetry: HostedAiSettlementTelemetry;
 };
 
@@ -130,6 +133,21 @@ export async function recordHostedAiSettlement(
 		const backgroundTotalKey = safeText(input.backgroundTotalKey, 'background total key');
 		const globalDailyKey = safeText(input.globalDailyKey, 'global daily key');
 		const globalHourlyKey = safeText(input.globalHourlyKey, 'global hourly key');
+		const partnerCampaignId = input.partnerCampaignId
+			? safeText(input.partnerCampaignId, 'partner campaign ID', 64)
+			: null;
+		const partnerEntitlementPolicy = input.partnerEntitlementPolicy
+			? safeText(input.partnerEntitlementPolicy, 'partner entitlement policy', 80)
+			: null;
+		if ((partnerCampaignId === null) !== (partnerEntitlementPolicy === null)) {
+			throw new Error('incomplete hosted AI partner attribution');
+		}
+		if (partnerCampaignId !== null && !UUID_PATTERN.test(partnerCampaignId)) {
+			throw new Error('invalid hosted AI settlement partner campaign ID');
+		}
+		if (partnerEntitlementPolicy !== null && partnerEntitlementPolicy !== 'partner_business_v1') {
+			throw new Error('invalid hosted AI settlement partner entitlement policy');
+		}
 		const telemetry: HostedAiSettlementTelemetry = {
 			tier: safeText(input.telemetry.tier, 'telemetry tier', 128),
 			provider: safeText(input.telemetry.provider, 'telemetry provider', 128),
@@ -154,6 +172,8 @@ export async function recordHostedAiSettlement(
 			microCents,
 			input.lane,
 			input.hostedAiTrial,
+			partnerCampaignId ?? '',
+			partnerEntitlementPolicy ?? '',
 			telemetry.tier,
 			telemetry.provider,
 			telemetry.model,
@@ -179,6 +199,69 @@ export async function recordHostedAiSettlement(
 					env,
 					backgroundTotalKey,
 					'month_period',
+					settlementId,
+					settlementFingerprint,
+				),
+			]
+			: [];
+		const partnerStatements = partnerCampaignId && partnerEntitlementPolicy
+			? [
+				env.DB.prepare(`
+					INSERT INTO partner_campaign_costs (
+						campaign_id, entitlement_policy, estimated_cost_usd, updated_at
+					)
+					SELECT ?, ?, cost_micro_cents / ${MICRO_CENTS_PER_USD}.0, ?
+					FROM hosted_ai_settlements
+					WHERE settlement_id = ? AND fingerprint = ? AND applied_at IS NULL
+					ON CONFLICT(campaign_id) DO UPDATE SET
+						entitlement_policy = excluded.entitlement_policy,
+						estimated_cost_usd = estimated_cost_usd + excluded.estimated_cost_usd,
+						updated_at = excluded.updated_at
+				`).bind(
+					partnerCampaignId,
+					partnerEntitlementPolicy,
+					nowIso,
+					settlementId,
+					settlementFingerprint,
+				),
+				env.DB.prepare(`
+					INSERT INTO partner_cost_daily (
+						date, campaign_id, entitlement_policy, provider, model,
+						endpoint, stream, router_tier, requests, input_tokens,
+						output_tokens, cache_read_tokens, cache_creation_tokens,
+						estimated_cost_usd, latency_ms_sum, latency_samples
+					)
+					SELECT day, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?,
+						cost_micro_cents / ${MICRO_CENTS_PER_USD}.0, ?, ?
+					FROM hosted_ai_settlements
+					WHERE settlement_id = ? AND fingerprint = ? AND applied_at IS NULL
+					ON CONFLICT(
+						date, campaign_id, entitlement_policy, provider, model,
+						endpoint, stream, router_tier
+					) DO UPDATE SET
+						requests = requests + 1,
+						input_tokens = input_tokens + excluded.input_tokens,
+						output_tokens = output_tokens + excluded.output_tokens,
+						cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
+						cache_creation_tokens = cache_creation_tokens + excluded.cache_creation_tokens,
+						estimated_cost_usd = estimated_cost_usd + excluded.estimated_cost_usd,
+						latency_ms_sum = latency_ms_sum + excluded.latency_ms_sum,
+						latency_samples = latency_samples + excluded.latency_samples,
+						updated_at = datetime('now')
+				`).bind(
+					partnerCampaignId,
+					partnerEntitlementPolicy,
+					telemetry.provider,
+					telemetry.model,
+					telemetry.endpoint,
+					telemetry.stream ? 1 : 0,
+					telemetry.routerTier,
+					telemetry.inputTokens,
+					telemetry.outputTokens,
+					telemetry.cacheReadTokens,
+					telemetry.cacheCreationTokens,
+					telemetry.latencyMs,
+					telemetry.latencySamples,
 					settlementId,
 					settlementFingerprint,
 				),
@@ -227,6 +310,7 @@ export async function recordHostedAiSettlement(
 				settlementId,
 				settlementFingerprint,
 			),
+			...partnerStatements,
 			env.DB.prepare(`
 				INSERT INTO cost_daily (
 					date, tier, provider, model, endpoint, stream, router_tier,

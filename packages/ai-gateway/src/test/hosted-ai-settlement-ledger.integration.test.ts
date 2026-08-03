@@ -49,6 +49,25 @@ const SCHEMA = [
 		ledger_epoch TEXT NOT NULL, applied_at TEXT,
 		created_at TEXT NOT NULL DEFAULT (datetime('now'))
 	) WITHOUT ROWID`,
+	`CREATE TABLE partner_campaign_costs (
+		campaign_id TEXT PRIMARY KEY, entitlement_policy TEXT NOT NULL,
+		estimated_cost_usd REAL NOT NULL DEFAULT 0,
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	) WITHOUT ROWID`,
+	`CREATE TABLE partner_cost_daily (
+		date TEXT NOT NULL, campaign_id TEXT NOT NULL,
+		entitlement_policy TEXT NOT NULL, provider TEXT NOT NULL,
+		model TEXT NOT NULL, endpoint TEXT NOT NULL, stream INTEGER NOT NULL,
+		router_tier TEXT NOT NULL, requests INTEGER NOT NULL DEFAULT 0,
+		input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+		cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+		cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+		estimated_cost_usd REAL NOT NULL DEFAULT 0,
+		latency_ms_sum INTEGER NOT NULL DEFAULT 0,
+		latency_samples INTEGER NOT NULL DEFAULT 0,
+		updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+		PRIMARY KEY (date, campaign_id, entitlement_policy, provider, model, endpoint, stream, router_tier)
+	) WITHOUT ROWID`,
 ];
 
 function entry(settlementId: string, overrides: Record<string, unknown> = {}) {
@@ -224,6 +243,30 @@ describe('hosted AI settlement ledger against workerd D1', () => {
 		expect((await env.DB.prepare(
 			'SELECT COUNT(*) AS count FROM hosted_ai_settlements',
 		).first<{ count: number }>())?.count).toBe(2);
+	});
+
+	it('attributes a partner settlement to its aggregate budget exactly once', async () => {
+		const partnerEntry = entry('settlement-partner-replay', {
+			partner_campaign_id: '33333333-3333-4333-8333-333333333333',
+			partner_entitlement_policy: 'partner_business_v1',
+		});
+		expect(await logCost(env, partnerEntry)).toBe(true);
+		expect(await logCost(env, partnerEntry)).toBe(true);
+
+		expect(await env.DB.prepare(`
+			SELECT campaign_id, entitlement_policy, estimated_cost_usd
+			FROM partner_campaign_costs
+		`).first()).toEqual({
+			campaign_id: '33333333-3333-4333-8333-333333333333',
+			entitlement_policy: 'partner_business_v1',
+			estimated_cost_usd: 0.12345678,
+		});
+		expect(await env.DB.prepare(`
+			SELECT requests, estimated_cost_usd FROM partner_cost_daily
+		`).first()).toEqual({
+			requests: 1,
+			estimated_cost_usd: 0.12345678,
+		});
 	});
 
 	it('applies a retried background settlement to its lane exactly once', async () => {

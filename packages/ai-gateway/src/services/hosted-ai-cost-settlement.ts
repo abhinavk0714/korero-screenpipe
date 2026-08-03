@@ -14,6 +14,8 @@ export type ReservedCostAttribution = {
 	userId?: string;
 	tier: string;
 	hostedAiTrial: boolean;
+	partnerCampaignId?: string;
+	partnerEntitlementPolicy?: string;
 	model: string;
 	endpoint: string;
 	stream: boolean;
@@ -37,6 +39,8 @@ export function reservedCostAttribution(
 		userId: auth.userId,
 		tier: auth.tier,
 		hostedAiTrial: auth.hostedAiTrial === true,
+		partnerCampaignId: auth.partnerGrant?.campaignId,
+		partnerEntitlementPolicy: auth.partnerGrant?.entitlementPolicy,
 		model,
 		endpoint,
 		stream,
@@ -57,6 +61,8 @@ export function logReservedCost(
 		user_id: attribution.userId,
 		tier: attribution.tier,
 		hosted_ai_trial: attribution.hostedAiTrial,
+		partner_campaign_id: attribution.partnerCampaignId,
+		partner_entitlement_policy: attribution.partnerEntitlementPolicy,
 		provider: attribution.provider ?? inferProvider(attribution.model),
 		model: attribution.model,
 		input_tokens: null,

@@ -82,6 +82,25 @@ const USAGE_SCHEMA = [
 		ledger_epoch TEXT NOT NULL, applied_at TEXT,
 		created_at TEXT NOT NULL DEFAULT (datetime('now'))
 	) WITHOUT ROWID`,
+	`CREATE TABLE partner_campaign_costs (
+		campaign_id TEXT PRIMARY KEY, entitlement_policy TEXT NOT NULL,
+		estimated_cost_usd REAL NOT NULL DEFAULT 0,
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	) WITHOUT ROWID`,
+	`CREATE TABLE partner_cost_daily (
+		date TEXT NOT NULL, campaign_id TEXT NOT NULL,
+		entitlement_policy TEXT NOT NULL, provider TEXT NOT NULL,
+		model TEXT NOT NULL, endpoint TEXT NOT NULL, stream INTEGER NOT NULL,
+		router_tier TEXT NOT NULL, requests INTEGER NOT NULL DEFAULT 0,
+		input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+		cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+		cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+		estimated_cost_usd REAL NOT NULL DEFAULT 0,
+		latency_ms_sum INTEGER NOT NULL DEFAULT 0,
+		latency_samples INTEGER NOT NULL DEFAULT 0,
+		updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+		PRIMARY KEY (date, campaign_id, entitlement_policy, provider, model, endpoint, stream, router_tier)
+	) WITHOUT ROWID`,
 ];
 
 function metered(
@@ -1434,6 +1453,87 @@ describe('usage reservations against workerd D1', () => {
 		expect(nextEpoch.allowed).toBe(true);
 		if (nextEpoch.allowed && nextEpoch.reservation) {
 			await releaseDailyCostReservation(env, nextEpoch.reservation);
+		}
+	});
+
+	it('atomically caps aggregate partner spend across different accounts', async () => {
+		const now = new Date();
+		const model = 'gpt-5.6-luna';
+		const holdUsd = getCostReservationMicroUsd(model) / 1_000_000;
+		const partnerGrant = {
+			campaignId: '33333333-3333-4333-8333-333333333333',
+			redemptionId: '22222222-2222-4222-8222-222222222222',
+			offerVersion: 'partner-business-365d-v1',
+			entitlementPolicy: 'partner_business_v1' as const,
+			aiBudgetUsd: holdUsd * 2,
+		};
+		setUniformTextWindows(env, {
+			request: holdUsd * 2,
+			daily: holdUsd * 10,
+			monthly: holdUsd * 20,
+		});
+		setGlobalTextWindows(env, holdUsd * 100, holdUsd * 200);
+
+		const results = await Promise.all(
+			Array.from({ length: 8 }, (_, index) => reserveDailyCostCap(
+				env,
+				`partner-user-${index}`,
+				'subscribed',
+				model,
+				now,
+				'interactive',
+				{},
+				'business',
+				false,
+				partnerGrant,
+			)),
+		);
+		const accepted = results.filter((result) => result.allowed && result.reservation);
+		expect(accepted).toHaveLength(2);
+		for (const result of results.filter((candidate) => !candidate.allowed)) {
+			if (!result.allowed) {
+				expect(await result.response.text()).toContain('partner_campaign_ai_budget_exhausted');
+			}
+		}
+
+		for (const result of accepted) {
+			if (!result.allowed || !result.reservation) continue;
+			expect(await logCost(env, {
+				settlement_id: result.reservation.key,
+				device_id: result.reservation.deviceId,
+				tier: 'subscribed',
+				provider: 'openai',
+				model,
+				input_tokens: null,
+				output_tokens: null,
+				estimated_cost_usd: holdUsd,
+				endpoint: '/v1/chat/completions',
+				stream: false,
+				partner_campaign_id: partnerGrant.campaignId,
+				partner_entitlement_policy: partnerGrant.entitlementPolicy,
+			})).toBe(true);
+			await releaseDailyCostReservation(env, result.reservation);
+		}
+
+		const settled = await env.DB.prepare(`
+			SELECT estimated_cost_usd FROM partner_campaign_costs WHERE campaign_id = ?
+		`).bind(partnerGrant.campaignId).first<{ estimated_cost_usd: number }>();
+		expect(settled?.estimated_cost_usd).toBeCloseTo(holdUsd * 2, 8);
+		const blocked = await reserveDailyCostCap(
+			env,
+			'partner-user-after-settlement',
+			'subscribed',
+			model,
+			now,
+			'interactive',
+			{},
+			'business',
+			false,
+			partnerGrant,
+		);
+		expect(blocked.allowed).toBe(false);
+		if (!blocked.allowed) {
+			expect(await blocked.response.text()).toContain('partner_campaign_ai_budget_exhausted');
 		}
 	});
 });

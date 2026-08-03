@@ -19,6 +19,8 @@ export async function pruneRuntimeState(env: Env): Promise<void> {
   const statements = [
     env.DB.prepare(`DELETE FROM cost_daily WHERE date < date('now', ?)`)
       .bind(`-${TELEMETRY_RETENTION_DAYS} days`),
+    env.DB.prepare(`DELETE FROM partner_cost_daily WHERE date < date('now', ?)`)
+      .bind(`-${TELEMETRY_RETENTION_DAYS} days`),
     env.DB.prepare(`DELETE FROM transcription_daily WHERE date < date('now', ?)`)
       .bind(`-${TELEMETRY_RETENTION_DAYS} days`),
     env.DB.prepare(`DELETE FROM model_health_window

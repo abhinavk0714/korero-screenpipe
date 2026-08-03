@@ -275,6 +275,15 @@ export type AccountPlan =
 	| 'enterprise'
 	| 'unknown';
 
+/** Server-verified provenance and aggregate provider budget for a partner grant. */
+export interface PartnerGrantAttribution {
+	campaignId: string;
+	redemptionId: string;
+	offerVersion: string;
+	entitlementPolicy: 'partner_business_v1';
+	aiBudgetUsd: number;
+}
+
 // Auth result with tier information
 export interface AuthResult {
 	isValid: boolean;
@@ -284,6 +293,8 @@ export interface AuthResult {
 	accountPlan: AccountPlan;
 	/** Server-verified temporary profile or subscription trial. */
 	hostedAiTrial?: boolean;
+	/** Present only when /api/user returns a valid active partner grant. */
+	partnerGrant?: PartnerGrantAttribution;
 	deviceId: string;
 	userId?: string;
 	/** True only for the dedicated backend service bearer. */

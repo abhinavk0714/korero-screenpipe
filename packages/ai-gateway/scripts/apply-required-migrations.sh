@@ -14,10 +14,15 @@ if [[ "$mode" != "--remote" && "$mode" != "--local" ]]; then
 fi
 
 database="screenpipe-usage-v2"
-migration="./migrations/0008_hosted_ai_settlement_ledger.sql"
+migrations=(
+	"./migrations/0008_hosted_ai_settlement_ledger.sql"
+	"./migrations/0009_partner_campaign_cost_attribution.sql"
+)
 
-echo "→ applying required hosted AI settlement migration (${mode#--})…"
-bunx wrangler d1 execute "$database" "$mode" --yes --file="$migration"
+echo "→ applying required hosted AI migrations (${mode#--})…"
+for migration in "${migrations[@]}"; do
+	bunx wrangler d1 execute "$database" "$mode" --yes --file="$migration"
+done
 
 schema_json="$(bunx wrangler d1 execute "$database" "$mode" --json --command "
 	SELECT
@@ -29,7 +34,24 @@ schema_json="$(bunx wrangler d1 execute "$database" "$mode" --json --command "
 		 )) AS required_columns,
 		(SELECT COUNT(*) FROM sqlite_master
 		 WHERE type = 'index'
-			AND name = 'idx_hosted_ai_settlements_created_at') AS required_indexes;
+			AND name = 'idx_hosted_ai_settlements_created_at') AS required_indexes,
+		(SELECT COUNT(*) FROM pragma_table_info('partner_campaign_costs')
+		 WHERE name IN (
+			'campaign_id', 'entitlement_policy', 'estimated_cost_usd', 'updated_at'
+		 )) AS partner_cost_columns,
+		(SELECT COUNT(*) FROM pragma_table_info('partner_cost_daily')
+		 WHERE name IN (
+			'date', 'campaign_id', 'entitlement_policy', 'provider', 'model',
+			'endpoint', 'stream', 'router_tier', 'requests', 'input_tokens',
+			'output_tokens', 'cache_read_tokens', 'cache_creation_tokens',
+			'estimated_cost_usd', 'latency_ms_sum', 'latency_samples', 'updated_at'
+		 )) AS partner_daily_columns,
+		(SELECT COUNT(*) FROM sqlite_master
+		 WHERE type = 'index'
+			AND name IN (
+				'idx_partner_cost_daily_date',
+				'idx_partner_cost_daily_campaign_date'
+			)) AS partner_cost_indexes;
 ")"
 
 printf '%s' "$schema_json" | bun scripts/required-schema.ts

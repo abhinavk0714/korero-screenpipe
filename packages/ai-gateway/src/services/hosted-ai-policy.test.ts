@@ -12,6 +12,7 @@ import {
 	hasPaidHostedAiPlan,
 	isHostedAiModelAllowed,
 	isHostedAiUpgradeEligible,
+	isPartnerGrantModelAllowed,
 } from './hosted-ai-policy';
 
 function auth(accountPlan: AccountPlan, tier: UserTier = 'logged_in'): AuthResult {
@@ -59,6 +60,21 @@ describe('hosted AI model products', () => {
 			expect(isHostedAiModelAllowed('gpt-5.6-sol', plan)).toBe(true);
 			expect(isHostedAiModelAllowed('future-unpriced-frontier', plan)).toBe(false);
 		}
+	});
+
+	it('keeps a bulk partner Business grant on the efficient reviewed lane', () => {
+		const partnerGrant = {
+			campaignId: '33333333-3333-4333-8333-333333333333',
+			redemptionId: '22222222-2222-4222-8222-222222222222',
+			offerVersion: 'partner-business-365d-v1',
+			entitlementPolicy: 'partner_business_v1' as const,
+			aiBudgetUsd: 10_000,
+		};
+		expect(isPartnerGrantModelAllowed('auto', partnerGrant)).toBe(true);
+		expect(isPartnerGrantModelAllowed('gpt-5.6-luna', partnerGrant)).toBe(true);
+		expect(isPartnerGrantModelAllowed('gpt-5.4-mini', partnerGrant)).toBe(true);
+		expect(isPartnerGrantModelAllowed('claude-fable-5', partnerGrant)).toBe(false);
+		expect(isPartnerGrantModelAllowed('gpt-5.6-sol', partnerGrant)).toBe(false);
 	});
 
 	it.each([

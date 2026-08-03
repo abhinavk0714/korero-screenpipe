@@ -23,6 +23,8 @@ import {
 	getNonStreamSettlementCost,
 	getStreamSettlementCost,
 	getSpendSummary,
+	getPartnerSpendSummary,
+	getPartnerSpendOverview,
 	inferProvider,
 	logCost,
 	monthlyCostKey,
@@ -63,6 +65,7 @@ import {
 	getHostedAiIncludedCredits,
 	getHostedAiPlan,
 	hasPaidHostedAiPlan,
+	isPartnerGrantModelAllowed,
 	isHostedAiUpgradeEligible,
 } from './services/hosted-ai-policy';
 import {
@@ -158,6 +161,7 @@ async function handleMeteredTinfoilRequest(
 		{},
 		auth.accountPlan,
 		auth.hostedAiTrial === true,
+		auth.partnerGrant,
 	);
 	if (!reservation.allowed) return reservation.response;
 	const attribution = reservedCostAttribution(
@@ -181,6 +185,8 @@ async function handleMeteredTinfoilRequest(
 		user_id: auth.userId,
 		tier: auth.tier,
 		hosted_ai_trial: auth.hostedAiTrial === true,
+		partner_campaign_id: reservation.reservation?.partnerCampaign?.campaignId,
+		partner_entitlement_policy: reservation.reservation?.partnerCampaign?.entitlementPolicy,
 		provider: 'tinfoil',
 		model,
 		input_tokens: usage?.promptTokens ?? null,
@@ -210,7 +216,7 @@ async function handleMeteredVoiceAiRequest(
 	// The implicit voice model must remain available to Basic. Business callers
 	// can explicitly select a frontier model through the same server-side gate.
 	const model = request.headers.get('ai-model') || 'gpt-5.4-mini';
-	if (!isModelAllowed(model, auth.tier, env, auth.accountPlan)) {
+	if (!isModelAllowed(model, auth.tier, env, auth.accountPlan, auth.partnerGrant)) {
 		return modelNotAllowedResponse(auth, model);
 	}
 	const reservation = await reserveDailyCostCap(
@@ -223,6 +229,7 @@ async function handleMeteredVoiceAiRequest(
 		{},
 		auth.accountPlan,
 		auth.hostedAiTrial === true,
+		auth.partnerGrant,
 	);
 	if (!reservation.allowed) return reservation.response;
 	const attribution = reservedCostAttribution(auth, model, endpoint, false);
@@ -241,6 +248,8 @@ async function handleMeteredVoiceAiRequest(
 		user_id: auth.userId,
 		tier: auth.tier,
 		hosted_ai_trial: auth.hostedAiTrial === true,
+		partner_campaign_id: reservation.reservation?.partnerCampaign?.campaignId,
+		partner_entitlement_policy: reservation.reservation?.partnerCampaign?.entitlementPolicy,
 		provider: inferProvider(model),
 		model,
 		input_tokens: null,
@@ -353,9 +362,27 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			}
 			const includedCredits = getHostedAiIncludedCredits(usageAccountPlan);
 			const usedCredits = monthlyCost === null ? null : Math.ceil(monthlyCost * 100);
+			let partnerCost: number | null = null;
+			if (authResult.partnerGrant) {
+				try {
+					const row = await env.DB.prepare(`
+						SELECT estimated_cost_usd FROM partner_campaign_costs WHERE campaign_id = ?
+					`).bind(authResult.partnerGrant.campaignId)
+						.first<{ estimated_cost_usd: number }>();
+					partnerCost = Number(row?.estimated_cost_usd ?? 0);
+				} catch {
+					// Admission remains fail-closed; status reports unknown instead of $0.
+				}
+			}
+			const modelAccess = getHostedAiAllowedModels(usageAccountPlan)
+				.filter((model) => isPartnerGrantModelAllowed(model, authResult.partnerGrant));
 			const enriched = {
 				...status,
-				cost_limit_reached: dailyCost >= maxCost || (monthlyCost !== null && monthlyCost >= monthlyCap),
+				cost_limit_reached: dailyCost >= maxCost
+					|| (monthlyCost !== null && monthlyCost >= monthlyCap)
+					|| (authResult.partnerGrant !== undefined
+						&& partnerCost !== null
+						&& partnerCost >= authResult.partnerGrant.aiBudgetUsd),
 				upgrade_eligible: isHostedAiUpgradeEligible(authResult),
 				upsell_banner: status.upsell_banner === true && isHostedAiUpgradeEligible(authResult),
 				hosted_ai: {
@@ -366,7 +393,17 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					remaining_credits: usedCredits === null
 						? null
 						: Math.max(0, includedCredits - usedCredits),
-					model_access: [...getHostedAiAllowedModels(usageAccountPlan)],
+					model_access: modelAccess,
+					partner_campaign: authResult.partnerGrant ? {
+						campaign_id: authResult.partnerGrant.campaignId,
+						offer_version: authResult.partnerGrant.offerVersion,
+						entitlement_policy: authResult.partnerGrant.entitlementPolicy,
+						budget_usd: authResult.partnerGrant.aiBudgetUsd,
+						used_usd: partnerCost,
+						remaining_usd: partnerCost === null
+							? null
+							: Math.max(0, authResult.partnerGrant.aiBudgetUsd - partnerCost),
+					} : null,
 					upgrade_url: isHostedAiUpgradeEligible(authResult)
 						? 'https://screenpi.pe/account/billing'
 						: null,
@@ -388,6 +425,27 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			const range = parseInt(url.searchParams.get('range') || '7', 10);
 			const summary = await getSpendSummary(env, range);
 			return addCorsHeaders(createSuccessResponse(summary));
+		}
+
+		if (path === '/v1/admin/partner-spend' && request.method === 'GET') {
+			const authHeader = request.headers.get('Authorization');
+			const token = authHeader?.replace('Bearer ', '');
+			if (!env.ADMIN_SECRET || token !== env.ADMIN_SECRET) {
+				return addCorsHeaders(createErrorResponse(401, 'unauthorized'));
+			}
+			const campaignId = url.searchParams.get('campaign_id');
+			const range = parseInt(url.searchParams.get('range') || '30', 10);
+			if (!campaignId) {
+				return addCorsHeaders(createSuccessResponse(
+					await getPartnerSpendOverview(env, range),
+				));
+			}
+			if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(campaignId)) {
+				return addCorsHeaders(createErrorResponse(400, 'valid campaign_id required'));
+			}
+			return addCorsHeaders(createSuccessResponse(
+				await getPartnerSpendSummary(env, campaignId, range),
+			));
 		}
 
 		// Admin A/B test results endpoint
@@ -488,6 +546,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				env,
 				isBackgroundRequest(request),
 				authResult.accountPlan,
+				authResult.partnerGrant,
 			);
 			if (gate === 'downgrade') {
 				console.log(`background request for disallowed model "${body.model}" (${authResult.tier}) -> downgraded to auto`);
@@ -573,6 +632,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				costReservationShape(body, rawRequestBytes),
 				authResult.accountPlan,
 				authResult.hostedAiTrial === true,
+				authResult.partnerGrant,
 			);
 			if (!costReservation.allowed) {
 				let rejectionReason: string | undefined;
@@ -639,7 +699,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					authResult.service === true,
 					{
 						freePreview: freeChat.mode === 'metered',
-						efficientOnly: getHostedAiPlan(authResult.accountPlan) !== 'business',
+						efficientOnly: Boolean(authResult.partnerGrant)
+							|| getHostedAiPlan(authResult.accountPlan) !== 'business',
 					},
 				);
 				const latencyMs = Date.now() - reqStart;
@@ -670,6 +731,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						user_id: authResult.userId,
 						tier: authResult.tier,
 						hosted_ai_trial: authResult.hostedAiTrial === true,
+						partner_campaign_id: dailyCostReservation?.partnerCampaign?.campaignId,
+						partner_entitlement_policy: dailyCostReservation?.partnerCampaign?.entitlementPolicy,
 						provider: inferProvider(servedModel),
 						model: pricedModel,
 						input_tokens: u.input_tokens ?? null,
@@ -717,6 +780,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 								user_id: authResult.userId,
 								tier: authResult.tier,
 								hosted_ai_trial: authResult.hostedAiTrial === true,
+								partner_campaign_id: dailyCostReservation?.partnerCampaign?.campaignId,
+								partner_entitlement_policy: dailyCostReservation?.partnerCampaign?.entitlementPolicy,
 								provider: inferProvider(servedModel),
 								model: pricedModel,
 								input_tokens: inputTokens,
@@ -791,6 +856,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				{},
 				authResult.accountPlan,
 				authResult.hostedAiTrial === true,
+				authResult.partnerGrant,
 			);
 			if (!costReservation.allowed) return costReservation.response;
 			const attribution = reservedCostAttribution(
@@ -813,6 +879,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				user_id: authResult.userId,
 				tier: authResult.tier,
 				hosted_ai_trial: authResult.hostedAiTrial === true,
+				partner_campaign_id: costReservation.reservation?.partnerCampaign?.campaignId,
+				partner_entitlement_policy: costReservation.reservation?.partnerCampaign?.entitlementPolicy,
 				provider: 'google',
 				model: 'gemini-2.5-flash',
 				input_tokens: null,
@@ -990,7 +1058,13 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				parsedModel = resolveModelAlias(body.model || parsedModel);
 				parsedStream = body.stream === true;
 				parsedRequestShape = costReservationShape(body);
-				if (!isModelAllowed(parsedModel, authResult.tier, env, authResult.accountPlan)) {
+				if (!isModelAllowed(
+					parsedModel,
+					authResult.tier,
+					env,
+					authResult.accountPlan,
+					authResult.partnerGrant,
+				)) {
 					return modelNotAllowedResponse(authResult, parsedModel);
 				}
 			} catch {
@@ -1021,6 +1095,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				parsedRequestShape,
 				authResult.accountPlan,
 				authResult.hostedAiTrial === true,
+				authResult.partnerGrant,
 			);
 			if (!costReservation.allowed) return costReservation.response;
 			const attribution = reservedCostAttribution(
@@ -1048,6 +1123,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					user_id: authResult.userId,
 					tier: authResult.tier,
 					hosted_ai_trial: authResult.hostedAiTrial === true,
+					partner_campaign_id: costReservation.reservation?.partnerCampaign?.campaignId,
+					partner_entitlement_policy: costReservation.reservation?.partnerCampaign?.entitlementPolicy,
 					provider: inferProvider(parsedModel),
 					model: parsedModel,
 					input_tokens: u.input_tokens ?? null,
@@ -1088,6 +1165,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 							user_id: authResult.userId,
 							tier: authResult.tier,
 							hosted_ai_trial: authResult.hostedAiTrial === true,
+							partner_campaign_id: costReservation.reservation?.partnerCampaign?.campaignId,
+							partner_entitlement_policy: costReservation.reservation?.partnerCampaign?.entitlementPolicy,
 							provider: inferProvider(parsedModel),
 							model: parsedModel,
 							input_tokens: inputTokens,
@@ -1149,7 +1228,13 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			// /v1/chat/completions and /v1/messages. This endpoint previously only
 			// checked for a non-anonymous tier, so any authentication weakness could
 			// be composed with this server-key proxy to reach Business-only models.
-			if (!isModelAllowed(ocModel, authResult.tier, env, authResult.accountPlan)) {
+			if (!isModelAllowed(
+				ocModel,
+				authResult.tier,
+				env,
+				authResult.accountPlan,
+				authResult.partnerGrant,
+			)) {
 				return modelNotAllowedResponse(authResult, ocModel);
 			}
 
@@ -1177,6 +1262,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				ocRequestShape,
 				authResult.accountPlan,
 				authResult.hostedAiTrial === true,
+				authResult.partnerGrant,
 			);
 			if (!costReservation.allowed) return costReservation.response;
 			const attribution = reservedCostAttribution(
@@ -1204,6 +1290,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					user_id: authResult.userId,
 					tier: authResult.tier,
 					hosted_ai_trial: authResult.hostedAiTrial === true,
+					partner_campaign_id: costReservation.reservation?.partnerCampaign?.campaignId,
+					partner_entitlement_policy: costReservation.reservation?.partnerCampaign?.entitlementPolicy,
 					provider: inferProvider(ocModel),
 					model: ocModel,
 					input_tokens: u.input_tokens ?? null,
@@ -1244,6 +1332,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 							user_id: authResult.userId,
 							tier: authResult.tier,
 							hosted_ai_trial: authResult.hostedAiTrial === true,
+							partner_campaign_id: costReservation.reservation?.partnerCampaign?.campaignId,
+							partner_entitlement_policy: costReservation.reservation?.partnerCampaign?.entitlementPolicy,
 							provider: inferProvider(ocModel),
 							model: ocModel,
 							input_tokens: inputTokens,
@@ -1282,7 +1372,10 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					message: 'OpenCode requires authentication. Please log in to screenpipe.',
 				})));
 			}
-			if (getHostedAiPlan(authResult.accountPlan) !== 'business') {
+			if (
+				getHostedAiPlan(authResult.accountPlan) !== 'business' ||
+				authResult.partnerGrant
+			) {
 				return modelNotAllowedResponse(authResult, 'anthropic frontier models');
 			}
 			console.log('OpenCode Anthropic models request');

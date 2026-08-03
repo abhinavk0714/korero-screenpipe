@@ -451,6 +451,77 @@ describe('validateAuth — verified identities only', () => {
     });
   });
 
+  it('propagates a source-backed partner campaign budget with the entitlement', async () => {
+    verifyTokenMock.mockImplementation(async () => ({ sub: 'user_partner' }) as any);
+    globalThis.fetch = mock(async () => new Response(JSON.stringify({
+      success: true,
+      user: {
+        clerk_id: 'user_partner',
+        cloud_subscribed: true,
+        app_entitled: true,
+        subscription_plan: 'pro',
+        entitlement: { active: true, plan: 'pro', features: { app: true } },
+        partner_grant: {
+          campaign_id: '33333333-3333-4333-8333-333333333333',
+          redemption_id: '22222222-2222-4222-8222-222222222222',
+          offer_version: 'partner-business-365d-v1',
+          entitlement_policy: 'partner_business_v1',
+          ai_budget_usd: 10_000,
+          grant_ends_at: '2027-08-03T00:00:00.000Z',
+        },
+      },
+    }), { status: 200 })) as typeof fetch;
+
+    expect(await validateAuth(requestFor('eyJ.partner.clerk'), env)).toEqual({
+      isValid: true,
+      tier: 'subscribed',
+      accountPlan: 'business',
+      deviceId: 'user_partner',
+      userId: 'user_partner',
+      partnerGrant: {
+        campaignId: '33333333-3333-4333-8333-333333333333',
+        redemptionId: '22222222-2222-4222-8222-222222222222',
+        offerVersion: 'partner-business-365d-v1',
+        entitlementPolicy: 'partner_business_v1',
+        aiBudgetUsd: 10_000,
+      },
+    });
+  });
+
+  it('fails closed instead of turning malformed partner metadata into unrestricted Business', async () => {
+    verifyTokenMock.mockImplementation(async () => ({ sub: 'user_bad_partner' }) as any);
+    const fetchMock = mock(async () => new Response(JSON.stringify({
+      success: true,
+      user: {
+        clerk_id: 'user_bad_partner',
+        cloud_subscribed: true,
+        app_entitled: true,
+        subscription_plan: 'pro',
+        entitlement: { active: true, plan: 'pro', features: { app: true } },
+        partner_grant: {
+          campaign_id: 'not-a-uuid',
+          redemption_id: '22222222-2222-4222-8222-222222222222',
+          offer_version: 'partner-business-365d-v1',
+          entitlement_policy: 'unreviewed_policy',
+          ai_budget_usd: -1,
+          grant_ends_at: '2027-08-03T00:00:00.000Z',
+        },
+      },
+    }), { status: 200 }));
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const expected = {
+      isValid: true,
+      tier: 'logged_in',
+      accountPlan: 'unknown',
+      deviceId: 'user_bad_partner',
+      userId: 'user_bad_partner',
+    } as const;
+    expect(await validateAuth(requestFor('eyJ.bad-partner.clerk.1'), env)).toEqual(expected);
+    expect(await validateAuth(requestFor('eyJ.bad-partner.clerk.2'), env)).toEqual(expected);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
 	it('propagates only a server-verified hosted AI trial marker', async () => {
 		verifyTokenMock.mockImplementation(async () => ({ sub: 'user_trial' }) as any);
 		globalThis.fetch = mock(async () => new Response(JSON.stringify({

@@ -7,12 +7,22 @@ import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
 import { assertRequiredSchema } from './required-schema';
 
-function output(requiredColumns: number, requiredIndexes: number, success = true): string {
+function output(
+	requiredColumns: number,
+	requiredIndexes: number,
+	success = true,
+	partnerCostColumns = 4,
+	partnerDailyColumns = 17,
+	partnerCostIndexes = 2,
+): string {
 	return JSON.stringify([{
 		success,
 		results: [{
 			required_columns: requiredColumns,
 			required_indexes: requiredIndexes,
+			partner_cost_columns: partnerCostColumns,
+			partner_daily_columns: partnerDailyColumns,
+			partner_cost_indexes: partnerCostIndexes,
 		}],
 	}]);
 }
@@ -26,6 +36,9 @@ describe('assertRequiredSchema', () => {
 		for (const raw of [
 			output(10, 1),
 			output(11, 0),
+			output(11, 1, true, 3),
+			output(11, 1, true, 4, 16),
+			output(11, 1, true, 4, 17, 1),
 			output(11, 1, false),
 			'not-json',
 		]) {
@@ -47,12 +60,17 @@ describe('required settlement migration', () => {
 			VALUES ('existing-accumulator', '2026-08-01', 1.25);
 		`);
 
-		const migration = readFileSync(
-			new URL('../migrations/0008_hosted_ai_settlement_ledger.sql', import.meta.url),
-			'utf8',
-		);
-		database.exec(migration);
-		database.exec(migration);
+		for (const filename of [
+			'0008_hosted_ai_settlement_ledger.sql',
+			'0009_partner_campaign_cost_attribution.sql',
+		]) {
+			const migration = readFileSync(
+				new URL(`../migrations/${filename}`, import.meta.url),
+				'utf8',
+			);
+			database.exec(migration);
+			database.exec(migration);
+		}
 
 		expect(database.query(`
 			SELECT device_id, daily_cost_usd FROM usage
@@ -70,6 +88,9 @@ describe('required settlement migration', () => {
 			WHERE type = 'index'
 				AND name = 'idx_hosted_ai_settlements_created_at'
 		`).get()).toEqual({ count: 1 });
+		expect(database.query(`
+			SELECT COUNT(*) AS count FROM pragma_table_info('partner_cost_daily')
+		`).get()).toEqual({ count: 17 });
 
 		database.close();
 	});

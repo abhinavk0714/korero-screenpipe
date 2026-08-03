@@ -24,6 +24,17 @@ const SCHEMA = [
      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
      PRIMARY KEY (date, tier, provider, model, endpoint, stream, router_tier)
    ) WITHOUT ROWID`,
+  `CREATE TABLE partner_cost_daily (
+     date TEXT NOT NULL, campaign_id TEXT NOT NULL, entitlement_policy TEXT NOT NULL,
+     provider TEXT NOT NULL, model TEXT NOT NULL, endpoint TEXT NOT NULL,
+     stream INTEGER NOT NULL, router_tier TEXT NOT NULL,
+     requests INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0,
+     output_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+     cache_creation_tokens INTEGER NOT NULL DEFAULT 0, estimated_cost_usd REAL NOT NULL DEFAULT 0,
+     latency_ms_sum INTEGER NOT NULL DEFAULT 0, latency_samples INTEGER NOT NULL DEFAULT 0,
+     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+     PRIMARY KEY (date,campaign_id,entitlement_policy,provider,model,endpoint,stream,router_tier)
+   ) WITHOUT ROWID`,
   `CREATE TABLE transcription_daily (
      date TEXT NOT NULL, provider TEXT NOT NULL, status TEXT NOT NULL,
      comparison_provider TEXT NOT NULL, requests INTEGER NOT NULL DEFAULT 0,

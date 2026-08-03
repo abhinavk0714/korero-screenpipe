@@ -39,8 +39,9 @@ describe('runtime state maintenance', () => {
     } as any;
 
     await pruneRuntimeState(env);
-    expect(batched).toHaveLength(8);
+    expect(batched).toHaveLength(9);
     expect(prepared.map((statement) => statement.sql).join('\n')).toContain('cost_daily');
+    expect(prepared.map((statement) => statement.sql).join('\n')).toContain('partner_cost_daily');
     expect(prepared.map((statement) => statement.sql).join('\n')).toContain('transcription_daily');
     expect(prepared.map((statement) => statement.sql).join('\n')).toContain('model_health_window');
     expect(prepared.map((statement) => statement.sql).join('\n')).toContain('hosted_ai_settlements');
