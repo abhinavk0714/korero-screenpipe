@@ -304,7 +304,11 @@ function resolveAccountPlan(user: ScreenpipeUserData): AccountPlan {
   let accountPlan = accessPlan;
   if (user.billing_plan !== undefined) {
     const billingPlan = normalizeAccountPlan(user.billing_plan);
-    if (!billingPlan || !billingPlanMatchesAccessPlan(billingPlan, accessPlan)) {
+    if (
+      !billingPlan ||
+      billingPlan === 'free' ||
+      !billingPlanMatchesAccessPlan(billingPlan, accessPlan)
+    ) {
       return 'unknown';
     }
     accountPlan = billingPlan;

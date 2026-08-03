@@ -539,6 +539,7 @@ describe('validateAuth — verified identities only', () => {
   it('fails plan truth closed for malformed or contradictory billing plans', async () => {
     for (const [suffix, accessPlan, billingPlan] of [
       ['null', 'pro', null],
+      ['free', 'pro', 'free'],
       ['unknown', 'pro', 'premium'],
       ['wrong-access', 'standard', 'pro_max'],
     ] as const) {
