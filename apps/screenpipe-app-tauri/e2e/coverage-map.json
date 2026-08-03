@@ -664,9 +664,9 @@
       "layers": ["onboarding", "real-ui-e2e", "storage-privacy"],
       "features": ["onboarding", "settings-ai"],
       "criticality": "high",
-      "confidence": "conditional",
+      "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Opt-in isolated agent-home lane verifies native authenticated MCP plus skills setup and removal of the connection slide."
+      "notes": "Isolated agent-home CI lane verifies private native config writes, the resolved local API credential, a real authenticated MCP tool call, skills setup, and removal of the connection slide."
     },
     {
       "spec": "onboarding-redirect.spec.ts",

@@ -1530,7 +1530,11 @@ async fn main() {
             // completes this no longer runs, so an explicit Settings removal
             // remains removed on future launches.
             if !onboarding_store.is_completed && !app_ui_hidden {
-                skills::connect_detected_ai_tools_in_background(store.recording.api_auth);
+                let local_api = recording::local_api_context_from_app(&app.handle());
+                skills::connect_detected_ai_tools_in_background(
+                    store.recording.api_auth,
+                    local_api.port,
+                );
             }
 
             // Enterprise hidden-UI deployments always run headless with the

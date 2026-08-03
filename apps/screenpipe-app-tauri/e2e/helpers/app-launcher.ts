@@ -102,7 +102,6 @@ const backgroundAiToolsEnabled = E2E_SEED_FLAGS.split(',').some(
   (flag) => flag.trim().toLowerCase() === 'background-ai-tools',
 );
 export const E2E_AI_TOOLS_HOME = resolve(E2E_DATA_DIR, 'ai-tools-home');
-export const E2E_AI_TOOLS_API_KEY = 'sp-e2e-background-ai-tools';
 export const E2E_BUN_PATH = resolve(
   APP_ROOT,
   'src-tauri',
@@ -230,7 +229,6 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
       ...(backgroundAiToolsEnabled
         ? {
             SCREENPIPE_E2E_AI_TOOLS_HOME: E2E_AI_TOOLS_HOME,
-            SCREENPIPE_E2E_AI_TOOLS_API_KEY: E2E_AI_TOOLS_API_KEY,
             SCREENPIPE_E2E_BUN_PATH: E2E_BUN_PATH,
           }
         : {}),

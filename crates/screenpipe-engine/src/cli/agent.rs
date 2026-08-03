@@ -400,26 +400,16 @@ fn skills_ready(layout: &AgentLayout) -> bool {
     })
 }
 
-fn is_desktop_agent_setup_in(agent: DesktopDetectedAgent, home: &Path) -> bool {
-    let Ok(mcp_layout) = layout_in(agent.mcp_target, home) else {
-        return false;
-    };
-    let mcp_ready = has_screenpipe_mcp(&mcp_layout);
-    let skills_are_ready = match agent.skills_target {
-        Some(target) => layout_in(target, home)
-            .map(|layout| skills_ready(&layout))
-            .unwrap_or(false),
-        None => true,
-    };
-    mcp_ready && skills_are_ready
-}
-
 fn desktop_launch_config(
     bun_path: &Path,
     api_key: Option<&str>,
+    api_url: &str,
     agent: DesktopDetectedAgent,
 ) -> McpLaunchConfig {
-    let mut env = BTreeMap::from([("SCREENPIPE_MCP_CLIENT".to_string(), agent.id.to_string())]);
+    let mut env = BTreeMap::from([
+        ("SCREENPIPE_API_URL".to_string(), api_url.to_string()),
+        ("SCREENPIPE_MCP_CLIENT".to_string(), agent.id.to_string()),
+    ]);
     if let Some(api_key) = api_key {
         env.insert("SCREENPIPE_LOCAL_API_KEY".to_string(), api_key.to_string());
     }
@@ -428,6 +418,41 @@ fn desktop_launch_config(
         args: vec!["x".to_string(), "screenpipe-mcp@latest".to_string()],
         env,
         transport: (agent.id == "openclaw").then_some("stdio".to_string()),
+    }
+}
+
+fn desktop_mcp_ready(layout: &AgentLayout, launch: &McpLaunchConfig) -> bool {
+    let Ok(Some(existing)) = read_config_text(&layout.mcp_path) else {
+        return false;
+    };
+    match layout.mcp_format {
+        McpFormat::Json => serde_json::from_str::<serde_json::Value>(&existing)
+            .ok()
+            .and_then(|root| root.get("mcpServers")?.get("screenpipe").cloned())
+            .is_some_and(|entry| {
+                entry.get("command").and_then(|value| value.as_str())
+                    == Some(launch.command.as_str())
+                    && entry
+                        .get("args")
+                        .and_then(|value| serde_json::from_value::<Vec<String>>(value.clone()).ok())
+                        .as_ref()
+                        == Some(&launch.args)
+                    && entry
+                        .get("env")
+                        .and_then(|value| {
+                            serde_json::from_value::<BTreeMap<String, String>>(value.clone()).ok()
+                        })
+                        .as_ref()
+                        == Some(&launch.env)
+                    && entry.get("transport").and_then(|value| value.as_str())
+                        == launch.transport.as_deref()
+            }),
+        McpFormat::Toml => render_mcp_toml_block(launch)
+            .ok()
+            .is_some_and(|block| existing.contains(&block)),
+        McpFormat::Yaml => render_mcp_yaml_server(launch)
+            .ok()
+            .is_some_and(|server| existing.contains(&server)),
     }
 }
 
@@ -478,7 +503,7 @@ fn setup_desktop_agent_in(
     launch: &McpLaunchConfig,
 ) -> Result<()> {
     let mcp_layout = layout_in(agent.mcp_target, home)?;
-    let mcp_was_ready = has_screenpipe_mcp(&mcp_layout);
+    let mcp_was_ready = desktop_mcp_ready(&mcp_layout, launch);
     let skills_layout = agent
         .skills_target
         .map(|target| layout_in(target, home))
@@ -499,7 +524,7 @@ fn setup_desktop_agent_in(
     }
 
     anyhow::ensure!(
-        is_desktop_agent_setup_in(agent, home),
+        desktop_mcp_ready(&mcp_layout, launch) && skills_layout.as_ref().is_none_or(skills_ready),
         "setup finished without a complete MCP + skills installation"
     );
     Ok(())
@@ -515,6 +540,7 @@ pub fn setup_all_detected_desktop_in(
     home: &Path,
     bun_path: &Path,
     api_key: Option<&str>,
+    api_url: &str,
 ) -> DesktopAgentSetupReport {
     let detected = detected_desktop_agents_in(home);
     let mut report = DesktopAgentSetupReport {
@@ -523,11 +549,20 @@ pub fn setup_all_detected_desktop_in(
     };
 
     for agent in detected {
-        if is_desktop_agent_setup_in(agent, home) {
+        let launch = desktop_launch_config(bun_path, api_key, api_url, agent);
+        let skills_are_ready = match agent.skills_target {
+            Some(target) => layout_in(target, home)
+                .map(|layout| skills_ready(&layout))
+                .unwrap_or(false),
+            None => true,
+        };
+        let mcp_is_ready = layout_in(agent.mcp_target, home)
+            .map(|layout| desktop_mcp_ready(&layout, &launch))
+            .unwrap_or(false);
+        if skills_are_ready && mcp_is_ready {
             report.already_connected += 1;
             continue;
         }
-        let launch = desktop_launch_config(bun_path, api_key, agent);
         match setup_desktop_agent_in(agent, home, &launch) {
             Ok(()) => report.connected += 1,
             Err(error) => report.failures.push(format!("{}: {error:#}", agent.name)),
@@ -540,9 +575,12 @@ pub fn setup_all_detected_desktop_in(
 pub fn setup_all_detected_desktop(
     bun_path: &Path,
     api_key: Option<&str>,
+    api_url: &str,
 ) -> Result<DesktopAgentSetupReport> {
     let home = dirs::home_dir().context("could not resolve home dir")?;
-    Ok(setup_all_detected_desktop_in(&home, bun_path, api_key))
+    Ok(setup_all_detected_desktop_in(
+        &home, bun_path, api_key, api_url,
+    ))
 }
 
 fn layout(target: &str) -> Result<AgentLayout> {
@@ -644,14 +682,28 @@ fn read_config_text(path: &Path) -> Result<Option<String>> {
 /// How many `.screenpipe-backup-*` siblings to keep per config file.
 const MAX_CONFIG_BACKUPS: usize = 2;
 
-/// Timestamped backup of an existing config (pruned to the newest
-/// MAX_CONFIG_BACKUPS), then write via a sibling tmp file + atomic rename.
-/// A crash mid-write leaves the previous file intact, never a torn config.
-fn replace_config(path: &Path, contents: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    if path.exists() {
+fn config_lock_path(path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.screenpipe.lock", path.display()))
+}
+
+/// Compare-and-replace an agent config under a stable sibling lock.
+///
+/// The comparison protects edits made by the agent itself between our parse
+/// and write. The shared atomic writer fsyncs before replacement, uses unique
+/// temporary files, replaces existing files safely on Windows, and creates
+/// owner-only files on Unix so the embedded local API key is never widened to
+/// a default `0644` mode.
+fn replace_config(path: &Path, expected: Option<&str>, contents: &str) -> Result<()> {
+    let _lock = crate::atomic_file::lock(&config_lock_path(path))
+        .with_context(|| format!("lock {} before changing it", path.display()))?;
+    let current = read_config_text(path)?;
+    anyhow::ensure!(
+        current.as_deref() == expected,
+        "{} changed while screenpipe was preparing its MCP entry; left the newer file untouched",
+        path.display()
+    );
+
+    if current.is_some() {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -659,14 +711,10 @@ fn replace_config(path: &Path, contents: &str) -> Result<()> {
         let backup = PathBuf::from(format!("{}.screenpipe-backup-{ts}", path.display()));
         std::fs::copy(path, &backup)
             .with_context(|| format!("backup {} before changing it", path.display()))?;
-        prune_config_backups(path);
     }
-    let tmp = PathBuf::from(format!("{}.{}.tmp", path.display(), std::process::id()));
-    std::fs::write(&tmp, contents).with_context(|| format!("write {}", tmp.display()))?;
-    if let Err(e) = std::fs::rename(&tmp, path) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e).with_context(|| format!("rename onto {}", path.display()));
-    }
+    crate::atomic_file::replace(path, contents.as_bytes())
+        .with_context(|| format!("atomically replace {}", path.display()))?;
+    prune_config_backups(path);
     Ok(())
 }
 
@@ -710,7 +758,8 @@ fn write_skill(skills_dir: &Path, name: &str, md: &str, api_url: &str) -> Result
     let dir = skills_dir.join(name);
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let path = dir.join("SKILL.md");
-    std::fs::write(&path, body).with_context(|| format!("write {}", path.display()))?;
+    crate::atomic_file::replace(&path, body.as_bytes())
+        .with_context(|| format!("atomically write {}", path.display()))?;
     Ok(path)
 }
 
@@ -850,7 +899,11 @@ fn remove_mcp_json(path: &Path) -> Result<()> {
         println!("  · no screenpipe mcp entry in {}", path.display());
         return Ok(());
     }
-    replace_config(path, &(serde_json::to_string_pretty(&root)? + "\n"))?;
+    replace_config(
+        path,
+        Some(&existing),
+        &(serde_json::to_string_pretty(&root)? + "\n"),
+    )?;
     println!("  ✓ mcp removed from {}", path.display());
     Ok(())
 }
@@ -889,7 +942,7 @@ fn remove_mcp_toml(path: &Path) -> Result<()> {
         next = next.replace("\n\n\n", "\n\n");
     }
     let next = format!("{}\n", next.trim_matches('\n'));
-    replace_config(path, &next)?;
+    replace_config(path, Some(&existing), &next)?;
     println!("  ✓ mcp removed from {}", path.display());
     Ok(())
 }
@@ -989,7 +1042,7 @@ fn remove_mcp_yaml(path: &Path) -> Result<()> {
     } else {
         format!("{trimmed}\n")
     };
-    replace_config(path, &next)?;
+    replace_config(path, Some(&existing), &next)?;
     println!("  ✓ mcp removed from {}", path.display());
     Ok(())
 }
@@ -1027,8 +1080,9 @@ fn merge_mcp_json_launch(path: &Path, launch: &McpLaunchConfig) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
-    let mut root: Value = match read_config_text(path)? {
-        Some(s) if !s.trim().is_empty() => serde_json::from_str(&s)
+    let existing = read_config_text(path)?;
+    let mut root: Value = match existing.as_deref() {
+        Some(s) if !s.trim().is_empty() => serde_json::from_str(s)
             .with_context(|| format!("{} is not valid JSON; fix or remove it", path.display()))?,
         _ => json!({}),
     };
@@ -1052,7 +1106,11 @@ fn merge_mcp_json_launch(path: &Path, launch: &McpLaunchConfig) -> Result<()> {
         .as_object_mut()
         .context("mcpServers is present but not an object")?;
     servers.insert("screenpipe".to_string(), entry);
-    replace_config(path, &(serde_json::to_string_pretty(&root)? + "\n"))?;
+    replace_config(
+        path,
+        existing.as_deref(),
+        &(serde_json::to_string_pretty(&root)? + "\n"),
+    )?;
     println!("  ✓ mcp   {}", path.display());
     Ok(())
 }
@@ -1065,10 +1123,7 @@ fn merge_mcp_yaml(path: &Path, remote: bool, api_url: &str) -> Result<()> {
     merge_mcp_yaml_launch(path, &cli_launch_config(remote, api_url))
 }
 
-fn merge_mcp_yaml_launch(path: &Path, launch: &McpLaunchConfig) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
+fn render_mcp_yaml_server(launch: &McpLaunchConfig) -> Result<String> {
     let env_block = if launch.env.is_empty() {
         String::new()
     } else {
@@ -1095,7 +1150,7 @@ fn merge_mcp_yaml_launch(path: &Path, launch: &McpLaunchConfig) -> Result<()> {
             )
         })
         .unwrap_or_default();
-    let server = format!(
+    Ok(format!(
         "  screenpipe:\n    command: {}\n    args:\n{}{env_block}{transport_block}\n",
         serde_json::to_string(&launch.command)?,
         launch
@@ -1104,8 +1159,17 @@ fn merge_mcp_yaml_launch(path: &Path, launch: &McpLaunchConfig) -> Result<()> {
             .map(|arg| Ok(format!("      - {}", serde_json::to_string(arg)?)))
             .collect::<Result<Vec<_>>>()?
             .join("\n")
-    );
-    let existing = read_config_text(path)?.unwrap_or_default();
+    ))
+}
+
+fn merge_mcp_yaml_launch(path: &Path, launch: &McpLaunchConfig) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let server = render_mcp_yaml_server(launch)?;
+    let existing_value = read_config_text(path)?;
+    let existing = existing_value.as_deref().unwrap_or_default();
+    let mut lines: Vec<String> = existing.lines().map(str::to_owned).collect();
 
     // Only uncommented lines count: Hermes ships a commented-out
     // `# mcp_servers:` example block in its default config.yaml, and substring
@@ -1115,18 +1179,25 @@ fn merge_mcp_yaml_launch(path: &Path, launch: &McpLaunchConfig) -> Result<()> {
             .lines()
             .any(|l| !l.trim_start().starts_with('#') && l.contains(needle))
     };
-    if uncommented("screenpipe-mcp") {
-        println!(
-            "  • {} already references screenpipe-mcp; left as-is",
-            path.display()
-        );
-        return Ok(());
-    }
-    let mut lines: Vec<String> = existing.lines().map(str::to_owned).collect();
     if let Some(start) = lines.iter().position(|line| line == "mcp_servers:") {
+        let original_end = yaml_top_level_block_end(&lines, start);
+        if let Some(server_start) = (start + 1..original_end)
+            .find(|index| yaml_indent(&lines[*index]) == 2 && lines[*index].trim() == "screenpipe:")
+        {
+            let mut server_end = server_start + 1;
+            while server_end < original_end {
+                let line = &lines[server_end];
+                if line.trim().is_empty() || yaml_indent(line) > 2 {
+                    server_end += 1;
+                } else {
+                    break;
+                }
+            }
+            lines.drain(server_start..server_end);
+        }
         let end = yaml_top_level_block_end(&lines, start);
         lines.splice(end..end, server.lines().map(str::to_owned));
-        replace_config(path, &(lines.join("\n") + "\n"))?;
+        replace_config(path, existing_value.as_deref(), &(lines.join("\n") + "\n"))?;
         println!("  ✓ mcp   {}", path.display());
         return Ok(());
     }
@@ -1141,27 +1212,30 @@ fn merge_mcp_yaml_launch(path: &Path, launch: &McpLaunchConfig) -> Result<()> {
         );
     }
 
-    let mut out = existing;
+    if uncommented("screenpipe-mcp") {
+        anyhow::bail!(
+            "{} references screenpipe-mcp outside a standard mcp_servers block; left it untouched",
+            path.display()
+        );
+    }
+
+    let mut out = existing.to_string();
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
     }
     out.push_str(&format!("mcp_servers:\n{server}"));
-    replace_config(path, &out)?;
+    replace_config(path, existing_value.as_deref(), &out)?;
     println!("  ✓ mcp   {}", path.display());
     Ok(())
 }
 
-/// Add the `screenpipe` server to a TOML MCP config (Codex). No TOML lib —
-/// append a `[mcp_servers.screenpipe]` table if absent, preserving the rest of
-/// the file; if one already exists, leave it untouched.
+/// Add or repair the `screenpipe` server in a TOML MCP config (Codex),
+/// preserving every unrelated table and top-level key.
 fn merge_mcp_toml(path: &Path, remote: bool, api_url: &str) -> Result<()> {
     merge_mcp_toml_launch(path, &cli_launch_config(remote, api_url))
 }
 
-fn merge_mcp_toml_launch(path: &Path, launch: &McpLaunchConfig) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
+fn render_mcp_toml_block(launch: &McpLaunchConfig) -> Result<String> {
     let env_block = if launch.env.is_empty() {
         String::new()
     } else {
@@ -1175,7 +1249,7 @@ fn merge_mcp_toml_launch(path: &Path, launch: &McpLaunchConfig) -> Result<()> {
                 .join("\n")
         )
     };
-    let block = format!(
+    Ok(format!(
         "[mcp_servers.screenpipe]\ncommand = {}\nargs = [{}]\nenabled = true\n{env_block}",
         serde_json::to_string(&launch.command)?,
         launch
@@ -1184,16 +1258,46 @@ fn merge_mcp_toml_launch(path: &Path, launch: &McpLaunchConfig) -> Result<()> {
             .map(serde_json::to_string)
             .collect::<serde_json::Result<Vec<_>>>()?
             .join(", ")
-    );
-    let existing = read_config_text(path)?.unwrap_or_default();
-    if existing.contains("[mcp_servers.screenpipe]") {
-        println!(
-            "  • {} already has [mcp_servers.screenpipe]; left as-is",
-            path.display()
+    ))
+}
+
+fn strip_screenpipe_toml_tables(existing: &str) -> String {
+    let mut out = Vec::new();
+    let mut in_screenpipe = false;
+    for line in existing.lines() {
+        let trimmed = line.trim();
+        let screenpipe_header = matches!(
+            trimmed,
+            "[mcp_servers.screenpipe]"
+                | "[mcp_servers.screenpipe.env]"
+                | "[mcp_servers.\"screenpipe\"]"
+                | "[mcp_servers.\"screenpipe\".env]"
         );
-        return Ok(());
+        if screenpipe_header {
+            in_screenpipe = true;
+            continue;
+        }
+        if in_screenpipe && trimmed.starts_with('[') {
+            in_screenpipe = false;
+        }
+        if !in_screenpipe {
+            out.push(line);
+        }
     }
-    let mut out = existing;
+    let mut out = out.join("\n");
+    while out.contains("\n\n\n") {
+        out = out.replace("\n\n\n", "\n\n");
+    }
+    out.trim_matches('\n').to_string()
+}
+
+fn merge_mcp_toml_launch(path: &Path, launch: &McpLaunchConfig) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let block = render_mcp_toml_block(launch)?;
+    let existing_value = read_config_text(path)?;
+    let mut out = strip_screenpipe_toml_tables(existing_value.as_deref().unwrap_or_default());
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
     }
@@ -1201,7 +1305,7 @@ fn merge_mcp_toml_launch(path: &Path, launch: &McpLaunchConfig) -> Result<()> {
         out.push('\n');
     }
     out.push_str(&block);
-    replace_config(path, &out)?;
+    replace_config(path, existing_value.as_deref(), &out)?;
     println!("  ✓ mcp   {}", path.display());
     Ok(())
 }
@@ -1311,7 +1415,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         // Fresh file: no backup taken.
-        replace_config(&path, "v1").unwrap();
+        replace_config(&path, None, "v1").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "v1");
 
         // Each change of an existing file takes a backup; pruned to newest 2.
@@ -1322,7 +1426,8 @@ mod tests {
             } else {
                 1100
             }));
-            replace_config(&path, v).unwrap();
+            let expected = std::fs::read_to_string(&path).unwrap();
+            replace_config(&path, Some(&expected), v).unwrap();
         }
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "v5");
 
@@ -1344,6 +1449,43 @@ mod tests {
             "tmp left behind: {names:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_replace_config_rejects_a_concurrent_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, "newer edit").unwrap();
+
+        let error = replace_config(&path, Some("stale edit"), "screenpipe edit").unwrap_err();
+        assert!(error.to_string().contains("changed while screenpipe"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "newer edit");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_authenticated_config_replacement_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        std::fs::write(&path, "{}\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let launch = McpLaunchConfig {
+            command: "/bundled/bun".to_string(),
+            args: vec!["x".to_string(), "screenpipe-mcp@latest".to_string()],
+            env: BTreeMap::from([(
+                "SCREENPIPE_LOCAL_API_KEY".to_string(),
+                "sp-secret".to_string(),
+            )]),
+            transport: None,
+        };
+
+        merge_mcp_json_launch(&path, &launch).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[test]
@@ -1680,7 +1822,12 @@ mod tests {
         std::fs::write(home.join(".codeium/windsurf/mcp_config.json"), "{}\n").unwrap();
 
         let bun = home.join("screenpipe-runtime/bun");
-        let report = setup_all_detected_desktop_in(home, &bun, Some("sp-test-key"));
+        let report = setup_all_detected_desktop_in(
+            home,
+            &bun,
+            Some("sp-test-key"),
+            "http://localhost:31337",
+        );
         assert_eq!(
             report,
             DesktopAgentSetupReport {
@@ -1699,6 +1846,7 @@ mod tests {
         )));
         assert!(codex.contains("SCREENPIPE_LOCAL_API_KEY = \"sp-test-key\""));
         assert!(codex.contains("SCREENPIPE_MCP_CLIENT = \"codex\""));
+        assert!(codex.contains("SCREENPIPE_API_URL = \"http://localhost:31337\""));
         assert!(home.join(".codex/skills/screenpipe-api/SKILL.md").is_file());
         assert!(home.join(".codex/skills/screenpipe-cli/SKILL.md").is_file());
 
@@ -1732,7 +1880,12 @@ mod tests {
         assert!(hermes.contains("SCREENPIPE_LOCAL_API_KEY: \"sp-test-key\""));
 
         let first_codex = codex;
-        let second = setup_all_detected_desktop_in(home, &bun, Some("sp-test-key"));
+        let second = setup_all_detected_desktop_in(
+            home,
+            &bun,
+            Some("sp-test-key"),
+            "http://localhost:31337",
+        );
         assert_eq!(second.detected, 5);
         assert_eq!(second.connected, 0);
         assert_eq!(second.already_connected, 5);
@@ -1741,6 +1894,75 @@ mod tests {
             std::fs::read_to_string(home.join(".codex/config.toml")).unwrap(),
             first_codex
         );
+    }
+
+    #[test]
+    fn test_desktop_background_setup_repairs_a_stale_mcp_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(
+            home.join(".codex/config.toml"),
+            "model = \"gpt-5\"\n\n[mcp_servers.screenpipe]\ncommand = \"npx\"\nargs = [\"stale-package\"]\n\n[mcp_servers.screenpipe.env]\nSCREENPIPE_LOCAL_API_KEY = \"stale-key\"\n",
+        )
+        .unwrap();
+        write_skill(
+            &home.join(".codex/skills"),
+            "screenpipe-api",
+            API_SKILL_MD,
+            "http://localhost:3030",
+        )
+        .unwrap();
+        write_skill(
+            &home.join(".codex/skills"),
+            "screenpipe-cli",
+            CLI_SKILL_MD,
+            "http://localhost:3030",
+        )
+        .unwrap();
+
+        let report = setup_all_detected_desktop_in(
+            home,
+            Path::new("/bundled/bun"),
+            Some("current-key"),
+            "http://localhost:4242",
+        );
+        assert_eq!(report.connected, 1);
+        assert_eq!(report.already_connected, 0);
+        assert!(report.failures.is_empty());
+
+        let config = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+        assert!(config.contains("model = \"gpt-5\""));
+        assert!(config.contains("command = \"/bundled/bun\""));
+        assert!(config.contains("SCREENPIPE_LOCAL_API_KEY = \"current-key\""));
+        assert!(config.contains("SCREENPIPE_API_URL = \"http://localhost:4242\""));
+        assert!(!config.contains("stale-package"));
+        assert!(!config.contains("stale-key"));
+        assert_eq!(config.matches("[mcp_servers.screenpipe]").count(), 1);
+    }
+
+    #[test]
+    fn test_desktop_background_setup_removes_stale_key_when_auth_is_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        let bun = Path::new("/bundled/bun");
+
+        let authenticated =
+            setup_all_detected_desktop_in(home, bun, Some("previous-key"), "http://localhost:3030");
+        assert!(authenticated.failures.is_empty());
+        assert_eq!(authenticated.connected, 1);
+
+        let unauthenticated =
+            setup_all_detected_desktop_in(home, bun, None, "http://localhost:3030");
+        assert!(unauthenticated.failures.is_empty());
+        assert_eq!(unauthenticated.connected, 1);
+
+        let config = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+        assert!(!config.contains("previous-key"));
+        assert!(!config.contains("SCREENPIPE_LOCAL_API_KEY"));
+        assert!(config.contains("SCREENPIPE_API_URL = \"http://localhost:3030\""));
+        assert_eq!(config.matches("[mcp_servers.screenpipe]").count(), 1);
     }
 
     #[test]
@@ -1757,7 +1979,12 @@ mod tests {
         )
         .unwrap();
 
-        let report = setup_all_detected_desktop_in(home, Path::new("/bundled/bun"), Some("sp-key"));
+        let report = setup_all_detected_desktop_in(
+            home,
+            Path::new("/bundled/bun"),
+            Some("sp-key"),
+            "http://localhost:3030",
+        );
         assert_eq!(report.detected, 2);
         assert_eq!(report.connected, 1);
         assert_eq!(report.failures.len(), 1);
