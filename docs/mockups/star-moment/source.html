@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Star moment concepts</title>
+  <style>
+    :root {
+      --paper: #f2efe7;
+      --panel: #fbfaf6;
+      --ink: #090909;
+      --muted: #77766f;
+      --line: #151515;
+      --soft-line: #c7c3b9;
+      --acid: #c7ff3d;
+      --red: #e55545;
+      --gold: #dca72e;
+      --serif: Georgia, "Times New Roman", serif;
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 1600px; height: 1000px; overflow: hidden; }
+    body { background: var(--paper); color: var(--ink); font-family: var(--sans); }
+    .page { display: none; width: 1600px; height: 1000px; padding: 52px 64px 48px; position: relative; }
+    .page.active { display: block; }
+    .eyebrow { font: 700 12px/1 var(--mono); letter-spacing: .16em; color: var(--muted); text-transform: uppercase; }
+    h1 { margin: 16px 0 10px; font-size: 47px; line-height: .98; letter-spacing: -.055em; font-weight: 800; }
+    .lede { margin: 0; max-width: 880px; font: 17px/1.48 var(--serif); color: #77736b; }
+    .chip { position: absolute; top: 46px; right: 64px; border: 1px solid var(--line); padding: 10px 14px; font: 700 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; background: var(--panel); }
+    .stage { position: absolute; left: 64px; right: 64px; top: 210px; bottom: 54px; border: 1px solid var(--line); background: #f8f6f0; overflow: hidden; }
+    .windowbar { height: 43px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 9px; padding: 0 18px; font: 11px/1 var(--mono); color: #66645e; letter-spacing: .06em; }
+    .dot { width: 11px; height: 11px; border-radius: 50%; }
+    .dot.red { background: #f16b62; } .dot.yellow { background: #f1be48; } .dot.green { background: #5bc47a; }
+    .desktop { position: absolute; inset: 43px 0 0; background: #f7f5ef; }
+    .fake-window { position: absolute; border: 1px solid #b9b6ae; background: #fffef9; }
+    .fake-window::before { content: ""; position: absolute; top: 18px; left: 18px; width: 34%; height: 10px; background: #c9c7c0; }
+    .fake-window::after { content: ""; position: absolute; top: 45px; left: 18px; right: 18px; height: 8px; background: #e0ded8; box-shadow: 0 28px 0 #e9e7e1, 0 56px 0 #e9e7e1; }
+    .w1 { left: 42px; top: 42px; width: 47%; bottom: 90px; }
+    .w2 { right: 42px; top: 42px; width: 42%; height: 244px; }
+    .w3 { right: 42px; bottom: 90px; width: 42%; height: 220px; }
+    .overlay { position: absolute; display: flex; align-items: stretch; height: 50px; background: #080808; border: 4px solid #080808; color: white; box-shadow: 0 14px 30px rgba(0,0,0,.14); font: 700 11px/1 var(--mono); letter-spacing: .03em; }
+    .orb { width: 46px; min-width: 46px; display: grid; place-items: center; position: relative; font-size: 17px; border-right: 1px solid #323232; }
+    .orb::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 7px; height: 7px; border: 2px solid white; border-radius: 50%; background: var(--acid); }
+    .ctl { display: flex; align-items: center; justify-content: center; min-width: 98px; padding: 0 13px; border-right: 1px solid #383838; white-space: nowrap; }
+    .ctl.icononly { min-width: 44px; width: 44px; padding: 0; font-size: 19px; }
+    .ctl.star { min-width: 118px; }
+    .ctl.star.hot, .ctl.hot { background: var(--acid); color: #050505; border-color: var(--acid); }
+    .ctl.dim { color: #aaa; }
+    .annotation { position: absolute; font: 700 13px/1.25 var(--sans); }
+    .annotation small { display: block; margin-top: 6px; font: 14px/1.3 var(--serif); color: #77736b; font-weight: 400; }
+    .rule { display: inline-block; width: 110px; border-top: 1px solid var(--line); vertical-align: middle; margin: 0 12px; }
+    .kbd { display: inline-grid; place-items: center; min-width: 36px; height: 28px; padding: 0 8px; border: 1px solid var(--line); background: var(--panel); font: 700 11px/1 var(--mono); }
+    .toast { position: absolute; background: #080808; color: white; border: 1px solid #080808; box-shadow: 0 18px 36px rgba(0,0,0,.16); }
+    .toast-head { display: flex; align-items: center; gap: 12px; padding: 17px 18px 12px; font-weight: 800; font-size: 16px; }
+    .toast-head .star-mark { width: 30px; height: 30px; display: grid; place-items: center; background: var(--acid); color: black; font-size: 18px; }
+    .toast-sub { padding: 0 18px 16px 60px; color: #bcbcbc; font: 12px/1.4 var(--mono); }
+    .toast-actions { display: flex; border-top: 1px solid #333; }
+    .toast-actions span { padding: 13px 18px; border-right: 1px solid #333; font: 700 11px/1 var(--mono); letter-spacing: .06em; }
+    .toast-actions .primary { background: var(--acid); color: black; }
+    .menu { position: absolute; width: 330px; background: #fbfaf6; border: 1px solid var(--line); box-shadow: 0 18px 40px rgba(0,0,0,.14); padding: 8px; }
+    .menu-title { padding: 10px 12px 9px; font: 700 10px/1 var(--mono); letter-spacing: .12em; color: var(--muted); text-transform: uppercase; }
+    .menu-item { min-height: 53px; display: grid; grid-template-columns: 29px 1fr auto; align-items: center; padding: 7px 12px; gap: 6px; }
+    .menu-item.active { background: #e4e1d9; }
+    .menu-item .mi { font-size: 18px; text-align: center; }
+    .menu-item strong { display: block; font-size: 13px; }
+    .menu-item em { display: block; margin-top: 3px; font: 12px/1.2 var(--serif); color: #77736b; font-style: normal; }
+    .menu-item code { font: 10px/1 var(--mono); border: 1px solid #aaa69d; padding: 5px 6px; }
+    .menu-sep { border-top: 1px solid #cbc7bd; margin: 5px 8px; }
+    .note-card { position: absolute; width: 470px; background: #fbfaf6; border: 1px solid var(--line); box-shadow: 0 18px 40px rgba(0,0,0,.14); }
+    .note-top { display: flex; gap: 13px; padding: 20px; border-bottom: 1px solid #d0ccc2; }
+    .note-top .star-mark { width: 34px; height: 34px; display: grid; place-items: center; background: var(--acid); font-size: 19px; }
+    .note-top strong { display: block; font-size: 16px; }
+    .note-top small { display: block; margin-top: 5px; color: var(--muted); font: 11px/1 var(--mono); }
+    .input { margin: 18px 20px 10px; border: 1px solid var(--line); background: white; min-height: 86px; padding: 14px; font: 14px/1.4 var(--sans); color: #403f3a; }
+    .tags { display: flex; gap: 7px; flex-wrap: wrap; padding: 0 20px 18px; }
+    .tag { border: 1px solid #9c998f; padding: 7px 9px; font: 10px/1 var(--mono); background: #f3f0e8; }
+    .note-foot { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #d0ccc2; padding: 13px 20px; font: 10px/1.3 var(--mono); color: var(--muted); }
+    .button { background: #080808; color: white; padding: 11px 16px; font: 700 10px/1 var(--mono); letter-spacing: .06em; }
+    .timeline-shell { position: absolute; inset: 0; background: #f7f5ef; display: grid; grid-template-columns: 230px 1fr; }
+    .side { border-right: 1px solid #bebbb2; padding: 28px 20px; }
+    .brand { font-size: 21px; font-weight: 850; letter-spacing: -.04em; margin-bottom: 35px; }
+    .nav { padding: 11px 12px; margin: 3px 0; font-size: 13px; color: #5e5c56; }
+    .nav.active { color: var(--ink); background: #e4e1d9; font-weight: 750; }
+    .main { padding: 36px 44px; }
+    .main h2 { margin: 0 0 20px; font-size: 30px; letter-spacing: -.04em; }
+    .tabs { display: flex; gap: 2px; border-bottom: 1px solid #bdb9b0; margin-bottom: 28px; }
+    .tab { padding: 12px 16px; font: 700 11px/1 var(--mono); color: #77736b; }
+    .tab.active { color: #050505; border-bottom: 3px solid #050505; }
+    .moment { width: 100%; display: grid; grid-template-columns: 115px 38px 1fr 160px; gap: 16px; align-items: start; border: 1px solid #b8b4aa; background: #fffef9; padding: 18px 20px; margin-bottom: 14px; }
+    .moment .time { font: 700 11px/1.3 var(--mono); }
+    .moment .sicon { width: 30px; height: 30px; background: var(--acid); display: grid; place-items: center; }
+    .moment h3 { margin: 0 0 7px; font-size: 16px; }
+    .moment p { margin: 0; color: #6d6a63; font: 14px/1.35 var(--serif); }
+    .moment .meta { text-align: right; font: 10px/1.7 var(--mono); color: #77736b; }
+    .searchbox { position: absolute; right: 44px; top: 34px; width: 260px; border: 1px solid #aaa69d; background: white; padding: 11px 13px; font: 11px/1 var(--mono); color: #77736b; }
+    .story { position: absolute; left: 64px; right: 64px; top: 218px; bottom: 48px; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); gap: 18px; }
+    .beat { border: 1px solid var(--line); background: #fbfaf6; padding: 20px; position: relative; }
+    .beat .num { font: 700 11px/1 var(--mono); letter-spacing: .13em; color: var(--muted); }
+    .beat h2 { font-size: 18px; margin: 11px 0 5px; letter-spacing: -.03em; }
+    .beat p { margin: 0; font: 13px/1.35 var(--serif); color: #77736b; }
+    .mini-stage { position: absolute; left: 18px; right: 18px; bottom: 18px; height: 122px; border: 1px dashed #c5c1b7; display: grid; place-items: center; }
+    .mini-overlay { height: 37px; display: flex; align-items: stretch; background: #080808; color: white; border: 3px solid #080808; font: 700 8px/1 var(--mono); box-shadow: 0 8px 22px rgba(0,0,0,.12); }
+    .mini-overlay span { display: grid; place-items: center; padding: 0 10px; border-right: 1px solid #333; }
+    .mini-overlay .acid { background: var(--acid); color: black; }
+    .mini-toast { background: #080808; color: white; padding: 12px 16px; font: 700 9px/1 var(--mono); box-shadow: 0 8px 22px rgba(0,0,0,.12); }
+    .mini-menu { width: 195px; border: 1px solid var(--line); background: #fbfaf6; padding: 5px; font: 9px/1.8 var(--mono); }
+    .mini-menu div { padding: 2px 8px; } .mini-menu div:first-child { background: #e4e1d9; }
+    .point-line { position: absolute; left: 10%; right: 10%; top: 52%; height: 2px; background: #bbb7ae; }
+    .point { position: absolute; left: 52%; top: calc(52% - 10px); width: 21px; height: 21px; background: var(--acid); border: 2px solid #080808; transform: rotate(45deg); }
+    .spanbar { position: absolute; left: 27%; right: 20%; top: calc(52% - 6px); height: 14px; background: var(--acid); border: 2px solid #080808; }
+    .privacy-note { position: absolute; bottom: 28px; left: 28px; display: flex; gap: 11px; align-items: center; font: 10px/1.35 var(--mono); color: #6a675f; }
+    .privacy-note b { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid #8c887f; color: #111; }
+  </style>
+</head>
+<body>
+
+  <section class="page" data-page="1">
+    <div class="eyebrow">STAR MOMENTS · CONCEPT 01 · RELATED #5548</div>
+    <h1>the star stays out of the passive state</h1>
+    <p class="lede">Keep the 30px capture orb quiet. Hover reveals the existing capture controls plus one intentional <b>Moment</b> action—no second floating widget.</p>
+    <div class="chip">PASSIVE → HOVER</div>
+    <div class="stage">
+      <div class="windowbar"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span><span style="margin-left:14px">quiet by default · no focus steal</span></div>
+      <div class="desktop">
+        <div class="fake-window w1"></div><div class="fake-window w2"></div><div class="fake-window w3"></div>
+        <div class="overlay" style="right:70px; top:112px; width:50px"><div class="orb">⌁</div></div>
+        <div class="annotation" style="right:74px; top:185px; text-align:right">passive: unchanged <span class="rule"></span><small>one tiny capture orb</small></div>
+        <div class="overlay" style="right:70px; bottom:160px">
+          <div class="orb">⌁</div><div class="ctl">▣ SCREEN</div><div class="ctl">♩ MIC</div><div class="ctl star hot">★ MOMENT</div><div class="ctl">Ⅱ PAUSE</div><div class="ctl icononly">•••</div>
+        </div>
+        <div class="annotation" style="right:72px; bottom:105px; text-align:right">intent reveals the action <span class="rule"></span><small>click once; deeper choices stay behind a menu</small></div>
+        <div style="position:absolute;left:42px;bottom:26px;border:1px solid #aaa69d;padding:10px 13px;font:11px/1 var(--mono)"><span class="kbd">⌥⌘S</span>&nbsp;&nbsp;optional global shortcut</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page" data-page="2">
+    <div class="eyebrow">STAR MOMENTS · CONCEPT 02</div>
+    <h1>one click drops a point-in-time marker</h1>
+    <p class="lede">A normal click never asks for a duration. It anchors “now”; the user can undo, add meaning, or widen the context later.</p>
+    <div class="chip">FAST PATH</div>
+    <div class="stage">
+      <div class="windowbar"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span><span style="margin-left:14px">single intentional action</span></div>
+      <div class="desktop">
+        <div class="fake-window w1"></div><div class="fake-window w2"></div><div class="fake-window w3"></div>
+        <div class="overlay" style="right:70px; top:94px"><div class="orb">⌁</div><div class="ctl">▣ SCREEN</div><div class="ctl">♩ MIC</div><div class="ctl star hot">★ MOMENT</div><div class="ctl">Ⅱ PAUSE</div><div class="ctl icononly">•••</div></div>
+        <div class="toast" style="right:70px; top:164px; width:345px">
+          <div class="toast-head"><span class="star-mark">★</span><span>moment starred</span></div>
+          <div class="toast-sub">3:21 PM · point marker · local</div>
+          <div class="toast-actions"><span class="primary">ADD NOTE</span><span>CHOOSE RANGE</span><span>UNDO</span></div>
+        </div>
+        <div class="annotation" style="left:92px;bottom:132px">default is a marker, not a guessed clip <span class="rule"></span><small>AI retrieval can inspect surrounding context without duplicating capture</small></div>
+        <div class="point-line" style="left:90px;right:90px;top:auto;bottom:77px"></div><div class="point" style="left:49%;top:auto;bottom:67px"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page" data-page="3">
+    <div class="eyebrow">STAR MOMENTS · CONCEPT 03</div>
+    <h1>deeper time choices are visible—not secret</h1>
+    <p class="lede">The adjacent menu exposes three understandable models: mark now, reach backward, or start a span. No undiscoverable long-press gesture.</p>
+    <div class="chip">PROGRESSIVE DISCLOSURE</div>
+    <div class="stage">
+      <div class="windowbar"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span><span style="margin-left:14px">star menu</span></div>
+      <div class="desktop">
+        <div class="fake-window w1"></div><div class="fake-window w2"></div><div class="fake-window w3"></div>
+        <div class="overlay" style="right:70px; top:68px"><div class="orb">⌁</div><div class="ctl">▣ SCREEN</div><div class="ctl">♩ MIC</div><div class="ctl star hot">★ MOMENT&nbsp;⌄</div><div class="ctl">Ⅱ PAUSE</div><div class="ctl icononly">•••</div></div>
+        <div class="menu" style="right:216px;top:119px">
+          <div class="menu-title">STAR A MOMENT</div>
+          <div class="menu-item active"><span class="mi">★</span><span><strong>Star this moment</strong><em>Drop a marker at 3:21 PM</em></span><code>⌥⌘S</code></div>
+          <div class="menu-item"><span class="mi">↶</span><span><strong>Star recent context</strong><em>Last 1, 5, or 15 minutes</em></span><span>›</span></div>
+          <div class="menu-item"><span class="mi">●</span><span><strong>Start a starred span</strong><em>Keep going until I stop</em></span><span>›</span></div>
+          <div class="menu-sep"></div>
+          <div class="menu-item"><span class="mi">↔</span><span><strong>Choose a range…</strong><em>Use start and end times</em></span><span></span></div>
+        </div>
+        <div class="annotation" style="left:80px;bottom:150px">three clear mental models <span class="rule"></span><small>point · recent context · ongoing span</small></div>
+        <div style="position:absolute;left:80px;right:600px;bottom:62px;display:flex;gap:18px">
+          <div style="flex:1;border:1px solid #b9b6ae;background:#fffef9;padding:17px"><b style="font-size:12px">POINT</b><div style="height:38px;position:relative"><div class="point-line"></div><div class="point"></div></div></div>
+          <div style="flex:1;border:1px solid #b9b6ae;background:#fffef9;padding:17px"><b style="font-size:12px">RECENT</b><div style="height:38px;position:relative"><div class="point-line"></div><div class="spanbar" style="left:20%;right:46%"></div></div></div>
+          <div style="flex:1;border:1px solid #b9b6ae;background:#fffef9;padding:17px"><b style="font-size:12px">ONGOING</b><div style="height:38px;position:relative"><div class="point-line"></div><div class="spanbar"></div></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page" data-page="4">
+    <div class="eyebrow">STAR MOMENTS · CONCEPT 04</div>
+    <h1>add meaning after capture, never before it</h1>
+    <p class="lede">The moment is already safe. “Add note” opens a compact local form for a label or tag; skipping it loses nothing.</p>
+    <div class="chip">OPTIONAL CONTEXT</div>
+    <div class="stage">
+      <div class="windowbar"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span><span style="margin-left:14px">private context</span></div>
+      <div class="desktop">
+        <div class="fake-window w1"></div><div class="fake-window w2"></div><div class="fake-window w3"></div>
+        <div class="note-card" style="right:92px;top:70px">
+          <div class="note-top"><span class="star-mark">★</span><span><strong>What mattered here?</strong><small>STARRED AT 3:21 PM · SAVED LOCALLY</small></span></div>
+          <div class="input">We agreed on the three priorities for launch<span style="opacity:.45">|</span></div>
+          <div class="tags"><span class="tag">+ DECISION</span><span class="tag">+ PRODUCT IDEA</span><span class="tag">+ FOLLOW UP</span><span class="tag">+ NEW TAG</span></div>
+          <div class="note-foot"><span>Optional · Escape to skip</span><span class="button">SAVE NOTE</span></div>
+        </div>
+        <div class="annotation" style="left:92px;bottom:155px">content stays private by default <span class="rule"></span><small>product telemetry records only that a star happened—not the screenshot, audio, or note</small></div>
+        <div class="privacy-note"><b>⌂</b><span>LOCAL CONTENT<br/>coarse action telemetry only</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page" data-page="5">
+    <div class="eyebrow">STAR MOMENTS · CONCEPT 05</div>
+    <h1>an ongoing span stays impossible to forget</h1>
+    <p class="lede">Starting a longer moment changes the compact control into an explicit timer. Stop is always one click away; leaving it running cannot be invisible.</p>
+    <div class="chip">START / STOP SPAN</div>
+    <div class="stage">
+      <div class="windowbar"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span><span style="margin-left:14px">active starred span</span></div>
+      <div class="desktop">
+        <div class="fake-window w1"></div><div class="fake-window w2"></div><div class="fake-window w3"></div>
+        <div class="overlay" style="right:70px;top:90px"><div class="orb">⌁</div><div class="ctl hot" style="min-width:168px">★ MOMENT&nbsp;&nbsp;08:42</div><div class="ctl" style="min-width:82px">■ STOP</div><div class="ctl icononly">•••</div></div>
+        <div class="toast" style="right:70px;top:170px;width:345px">
+          <div class="toast-head"><span class="star-mark">★</span><span>starred span saved</span></div>
+          <div class="toast-sub">3:12–3:21 PM · 8m 42s</div>
+          <div class="toast-actions"><span class="primary">ADD NOTE</span><span>OPEN IN TIMELINE</span></div>
+        </div>
+        <div class="annotation" style="left:92px;bottom:132px">active state uses shape + text + time <span class="rule"></span><small>not color alone; survives overlay collapse and makes stop obvious</small></div>
+        <div style="position:absolute;left:92px;right:92px;bottom:70px;height:16px;border:2px solid #080808;background:var(--acid)"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page" data-page="6">
+    <div class="eyebrow">STAR MOMENTS · CONCEPT 06</div>
+    <h1>stars become retrieval anchors</h1>
+    <p class="lede">A Starred filter turns a fleeting signal into a durable way to revisit audio, screen context, notes, and decisions.</p>
+    <div class="chip">TIMELINE</div>
+    <div class="stage">
+      <div class="timeline-shell">
+        <aside class="side"><div class="brand">screenpipe</div><div class="nav">⌕ Chat</div><div class="nav">⌁ Automations</div><div class="nav active">◷ Timeline</div><div class="nav">◇ Brain</div><div class="nav">⌘ Connections</div></aside>
+        <main class="main">
+          <h2>Timeline</h2><div class="searchbox">⌕ Search your history</div>
+          <div class="tabs"><div class="tab">ALL ACTIVITY</div><div class="tab">MEETINGS</div><div class="tab active">★ STARRED</div></div>
+          <div class="moment"><div class="time">3:21 PM<br/><span style="color:#888">8m 42s</span></div><div class="sicon">★</div><div><h3>Launch priorities</h3><p>Decision · “We agreed on the three priorities for launch…”</p><div class="tags" style="padding:12px 0 0"><span class="tag">DECISION</span><span class="tag">AUDIO + SCREEN</span></div></div><div class="meta">TODAY<br/>CHROME · SLACK<br/><b style="color:#111">OPEN CONTEXT →</b></div></div>
+          <div class="moment"><div class="time">11:08 AM<br/><span style="color:#888">POINT</span></div><div class="sicon">★</div><div><h3>Customer language worth reusing</h3><p>Product idea · Context is available before and after the marker.</p><div class="tags" style="padding:12px 0 0"><span class="tag">PRODUCT IDEA</span></div></div><div class="meta">TODAY<br/>ZOOM · NOTES<br/><b style="color:#111">OPEN CONTEXT →</b></div></div>
+          <div class="moment"><div class="time">4:42 PM<br/><span style="color:#888">5 MIN</span></div><div class="sicon">★</div><div><h3>Follow up on the demo</h3><p>Follow up · Review the five minutes leading into this marker.</p><div class="tags" style="padding:12px 0 0"><span class="tag">FOLLOW UP</span></div></div><div class="meta">YESTERDAY<br/>ARC · LINEAR<br/><b style="color:#111">OPEN CONTEXT →</b></div></div>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <section class="page" data-page="7">
+    <div class="eyebrow">STAR MOMENTS · CONCEPT 07 · RELATED #5548</div>
+    <h1>quiet control → durable context</h1>
+    <p class="lede">One progressive system: reveal on intent, save instantly, add meaning optionally, retrieve later.</p>
+    <div class="chip">STORYBOARD</div>
+    <div class="story">
+      <div class="beat"><div class="num">01 · PASSIVE</div><h2>nothing new to manage</h2><p>The tiny capture orb keeps its predictable home.</p><div class="mini-stage"><div class="mini-overlay"><span>⌁</span></div></div></div>
+      <div class="beat"><div class="num">02 · HOVER</div><h2>moment action appears</h2><p>Screen, mic, moment, pause, more.</p><div class="mini-stage"><div class="mini-overlay"><span>⌁</span><span>SCREEN</span><span>MIC</span><span class="acid">★ MOMENT</span><span>PAUSE</span></div></div></div>
+      <div class="beat"><div class="num">03 · CLICK</div><h2>star now</h2><p>A marker lands immediately. Undo stays available.</p><div class="mini-stage"><div class="mini-toast"><span style="background:var(--acid);color:#000;padding:6px;margin-right:8px">★</span> MOMENT STARRED&nbsp;&nbsp;·&nbsp;&nbsp;UNDO</div></div></div>
+      <div class="beat"><div class="num">04 · DISCLOSE</div><h2>choose another time model</h2><p>Recent context and ongoing spans live in a visible menu.</p><div class="mini-stage"><div class="mini-menu"><div>★ Star this moment</div><div>↶ Star recent context</div><div>● Start a starred span</div><div>↔ Choose a range…</div></div></div></div>
+      <div class="beat"><div class="num">05 · LABEL</div><h2>optional private meaning</h2><p>Add a note or tag after the moment is already saved.</p><div class="mini-stage"><div style="width:210px;border:1px solid #111;background:#fff;padding:10px;font:9px/1.4 var(--mono)"><b>WHAT MATTERED HERE?</b><div style="border:1px solid #aaa;margin-top:8px;padding:8px;color:#777">Add a short note…</div></div></div></div>
+      <div class="beat"><div class="num">06 · RETRIEVE</div><h2>find stars in Timeline</h2><p>Markers rank and focus surrounding local context.</p><div class="mini-stage"><div style="width:240px;border:1px solid #111;background:#fff;padding:12px;font:9px/1.35 var(--mono)"><span style="background:var(--acid);padding:6px;margin-right:8px">★</span><b>LAUNCH PRIORITIES</b><br/><span style="display:block;margin:9px 0 0 36px;color:#777">3:21 PM · 8m 42s · Decision</span></div></div></div>
+    </div>
+  </section>
+
+  <script>
+    const page = new URLSearchParams(location.search).get('page') || '1';
+    document.querySelector(`[data-page="${page}"]`)?.classList.add('active');
+  </script>
+</body>
+</html>
