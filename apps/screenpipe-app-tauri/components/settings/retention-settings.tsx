@@ -459,7 +459,8 @@ export function RetentionSettings({
             <div>
               <p className="text-sm font-medium">storage policy</p>
               <p className="text-xs text-muted-foreground">
-                what happens to recordings as they age
+                automatic cleanup runs on this device. it never uploads your
+                data.
               </p>
             </div>
           </div>
@@ -487,7 +488,8 @@ export function RetentionSettings({
               </p>
               <p className="mt-1 text-muted-foreground">
                 screenpipe permanently deletes recordings, transcripts, ocr, and
-                captured ui activity after 7 days. upgrade to choose a longer
+                captured ui activity after 7 days. this is the free-plan policy,
+                even though capture is stored locally. upgrade to choose a longer
                 retention period or keep activity indefinitely.
               </p>
             </div>

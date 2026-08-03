@@ -90,6 +90,16 @@ describe("RetentionSettings free-plan policy", () => {
       within(notice).getByText(/permanently deletes/i),
     ).toBeInTheDocument();
     expect(
+      within(notice).getByText(
+        /free-plan policy, even though capture is stored locally/i,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /automatic cleanup runs on this device. it never uploads your data/i,
+      ),
+    ).toBeInTheDocument();
+    expect(
       screen.getByText(
         /currently: permanently deleting captured activity older than 7 days/i,
       ),

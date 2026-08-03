@@ -55,6 +55,7 @@ import { ApplyRestartBar } from "./apply-restart-bar";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
 import { ScheduleSettings } from "./schedule-settings";
 import { RemoteSupportLogsCard } from "./remote-support-logs-card";
+import { PrivacyControlOverview } from "./privacy-control-overview";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { platform } from "@tauri-apps/plugin-os";
 import { useToast } from "@/components/ui/use-toast";
@@ -1104,9 +1105,7 @@ export function PrivacySection() {
 
   return (
     <div className="space-y-5">
-      <p className="text-muted-foreground text-sm mb-4">
-        Content filtering, PII redaction, and telemetry
-      </p>
+      <PrivacyControlOverview />
 
       <div className="flex items-center justify-end">
           {hasUnsavedChanges && (
