@@ -1,6 +1,6 @@
 ---
 name: screenpipe-team
-description: Query the org's screenpipe telemetry as an enterprise admin — devices, members, recent activity, and substring search across the team's screen recordings, structured app data, and audio transcripts. Use when the user asks about their team, a teammate's activity, what their organization worked on, app usage across the org, or anything that requires seeing data beyond the user's own machine. The skill is only installed for enterprise admins; ordinary users won't see it.
+description: Query the org's screenpipe telemetry and manage hosted team Pipes as an enterprise admin. Use for team devices, recent activity, organization search, or creating, previewing, deploying, and scheduling managed Pipes. The skill is only installed for enterprise admins; ordinary users won't see it.
 ---
 
 # Screenpipe Team
@@ -15,6 +15,10 @@ License-key + token are intentionally separate concerns:
 - `license_key` proves *which org* this machine belongs to (deployed by IT, same on every employee's device).
 - `team_api_token` proves *this user is an admin of that org* and grants the read scopes. Employees who don't have it can't query team data even though they have the same license_key.
 
+Managed Pipe operations require `write:pipes`. Read-only team queries retain
+their existing `read:devices`, `read:search`, and `read:records` scopes. Do not
+use a write-scoped token unless the user is actually managing Pipes.
+
 ```bash
 TEAM_TOKEN=$(jq -r .team_api_token ~/.screenpipe/enterprise.json)
 SP_URL="https://screenpi.pe/api/enterprise/v1"
@@ -24,8 +28,9 @@ AUTH_HEADERS=(-H "Authorization: Bearer $TEAM_TOKEN")
 If `TEAM_TOKEN` is empty / null, tell the user verbatim:
 
 > I need an admin API token to query team data. Open
-> https://screenpi.pe/enterprise?tab=tokens, create one with the
-> `read:devices`, `read:search`, `read:records` scopes, then paste it
+> https://screenpi.pe/enterprise?tab=tokens, create one with the scopes needed
+> for this task (`read:devices`, `read:search`, `read:records` for team queries;
+> `write:pipes` for managed Pipe operations), then paste it
 > into Settings → Privacy → Admin Team API Token. Token can be rotated
 > or revoked any time from the same page.
 
@@ -117,6 +122,23 @@ Records come oldest-first so you can describe a chronological flow.
 - Some devices report as `user_xxxxxx` instead of a hostname — those users chose **anonymous** visibility. You can chat about them by pseudonym but should never speculate about their real identity. If the user asks "who is `user_a3f201`", say: that user opted into anonymous visibility and identity cannot be revealed without their consent.
 - Don't dump raw text in your reply when summarizing — quote short snippets, cite by timestamp + device.
 - Don't volunteer data the user didn't ask for. If they ask about engineering, don't include design.
+
+## Managed team Pipes
+
+Prefer the native CLI over handwritten curl:
+
+```bash
+screenpipe team pipes list
+screenpipe team pipes preview ./my-pipe/pipe.md
+screenpipe team pipes deploy ./my-pipe/pipe.md
+screenpipe team pipes schedule my-pipe "every day at 9am"
+```
+
+The mutation commands preview before writing and require explicit confirmation.
+New deployments target Cloud Runner only unless the user deliberately supplies
+`--device`, `--member`, or `--all-runtimes`. For non-interactive automation,
+`--yes` is allowed only after the exact preview is acceptable; version conflicts
+still fail closed. Use `--json` when an agent needs structured receipts.
 
 ## When NOT to use this skill
 
