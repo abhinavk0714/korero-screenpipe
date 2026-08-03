@@ -816,8 +816,10 @@ Refresh the assigned Live View output targets from source-backed activity.
         if (!section || !content || !overview || !canvas) return null;
         const sectionRect = section.getBoundingClientRect();
         const canvasRect = canvas.getBoundingClientRect();
-        const firstContentTop =
-          content.firstElementChild?.getBoundingClientRect().top ?? 0;
+        // Assert the visible overview shell, rather than firstElementChild.
+        // Framework-injected style/link nodes can be the first DOM child and
+        // intentionally have a zero-sized rect on Windows and WebKitGTK.
+        const firstContentTop = overview.getBoundingClientRect().top;
         const visibleControls = Array.from(
           section.querySelectorAll<HTMLElement>(
             "button, input, select, textarea, a[href]",
