@@ -25,6 +25,12 @@ cd "$(dirname "$0")/.."
 
 SENTRY_ORG="${SENTRY_ORG:-mediar}"
 SENTRY_PROJECT="${SENTRY_PROJECT:-screenpipe-ai-proxy}"
+DEPLOY_MODE="${SCREENPIPE_AI_GATEWAY_DEPLOY_MODE:-deploy}"
+
+if [[ "$DEPLOY_MODE" != "deploy" && "$DEPLOY_MODE" != "upload" ]]; then
+  echo "✗ SCREENPIPE_AI_GATEWAY_DEPLOY_MODE must be deploy or upload."
+  exit 2
+fi
 
 # Release identifier — short git SHA. Worker reads this at runtime via
 # env.SENTRY_RELEASE (see src/index.ts) and Sentry matches uploaded maps
@@ -84,9 +90,18 @@ bunx @sentry/cli releases finalize "${RELEASE}" \
 bunx @sentry/cli releases set-commits "${RELEASE}" --auto \
   --org "${SENTRY_ORG}" --project "${SENTRY_PROJECT}" || true
 
-# 4. Real deploy. Pass SENTRY_RELEASE through so the running worker's
-# Sentry SDK tags events with the same release we just uploaded maps for.
-echo "→ deploying worker…"
-bunx wrangler deploy --var SENTRY_RELEASE:"${RELEASE}"
-
-echo "✓ deployed ${RELEASE}"
+# 4. Upload a zero-traffic candidate for a gradual rollout, or perform the
+# legacy immediate deployment when an operator explicitly chooses it. Both
+# paths pass SENTRY_RELEASE so runtime errors resolve against the maps above.
+if [[ "$DEPLOY_MODE" == "upload" ]]; then
+  echo "→ uploading zero-traffic worker version…"
+  bunx wrangler versions upload \
+    --var SENTRY_RELEASE:"${RELEASE}" \
+    --tag "${RELEASE}" \
+    --message "candidate ${RELEASE}; no traffic assigned"
+  echo "✓ uploaded ${RELEASE}; production traffic unchanged"
+else
+  echo "→ deploying worker to production…"
+  bunx wrangler deploy --var SENTRY_RELEASE:"${RELEASE}"
+  echo "✓ deployed ${RELEASE}"
+fi
