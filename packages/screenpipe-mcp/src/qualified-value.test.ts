@@ -39,9 +39,12 @@ describe("createMcpQualifiedValueReporter", () => {
     expect(safeMcpClient(undefined)).toBe("unknown");
   });
 
-  it("classifies only known apps from MCP client names", () => {
-    expect(classifyMcpClientName("Claude Desktop")).toBe("claude");
+  it("classifies real Claude Code and Codex client names", () => {
+    expect(classifyMcpClientName("claude-code")).toBe("claude");
     expect(classifyMcpClientName("codex-mcp-client")).toBe("codex");
+  });
+
+  it("classifies only allowlisted app names", () => {
     expect(classifyMcpClientName("Cursor_vscode")).toBe("cursor");
     expect(classifyMcpClientName("private-customer-project")).toBe("unknown");
   });
