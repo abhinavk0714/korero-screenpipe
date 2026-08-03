@@ -6,6 +6,14 @@ import type { Env } from '../../types';
 
 /** Synthetic values chosen for ordering, never production policy values. */
 export const TEST_PRIVATE_COST_CONTROLS = {
+	// Deliberately synthetic values: production plan economics live only in
+	// private runtime bindings.
+	HOSTED_AI_INCLUDED_CREDITS_FREE: '1100',
+	HOSTED_AI_INCLUDED_CREDITS_BASIC: '2200',
+	HOSTED_AI_INCLUDED_CREDITS_BUSINESS: '3300',
+	HOSTED_AI_INCLUDED_CREDITS_BUSINESS_MAX: '4400',
+	HOSTED_AI_INCLUDED_CREDITS_BUSINESS_ULTRA: '5500',
+	HOSTED_AI_TRIAL_INCLUDED_CREDITS: '700',
 	MAX_DAILY_FREE_TEXT_COST: '101',
 	MAX_DAILY_BASIC_TEXT_COST: '102',
 	MAX_DAILY_BUSINESS_TEXT_COST: '103',

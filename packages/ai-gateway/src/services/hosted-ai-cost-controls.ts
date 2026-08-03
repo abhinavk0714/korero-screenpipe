@@ -11,6 +11,12 @@ import {
 } from './hosted-ai-policy';
 
 export type HostedAiCostControlEnv = Pick<Env,
+	| 'HOSTED_AI_INCLUDED_CREDITS_FREE'
+	| 'HOSTED_AI_INCLUDED_CREDITS_BASIC'
+	| 'HOSTED_AI_INCLUDED_CREDITS_BUSINESS'
+	| 'HOSTED_AI_INCLUDED_CREDITS_BUSINESS_MAX'
+	| 'HOSTED_AI_INCLUDED_CREDITS_BUSINESS_ULTRA'
+	| 'HOSTED_AI_TRIAL_INCLUDED_CREDITS'
 	| 'MAX_DAILY_FREE_TEXT_COST'
 	| 'MAX_DAILY_BASIC_TEXT_COST'
 	| 'MAX_DAILY_BUSINESS_TEXT_COST'
@@ -272,7 +278,7 @@ function clampWindowsToIncludedAllowance(
 	request: number,
 	daily: number,
 	total: number,
-	includedAllowance = getHostedAiIncludedProviderCostUsd(accountPlan),
+	includedAllowance: number,
 ): Pick<ResolvedHostedAiTextCostLimits, 'request' | 'daily' | 'monthly'> {
 	if (includedAllowance <= 0) {
 		throw new PrivateCostControlError('account plan', 'unknown');
@@ -301,7 +307,7 @@ export function resolveHostedAiTextCostLimits(
 			controls.trial.request,
 			controls.trial.daily,
 			controls.trial.total,
-			getHostedAiTrialIncludedProviderCostUsd(),
+			getHostedAiTrialIncludedProviderCostUsd(env),
 		);
 		return {
 			...windows,
@@ -315,6 +321,7 @@ export function resolveHostedAiTextCostLimits(
 		controls.request[plan],
 		controls.daily[plan],
 		controls.monthly[plan],
+		getHostedAiIncludedProviderCostUsd(accountPlan, env),
 	);
 	return {
 		...windows,

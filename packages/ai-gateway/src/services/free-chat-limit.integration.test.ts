@@ -1034,7 +1034,7 @@ describe('usage reservations against workerd D1', () => {
 			monthlyCostKey('user-d1-public-basic'),
 			utcMonth(now),
 			utcMonth(now),
-			3 - (hold / 2_000_000),
+			22 - (hold / 2_000_000),
 		).run();
 		const monthly = await reserveDailyCostCap(
 			env,
@@ -1057,7 +1057,7 @@ describe('usage reservations against workerd D1', () => {
 			VALUES (?, 0, 'trial', 'public_trial_cost_test', 'trial', ?)
 		`).bind(
 			trialCostKey('user-d1-public-trial'),
-			1.5 - (hold / 2_000_000),
+			7 - (hold / 2_000_000),
 		).run();
 		const trial = await reserveDailyCostCap(
 			env,

@@ -11,10 +11,12 @@ import {
 	getHostedAiPlan,
 	getHostedAiTrialIncludedCredits,
 	getHostedAiTrialIncludedProviderCostUsd,
+	loadHostedAiIncludedCredits,
 	hasPaidHostedAiPlan,
 	isHostedAiModelAllowed,
 	isHostedAiUpgradeEligible,
 } from './hosted-ai-policy';
+import { TEST_PRIVATE_COST_CONTROLS } from '../test/fixtures/private-cost-controls';
 
 function auth(accountPlan: AccountPlan, tier: UserTier = 'logged_in'): AuthResult {
 	return { isValid: true, accountPlan, tier, deviceId: 'user_test' };
@@ -70,20 +72,37 @@ describe('hosted AI model products', () => {
 	});
 
 	it.each([
-		['free', 10, 0.1],
-		['basic', 300, 3],
-		['business', 800, 8],
-		['business_max', 2_000, 20],
-		['business_ultra', 5_000, 50],
-		['team', 800, 8],
-		['enterprise', 800, 8],
-	] as const)('keeps %s credits and provider-cost allowance aligned', (plan, credits, costUsd) => {
-		expect(getHostedAiIncludedCredits(plan)).toBe(credits);
-		expect(getHostedAiIncludedProviderCostUsd(plan)).toBe(costUsd);
+		['free', 'HOSTED_AI_INCLUDED_CREDITS_FREE'],
+		['basic', 'HOSTED_AI_INCLUDED_CREDITS_BASIC'],
+		['business', 'HOSTED_AI_INCLUDED_CREDITS_BUSINESS'],
+		['business_max', 'HOSTED_AI_INCLUDED_CREDITS_BUSINESS_MAX'],
+		['business_ultra', 'HOSTED_AI_INCLUDED_CREDITS_BUSINESS_ULTRA'],
+		['team', 'HOSTED_AI_INCLUDED_CREDITS_BUSINESS'],
+		['enterprise', 'HOSTED_AI_INCLUDED_CREDITS_BUSINESS'],
+	] as const)('reads the %s credit contract from private runtime configuration', (plan, binding) => {
+		const credits = Number(TEST_PRIVATE_COST_CONTROLS[binding]);
+		expect(getHostedAiIncludedCredits(plan, TEST_PRIVATE_COST_CONTROLS)).toBe(credits);
+		expect(getHostedAiIncludedProviderCostUsd(plan, TEST_PRIVATE_COST_CONTROLS)).toBe(credits / 100);
 	});
 
 	it('keeps temporary trials on one bounded allowance regardless of paid-plan label', () => {
-		expect(getHostedAiTrialIncludedCredits()).toBe(150);
-		expect(getHostedAiTrialIncludedProviderCostUsd()).toBe(1.5);
+		const credits = Number(TEST_PRIVATE_COST_CONTROLS.HOSTED_AI_TRIAL_INCLUDED_CREDITS);
+		expect(getHostedAiTrialIncludedCredits(TEST_PRIVATE_COST_CONTROLS)).toBe(credits);
+		expect(getHostedAiTrialIncludedProviderCostUsd(TEST_PRIVATE_COST_CONTROLS)).toBe(credits / 100);
+	});
+
+	it('fails closed for missing, malformed, or misordered allowance bindings', () => {
+		expect(() => loadHostedAiIncludedCredits({
+			...TEST_PRIVATE_COST_CONTROLS,
+			HOSTED_AI_INCLUDED_CREDITS_FREE: undefined,
+		})).toThrow('HOSTED_AI_INCLUDED_CREDITS_FREE');
+		expect(() => loadHostedAiIncludedCredits({
+			...TEST_PRIVATE_COST_CONTROLS,
+			HOSTED_AI_INCLUDED_CREDITS_BASIC: '1.5',
+		})).toThrow('HOSTED_AI_INCLUDED_CREDITS_BASIC');
+		expect(() => loadHostedAiIncludedCredits({
+			...TEST_PRIVATE_COST_CONTROLS,
+			HOSTED_AI_INCLUDED_CREDITS_BASIC: '9999',
+		})).toThrow('misordered private hosted AI allowance control');
 	});
 });

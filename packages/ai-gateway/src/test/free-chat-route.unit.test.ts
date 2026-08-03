@@ -137,7 +137,7 @@ describe('/v1/chat/completions free-plan route policy', () => {
 			cost_limit_reached: false,
 			hosted_ai: {
 				plan: 'free',
-				included_credits: 10,
+				included_credits: Number(TEST_PRIVATE_COST_CONTROLS.HOSTED_AI_INCLUDED_CREDITS_FREE),
 			},
 		});
 		expect(body.hosted_ai.model_access).toContain('auto');
@@ -414,7 +414,7 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(result.hosted_ai).toMatchObject({
 			plan: 'business',
 			trial: true,
-			included_credits: 150,
+			included_credits: Number(TEST_PRIVATE_COST_CONTROLS.HOSTED_AI_TRIAL_INCLUDED_CREDITS),
 		});
 		expect(result.hosted_ai.model_access).toContain('claude-fable-5');
 		expect(result.hosted_ai.model_access).not.toContain('*');
@@ -458,8 +458,8 @@ describe('/v1/chat/completions free-plan route policy', () => {
 
 	it('returns canonical Max and Ultra capacity from desktop-compatible user responses', async () => {
 		for (const [billingPlan, usageTier, dailyLimit, includedCredits] of [
-			['pro_max', 'business_max', 120, 2_000],
-			['pro_ultra', 'business_ultra', 240, 5_000],
+			['pro_max', 'business_max', 120, Number(TEST_PRIVATE_COST_CONTROLS.HOSTED_AI_INCLUDED_CREDITS_BUSINESS_MAX)],
+			['pro_ultra', 'business_ultra', 240, Number(TEST_PRIVATE_COST_CONTROLS.HOSTED_AI_INCLUDED_CREDITS_BUSINESS_ULTRA)],
 		] as const) {
 			const clerkId = `user_${billingPlan}`;
 			verifyTokenMock.mockImplementation(async () => ({ sub: clerkId }) as any);

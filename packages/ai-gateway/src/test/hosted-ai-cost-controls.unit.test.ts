@@ -68,16 +68,16 @@ describe('private hosted AI cost controls', () => {
 
 	it('keeps permissive private controls inside the public credit allowance', () => {
 		expect(resolveHostedAiTextCostLimits('basic', privateCostControls())).toEqual({
-			daily: 3,
-			monthly: 3,
-			request: 3,
+			daily: 22,
+			monthly: 22,
+			request: 22,
 			globalHourly: 401,
 			globalDaily: 402,
 		});
 		expect(resolveHostedAiTextCostLimits('business', privateCostControls(), true)).toEqual({
-			daily: 1.5,
-			monthly: 1.5,
-			request: 1.5,
+			daily: 7,
+			monthly: 7,
+			request: 7,
 			globalHourly: 401,
 			globalDaily: 402,
 		});
@@ -85,19 +85,19 @@ describe('private hosted AI cost controls', () => {
 
 	it('resolves distinct Business, Max, and Ultra public cash envelopes', () => {
 		expect(resolveHostedAiTextCostLimits('business', privateCostControls())).toMatchObject({
-			daily: 8,
-			monthly: 8,
-			request: 8,
+			daily: 33,
+			monthly: 33,
+			request: 33,
 		});
 		expect(resolveHostedAiTextCostLimits('business_max', privateCostControls())).toMatchObject({
-			daily: 20,
-			monthly: 20,
-			request: 20,
+			daily: 44,
+			monthly: 44,
+			request: 44,
 		});
 		expect(resolveHostedAiTextCostLimits('business_ultra', privateCostControls())).toMatchObject({
-			daily: 50,
-			monthly: 50,
-			request: 50,
+			daily: 55,
+			monthly: 55,
+			request: 55,
 		});
 	});
 
@@ -140,7 +140,7 @@ describe('private hosted AI cost controls', () => {
 		expect(resolveHostedAiTextCostLimits('business', env, true)).toMatchObject({
 			request: 0.04,
 			daily: 0.3,
-			monthly: 1.5,
+			monthly: 2,
 		});
 	});
 

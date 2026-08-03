@@ -522,7 +522,7 @@ describe('cost control', () => {
     // $400 lifetime = 400 credits
     // Each credit pays for 1 query
     // At $0.01/query avg cost (mixed models), 400 credits = $4 cost
-    // $400 revenue / $4 cost = 100x margin on credits
+    // Query credits and provider-cost controls are separate contracts.
     const creditCost = 400 * 0.01;
     expect(creditCost).toBeLessThan(400);
   });

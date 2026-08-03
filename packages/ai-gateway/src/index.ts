@@ -323,8 +323,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				authResult.userId,
 				usageAccountPlan,
 			);
-			// Enrich with cost-based limit flag (NOT the raw $ numbers — those
-			// are our internal margin and shouldn't leak to any client/user).
+			// Enrich with the customer-facing credit contract, never raw private
+			// operational cost controls.
 			// Stored query credits do not raise the cash ceiling. Credit-funded
 			// provider spend needs consumptive accounting before it can safely do so.
 			const dailyCost = await getDailyUserCostForCap(env, authResult.deviceId);
@@ -359,8 +359,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				// marks usage unknown instead of pretending the customer spent zero.
 			}
 			const includedCredits = authResult.hostedAiTrial === true
-				? getHostedAiTrialIncludedCredits()
-				: getHostedAiIncludedCredits(usageAccountPlan);
+				? getHostedAiTrialIncludedCredits(env)
+				: getHostedAiIncludedCredits(usageAccountPlan, env);
 			const usedCredits = monthlyCost === null ? null : Math.ceil(monthlyCost * 100);
 			const enriched = {
 				...status,
