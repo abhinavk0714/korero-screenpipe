@@ -1298,8 +1298,8 @@ async fn main() {
             // hit a split: the engine (server_core) reads its SecretStore from
             // `config.data_dir` (the custom path) while OAuth token writes
             // (`open_secret_store`, chatgpt_oauth, …) went to the default
-            // `~/.screenpipe`. Tokens landed in one db.sqlite and were read from
-            // another → "no credentials found … cannot authenticate" 401s on
+            // `~/.screenpipe`. Tokens landed in one data directory and were read
+            // from another → "no credentials found … cannot authenticate" 401s on
             // every Microsoft 365 / Google / ChatGPT call, reconnecting forever
             // never helping. Setting the env var here (before any OAuth callback
             // can fire) makes `default_screenpipe_data_dir()` self-consistent and

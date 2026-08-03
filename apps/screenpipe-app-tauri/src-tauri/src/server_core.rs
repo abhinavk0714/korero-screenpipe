@@ -597,16 +597,9 @@ impl ServerCore {
                     None
                 }
             };
-            let database_error_hook: screenpipe_secrets::DatabaseErrorHook = {
-                let db = Arc::clone(&db);
-                Arc::new(move |error| {
-                    db.report_sqlite_error(error);
-                })
-            };
-            match screenpipe_secrets::SecretStore::new_with_database_error_hook(
-                db.pool.clone(),
+            match screenpipe_secrets::SecretStore::open_for_data_dir(
+                &config.data_dir,
                 secret_key,
-                Some(database_error_hook),
             )
             .await
             {

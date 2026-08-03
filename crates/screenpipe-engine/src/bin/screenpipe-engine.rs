@@ -1368,18 +1368,8 @@ async fn main() -> anyhow::Result<()> {
         } else {
             None
         };
-        let database_error_hook: screenpipe_secrets::DatabaseErrorHook = {
-            let db = Arc::clone(&db);
-            Arc::new(move |error| {
-                db.report_sqlite_error(error);
-            })
-        };
-        let secret_store_result = screenpipe_secrets::SecretStore::new_with_database_error_hook(
-            db.pool.clone(),
-            secret_key,
-            Some(database_error_hook),
-        )
-        .await;
+        let secret_store_result =
+            screenpipe_secrets::SecretStore::open_for_data_dir(&local_data_dir, secret_key).await;
         match secret_store_result {
             Ok(store) => {
                 // Run startup permission sweep

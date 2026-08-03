@@ -15,12 +15,10 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
     // Open SecretStore in CLI mode (no encryption key — reads plaintext entries
     // from the DB, encrypted entries written by the desktop app won't be readable
     // but the file fallback still works for those).
-    let db_path = screenpipe_dir.join("db.sqlite");
-    let secret_store = if db_path.exists() {
-        // Shared, engine-matched pool (WAL + busy_timeout) instead of an ad-hoc
-        // bare connection — waits for the lock instead of erroring when the
-        // running app holds the db, and never churns the WAL-index (#4263).
-        match screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), None).await {
+    let legacy_or_dedicated_exists = screenpipe_dir.join("db.sqlite").exists()
+        || screenpipe_secrets::secrets_database_path(&screenpipe_dir).exists();
+    let secret_store = if legacy_or_dedicated_exists {
+        match screenpipe_secrets::SecretStore::open_for_data_dir(&screenpipe_dir, None).await {
             Ok(store) => Some(Arc::new(store)),
             Err(e) => {
                 tracing::debug!("failed to open SecretStore: {e:#}");
@@ -303,7 +301,7 @@ struct BrowsersResponse {
 async fn fetch_running_browsers() -> Vec<BrowserSummaryWire> {
     // Auth lookup goes through `crate::auth_key::find_api_auth_key` —
     // the single read-only resolver that knows about the encrypted
-    // SecretStore in db.sqlite, the env-var aliases pi-agent injects,
+    // SecretStore in secrets.sqlite, the env-var aliases pi-agent injects,
     // and the legacy auth.json. Don't open-code another priority chain
     // here; that's how this query started silently 403'ing in the first
     // place.

@@ -1410,7 +1410,7 @@ fn read_chatgpt_token_from_secrets() -> Option<String> {
 
     let data_dir = crate::paths::default_screenpipe_data_dir();
     let db_path = data_dir.join("db.sqlite");
-    if !db_path.exists() {
+    if !db_path.exists() && !screenpipe_secrets::secrets_database_path(&data_dir).exists() {
         return None;
     }
 
@@ -1419,15 +1419,11 @@ fn read_chatgpt_token_from_secrets() -> Option<String> {
         _ => None,
     };
 
-    let db_path_str = db_path.to_string_lossy().into_owned();
-
     // We're in a sync context but need async for sqlx. Use block_in_place
     // since the caller is always on a tokio runtime.
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            // Shared, engine-matched pool — not an ad-hoc per-call connection,
-            // which churns the WAL-index and corrupts db.sqlite (#4263).
-            let store = screenpipe_secrets::SecretStore::open(&db_path_str, secret_key)
+            let store = screenpipe_secrets::SecretStore::open_for_data_dir(&data_dir, secret_key)
                 .await
                 .ok()?;
             let bytes = store.get("oauth:chatgpt").await.ok()??;

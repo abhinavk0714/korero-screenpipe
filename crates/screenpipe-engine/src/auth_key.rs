@@ -150,7 +150,6 @@ pub async fn regenerate_api_auth_key(data_dir: &Path) -> Result<String> {
 }
 
 async fn open_secret_store(data_dir: &Path) -> Result<screenpipe_secrets::SecretStore> {
-    let db_path = data_dir.join("db.sqlite");
     // Load the keychain encryption key if the user has opted into encryption,
     // otherwise pass None (plaintext mode). Without this, the previous code
     // ALWAYS opened the store unkeyed — so as soon as the user toggled
@@ -171,9 +170,7 @@ async fn open_secret_store(data_dir: &Path) -> Result<screenpipe_secrets::Secret
     } else {
         None
     };
-    // Shared, engine-matched pool — not an ad-hoc per-call connection, which
-    // churns the WAL-index and corrupts db.sqlite (#4263).
-    let store = screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), key).await?;
+    let store = screenpipe_secrets::SecretStore::open_for_data_dir(data_dir, key).await?;
     Ok(store)
 }
 
@@ -297,8 +294,7 @@ pub async fn set_cloud_token(data_dir: &Path, token: &str) -> Result<()> {
             data_dir.display()
         )
     })?;
-    let db_path = data_dir.join("db.sqlite");
-    let store = screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), key)
+    let store = screenpipe_secrets::SecretStore::open_for_data_dir(data_dir, key)
         .await
         .map_err(|error| anyhow::anyhow!("could not open cloud session store: {error}"))?;
     store
@@ -310,8 +306,9 @@ pub async fn set_cloud_token(data_dir: &Path, token: &str) -> Result<()> {
 /// Clear the authoritative cloud-session row. Deleting a row does not require
 /// decrypting its value, so logout still works if keychain access was revoked.
 pub async fn clear_cloud_token(data_dir: &Path) -> Result<()> {
-    let db_path = data_dir.join("db.sqlite");
-    if !db_path.exists() {
+    if !data_dir.join("db.sqlite").exists()
+        && !screenpipe_secrets::secrets_database_path(data_dir).exists()
+    {
         return Ok(());
     }
     let store = open_secret_store(data_dir)

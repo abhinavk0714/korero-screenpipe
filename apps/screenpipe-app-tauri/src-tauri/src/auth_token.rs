@@ -12,7 +12,7 @@
 //! skipped). A ~10-year-lifetime credential sat readable by any local process,
 //! backup, or cloud-sync folder.
 //!
-//! This module makes the encrypted [`SecretStore`] (db.sqlite, keychain-backed
+//! This module makes the encrypted [`SecretStore`] (`secrets.sqlite`, keychain-backed
 //! when encryption is enabled) the **authoritative** home for the token. The
 //! runtime in-memory shape (`settings.user.token`, the `cloud_token` ArcSwap)
 //! is preserved by hydrating from here, so cloud-auth readers are unchanged —
@@ -25,8 +25,7 @@
 //!
 //! ## Cross-platform
 //! Paths come from `default_screenpipe_data_dir()` and the SecretStore is
-//! opened with the same `sqlite:{path}?mode=rwc` form the rest of the app uses
-//! on macOS and Windows. The `0o600` hardening on the scrubbed file is
+//! opened from that directory on macOS and Windows. The `0o600` hardening on the scrubbed file is
 //! `#[cfg(unix)]` (a no-op on Windows, which relies on ACLs).
 
 use std::path::Path;
@@ -76,16 +75,13 @@ fn write_encryption_key() -> anyhow::Result<Option<[u8; 32]>> {
     }
 }
 
-/// Open a [`SecretStore`] over `<data_dir>/db.sqlite`. `key` controls
+/// Open a [`SecretStore`] over `<data_dir>/secrets.sqlite`. `key` controls
 /// encryption (matches the `enable_keychain_encryption` open pattern). Returns
 /// `None` if the DB can't be opened (missing parent dir, locked, etc.).
 ///
-/// Uses [`SecretStore::open`] so every secret access in the process shares ONE
-/// long-lived, engine-matched pool instead of opening (and dropping) its own —
-/// the ad-hoc-pool churn that corrupts `db.sqlite` (#4263).
+/// The dedicated single-connection store never participates in capture WAL.
 async fn secret_store_at(data_dir: &Path, key: Option<[u8; 32]>) -> Option<SecretStore> {
-    let db_path = data_dir.join("db.sqlite");
-    SecretStore::open(&db_path.to_string_lossy(), key)
+    SecretStore::open_for_data_dir(data_dir, key)
         .await
         .ok()
 }
@@ -165,11 +161,12 @@ async fn migrate_at(data_dir: &Path, key: Option<[u8; 32]>) -> Option<String> {
     let store_path = data_dir.join("store.bin");
 
     // Resolve the token, in priority order: SecretStore (already migrated) →
-    // store.bin → auth.json. Only read the SecretStore if db.sqlite already
-    // exists — never create it here just to check (on a fresh install there's
-    // nothing to migrate, and the engine should own db.sqlite's creation). The
-    // persist path below still creates it when there's actually a token to move.
-    let from_secret = if data_dir.join("db.sqlite").exists() {
+    // store.bin → auth.json. Only open SQLite when a legacy capture database or
+    // the dedicated credential database exists. The persist path below creates
+    // `secrets.sqlite` when there is actually a token to move.
+    let from_secret = if data_dir.join("db.sqlite").exists()
+        || screenpipe_secrets::secrets_database_path(data_dir).exists()
+    {
         load_session_token_at(data_dir, key).await
     } else {
         None
