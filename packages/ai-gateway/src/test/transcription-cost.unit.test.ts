@@ -72,7 +72,20 @@ describe('private transcription cost controls', () => {
     expect(getTranscriptionDailyCostCap('free', env)).toBe(101);
     expect(getTranscriptionDailyCostCap('basic', env)).toBe(102);
     expect(getTranscriptionDailyCostCap('business', env)).toBe(103);
+    expect(getTranscriptionDailyCostCap('business_max', env)).toBe(103);
+    expect(getTranscriptionDailyCostCap('business_ultra', env)).toBe(103);
     expect(getTranscriptionDailyCostCap('team', env)).toBe(103);
+  });
+
+  it('uses explicit power-plan ceilings only when privately configured', () => {
+    const powerPlanEnv = {
+      ...env,
+      MAX_DAILY_BUSINESS_MAX_TRANSCRIPTION_COST: '104',
+      MAX_DAILY_BUSINESS_ULTRA_TRANSCRIPTION_COST: '105',
+    } as unknown as Env;
+
+    expect(getTranscriptionDailyCostCap('business_max', powerPlanEnv)).toBe(104);
+    expect(getTranscriptionDailyCostCap('business_ultra', powerPlanEnv)).toBe(105);
   });
 
   it('fails closed when a binding is absent or invalid', () => {
