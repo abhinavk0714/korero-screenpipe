@@ -102,7 +102,7 @@ async def lifespan(app):
         "--gpu-memory-utilization",
         "0.90",
         # Production logs show a 48,289-token KV cache on the A10G: 5.89x
-        # concurrency at this 8,192-token ceiling. Four sequences retain margin.
+        # concurrency at this 8,192-token ceiling. Keep four sequences for headroom.
         "--max-model-len",
         "8192",
         "--max-num-seqs",
