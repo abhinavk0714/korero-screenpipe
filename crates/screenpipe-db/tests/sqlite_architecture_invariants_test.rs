@@ -139,7 +139,9 @@ fn credential_readers_resolve_the_existing_os_vault_key() {
     ];
 
     for (relative_path, vault_read) in readers {
-        let source = production_source(&repository.join(relative_path));
+        // Some large modules interleave production items with multiple test modules,
+        // so truncating at the first `#[cfg(test)]` can hide later production readers.
+        let source = fs::read_to_string(repository.join(relative_path)).expect("read Rust source");
         assert!(
             source.contains(vault_read),
             "credential reader {relative_path} must resolve the existing OS-vault key via {vault_read}"
