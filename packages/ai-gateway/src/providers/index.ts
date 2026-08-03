@@ -137,6 +137,21 @@ export function createProvider(model: string, env: Env): AIProvider {
 		const vllmUrl = env.EVENT_CLASSIFIER_URL || 'http://34.122.128.37:8080/v1';
 		return new OpenAIProvider('none', vllmUrl);
 	}
+	// Internal background-only rescue model. It is intentionally absent from
+	// model listing/access policy; the top-level gateway selects it only after a
+	// background Pipe exhausts an account-local hosted-AI spend allowance.
+	if (model === 'argus-trace-1') {
+		const provider = new OpenAIProvider(
+			requireSecret(env.SCREENPIPE_QWEN35_API_KEY, 'Argus Trace API key not configured'),
+			requireSecret(env.SCREENPIPE_QWEN35_URL, 'Argus Trace endpoint not configured'),
+			// Qwen 3.5 can emit tool XML inside its reasoning region; vLLM then
+			// returns an empty/no-tool completion. Disabling thinking makes the
+			// deployed parser return stable OpenAI tool_calls for agentic Pipes.
+			{ chatTemplateKwargs: { enable_thinking: false } },
+		);
+		provider.supportsVision = false;
+		return provider;
+	}
 	if (model.toLowerCase().includes('claude')) {
 		return new AnthropicProvider(requireSecret(env.ANTHROPIC_API_KEY, 'Anthropic API key not configured'));
 	}

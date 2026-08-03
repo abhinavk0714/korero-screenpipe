@@ -16,6 +16,11 @@ type OpenAIChatStream = AsyncIterable<ChatCompletionChunk> & {
 	controller: { abort: () => void };
 };
 
+interface OpenAIProviderOptions {
+	/** Provider-specific vLLM chat template controls, never accepted from clients. */
+	chatTemplateKwargs?: Record<string, unknown>;
+}
+
 /**
  * GPT-5.6 reports prompt-cache writes separately. Keep the gateway's
  * OpenAI-compatible cache-creation field so the shared cost logger can apply
@@ -64,9 +69,17 @@ export class OpenAIProvider implements AIProvider {
 	supportsVision = true;
 	supportsJson = true;
 	private client: OpenAI;
+	private options: OpenAIProviderOptions;
 
-	constructor(apiKey: string, baseURL?: string) {
+	constructor(apiKey: string, baseURL?: string, options: OpenAIProviderOptions = {}) {
 		this.client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+		this.options = options;
+	}
+
+	private applyProviderOptions(params: ChatCompletionCreateParams): void {
+		if (this.options.chatTemplateKwargs) {
+			Object.assign(params, { chat_template_kwargs: this.options.chatTemplateKwargs });
+		}
 	}
 
 	private createJSONSchemaFormat(schema: Record<string, unknown>, name: string, description?: string): ResponseFormatJSONSchema {
@@ -208,6 +221,7 @@ export class OpenAIProvider implements AIProvider {
 		this.applyGenerationOptions(params, body);
 		this.applyTokenLimit(params, body);
 		this.applyToolCompatibilityOptions(params, body);
+		this.applyProviderOptions(params);
 
 		const response = await this.createWithUnsupportedParamRetry(params, (p) =>
 			this.client.chat.completions.create(p),
@@ -240,6 +254,7 @@ export class OpenAIProvider implements AIProvider {
 		this.applyGenerationOptions(params, body);
 		this.applyTokenLimit(params, body);
 		this.applyToolCompatibilityOptions(params, body);
+		this.applyProviderOptions(params);
 
 		const stream = (await this.createWithUnsupportedParamRetry(params, (p) =>
 			this.client.chat.completions.create(p as ChatCompletionCreateParams & { stream: true }),

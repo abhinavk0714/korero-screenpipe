@@ -21,7 +21,10 @@ type PrivateControlName = keyof typeof TEST_PRIVATE_COST_CONTROLS;
 export interface LocalGatewayHarnessOptions {
 	port?: number;
 	privateCostControls?: Partial<Record<PrivateControlName, string | undefined>>;
+	bindings?: Record<string, string>;
 	providerReply?: string;
+	argusReply?: string;
+	argusStatus?: number;
 }
 
 export interface LocalGatewayOutboundRequest {
@@ -75,7 +78,7 @@ function bundleWorker(outputDirectory: string): string {
 	return readFileSync(join(outputDirectory, 'index.js'), 'utf8');
 }
 
-function providerResponse(reply: string, stream: boolean): Response {
+function providerResponse(reply: string, stream: boolean, model = 'gpt-5.4-mini'): Response {
 	const usage = {
 		prompt_tokens: 4,
 		completion_tokens: 3,
@@ -87,7 +90,7 @@ function providerResponse(reply: string, stream: boolean): Response {
 			id: 'chatcmpl-screenpipe-local-e2e',
 			object: 'chat.completion',
 			created: 1,
-			model: 'gpt-5.4-mini',
+			model,
 			choices: [
 				{
 					index: 0,
@@ -104,7 +107,7 @@ function providerResponse(reply: string, stream: boolean): Response {
 			id: 'chatcmpl-screenpipe-local-e2e',
 			object: 'chat.completion.chunk',
 			created: 1,
-			model: 'gpt-5.4-mini',
+			model,
 			choices: [
 				{
 					index: 0,
@@ -171,6 +174,7 @@ export class LocalGatewayHarness {
 			const script = bundleWorker(tempDirectory);
 			let harness: LocalGatewayHarness;
 			const providerReply = options.providerReply ?? 'local gateway ok';
+			const argusReply = options.argusReply ?? 'local Argus fallback ok';
 			runtime = new Miniflare({
 				modules: true,
 				script,
@@ -181,10 +185,13 @@ export class LocalGatewayHarness {
 				bindings: {
 					...jsonBindings(options.privateCostControls),
 					OPENAI_API_KEY: 'screenpipe-local-e2e-only',
+					SCREENPIPE_QWEN35_URL: 'https://argus.local/v1',
+					SCREENPIPE_QWEN35_API_KEY: 'screenpipe-local-argus-only',
 					AI_GATEWAY_SERVICE_TOKEN: LOCAL_GATEWAY_SERVICE_TOKEN,
 					MODEL_GATING_ENABLED: 'true',
 					PIPE_FRONTIER_POLICY: 'reject',
 					ROUTER_MODE: 'off',
+					...(options.bindings ?? {}),
 				},
 				d1Databases: { DB: `screenpipe-ai-gateway-e2e-${crypto.randomUUID()}` },
 				durableObjects: { RATE_LIMITER: 'RateLimiter' },
@@ -198,7 +205,9 @@ export class LocalGatewayHarness {
 							.text()
 							.catch(() => null);
 					}
-					const expected = request.method === 'POST' && request.url === 'https://api.openai.com/v1/chat/completions';
+					const openAi = request.method === 'POST' && request.url === 'https://api.openai.com/v1/chat/completions';
+					const argus = request.method === 'POST' && request.url === 'https://argus.local/v1/chat/completions';
+					const expected = openAi || argus;
 					harness.outboundRequests.push({
 						url: request.url,
 						method: request.method,
@@ -208,8 +217,13 @@ export class LocalGatewayHarness {
 					if (!expected) {
 						return new Response('unexpected local E2E outbound request', { status: 599 });
 					}
+					if (argus && options.argusStatus && options.argusStatus !== 200) {
+						return Response.json({ error: { message: 'synthetic Argus failure', type: 'server_error' } }, {
+							status: options.argusStatus,
+						});
+					}
 					const stream = typeof body === 'object' && body !== null && (body as { stream?: unknown }).stream === true;
-					return providerResponse(providerReply, stream);
+					return providerResponse(argus ? argusReply : providerReply, stream, argus ? 'argus-trace-1' : 'gpt-5.4-mini');
 				},
 			});
 			harness = new LocalGatewayHarness(tempDirectory, runtime);
@@ -282,6 +296,28 @@ export class LocalGatewayHarness {
 			`,
 			)
 			.bind(deviceId, day, day, amount)
+			.run();
+	}
+
+	async seedDailyQueryCount(count: number, deviceId = LOCAL_GATEWAY_DEVICE_ID): Promise<void> {
+		if (!this.database) throw new Error('local AI gateway database is not ready');
+		if (!Number.isFinite(count) || count < 0) {
+			throw new Error('daily query seed must be a finite non-negative number');
+		}
+		const day = new Date().toISOString().slice(0, 10);
+		await this.database
+			.prepare(
+				`
+				INSERT INTO usage (device_id, daily_count, last_reset, tier)
+				VALUES (?, ?, ?, 'subscribed')
+				ON CONFLICT(device_id) DO UPDATE SET
+					daily_count = excluded.daily_count,
+					last_reset = excluded.last_reset,
+					tier = excluded.tier,
+					updated_at = CURRENT_TIMESTAMP
+			`,
+			)
+			.bind(deviceId, Math.floor(count), day)
 			.run();
 	}
 

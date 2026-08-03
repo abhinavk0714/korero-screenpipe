@@ -73,6 +73,11 @@ import {
 	modelNotAllowedResponse,
 	paidHostedAiRouteError,
 } from './services/hosted-ai-errors';
+import {
+	ARGUS_BACKGROUND_FALLBACK_MODEL,
+	readHostedAiErrorCode,
+	shouldUseArgusBackgroundFallback,
+} from './services/background-limit-fallback';
 import { resolveModelAlias } from './providers';
 // import { handleTTSWebSocketUpgrade } from './handlers/voice-ws';
 
@@ -524,7 +529,22 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					accountPlan: authResult.accountPlan,
 				});
 				const creditsExhausted = (usage.creditsRemaining ?? 0) <= 0;
-				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
+				const usageLimitCode = creditsExhausted ? 'credits_exhausted' : 'daily_limit_exceeded';
+				if (shouldUseArgusBackgroundFallback({
+					isBackground: isBackgroundRequest(request),
+					errorCode: usageLimitCode,
+					body,
+					env,
+				})) {
+					const requestedModel = body.model;
+					body = { ...body, model: ARGUS_BACKGROUND_FALLBACK_MODEL };
+					console.warn('background hosted AI query allowance exhausted; routing to Argus', {
+						reason: usageLimitCode,
+						requestedModel,
+						fallbackModel: body.model,
+						accountPlan: authResult.accountPlan,
+					});
+				} else return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 					error: creditsExhausted ? 'credits_exhausted' : 'daily_limit_exceeded',
 					message: creditsExhausted
 						? `You've used all free queries and have no credits remaining. Buy more at screenpi.pe`
@@ -563,33 +583,21 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			// Serialize priced work within its foreground/background lane. A scheduled
 			// pipe must not block a user who is actively waiting in chat.
 			const latency = resolveLatencyClass(request, body, env);
+			const backgroundRequest = isBackgroundRequest(request);
 			const costReservation = await reserveDailyCostCap(
 				env,
 				authResult.deviceId,
 				authResult.tier,
 				body.model,
 				new Date(),
-				isBackgroundRequest(request) ? 'background' : 'interactive',
+				backgroundRequest ? 'background' : 'interactive',
 				costReservationShape(body, rawRequestBytes),
 				authResult.accountPlan,
 				authResult.hostedAiTrial === true,
 			);
+			let dailyCostReservation = costReservation.allowed ? costReservation.reservation : null;
 			if (!costReservation.allowed) {
-				let rejectionReason: string | undefined;
-				try {
-					const payload = await costReservation.response.clone().json() as { error?: unknown };
-					if (typeof payload.error === 'string') {
-						rejectionReason = payload.error;
-						try {
-							const nested = JSON.parse(payload.error) as { error?: unknown };
-							if (typeof nested.error === 'string') rejectionReason = nested.error;
-						} catch {
-							// The error was already a plain code.
-						}
-					}
-				} catch {
-					// Preserve the original response even if diagnostic decoding fails.
-				}
+				const rejectionReason = await readHostedAiErrorCode(costReservation.response);
 				console.warn('hosted AI admission rejected', {
 					gate: 'cost_reservation',
 					reason: rejectionReason,
@@ -598,10 +606,41 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					hostedAiTrial: authResult.hostedAiTrial === true,
 					status: costReservation.response.status,
 				});
-				if (freeChatLease) await releaseFreeChatLease(env, freeChatLease);
-				return costReservation.response;
+				if (shouldUseArgusBackgroundFallback({
+					isBackground: backgroundRequest,
+					errorCode: rejectionReason,
+					body,
+					env,
+				})) {
+					const requestedModel = body.model;
+					body = { ...body, model: ARGUS_BACKGROUND_FALLBACK_MODEL };
+					const fallbackReservation = await reserveDailyCostCap(
+						env,
+						authResult.deviceId,
+						authResult.tier,
+						body.model,
+						new Date(),
+						'background',
+						costReservationShape(body, rawRequestBytes),
+						authResult.accountPlan,
+						authResult.hostedAiTrial === true,
+					);
+					if (!fallbackReservation.allowed) {
+						if (freeChatLease) await releaseFreeChatLease(env, freeChatLease);
+						return fallbackReservation.response;
+					}
+					dailyCostReservation = fallbackReservation.reservation;
+					console.warn('background hosted AI allowance exhausted; routing to Argus', {
+						reason: rejectionReason,
+						requestedModel,
+						fallbackModel: body.model,
+						accountPlan: authResult.accountPlan,
+					});
+				} else {
+					if (freeChatLease) await releaseFreeChatLease(env, freeChatLease);
+					return costReservation.response;
+				}
 			}
-			const dailyCostReservation = costReservation.reservation;
 
 			// Route latency-tolerant (background) traffic to the cheaper flex tier.
 			let leaseReleased = false;

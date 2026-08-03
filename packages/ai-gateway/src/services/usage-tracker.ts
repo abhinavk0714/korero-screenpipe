@@ -593,6 +593,12 @@ export function isModelAllowed(
 
   if (isGooglePolicyBlockedModel(model)) return false;
 
+  // Argus is an internal last-resort path for unattended Pipes only. Keep it
+  // unselectable even when the general product model gate is disabled; the
+  // top-level route injects it after authentication and explicit background
+  // classification when an account-local allowance is exhausted.
+  if (model === 'argus-trace-1') return false;
+
   // Economic safety is not a product-gating toggle. Even when the model gate
   // kill-switch is disabled, hosted work must resolve to a reviewed price (or
   // the explicit Auto router) before any provider receives it.

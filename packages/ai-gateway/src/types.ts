@@ -177,6 +177,10 @@ export interface Env {
 	SENTRY_RELEASE?: string;
 	// Event classifier (self-hosted vLLM)
 	EVENT_CLASSIFIER_URL: string;
+	// Argus Trace 1 — Screenpipe's text-only background fallback on Modal.
+	// Kept internal: callers cannot select it through the normal model gate.
+	SCREENPIPE_QWEN35_URL?: string;
+	SCREENPIPE_QWEN35_API_KEY?: string;
 	// Auto-reload settings
 	WEBSITE_URL: string;
 	AUTO_RELOAD_SECRET: string;
