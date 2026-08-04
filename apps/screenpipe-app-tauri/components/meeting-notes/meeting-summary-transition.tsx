@@ -48,13 +48,13 @@ export function MeetingSummaryTransition({
           animate={{ opacity: 1, y: 0 }}
           exit={reduceMotion ? undefined : { opacity: 0, y: -6 }}
           transition={{ duration: reduceMotion ? 0 : 0.15 }}
-          className="relative mt-9 overflow-hidden border-l border-[#4A6B00] py-1 pl-5 pr-1 dark:border-[#C7FF3E]"
+          className="relative mt-9 overflow-hidden border-l border-foreground/45 py-1 pl-5 pr-1"
         >
           <div className="mb-6 flex items-center justify-between gap-4">
             <div className="flex min-w-0 items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
               <motion.span
                 aria-hidden="true"
-                className="block h-2 w-2 shrink-0 bg-[#C7FF3E] ring-1 ring-black/15"
+                className="block h-2 w-2 shrink-0 bg-foreground"
                 animate={
                   reduceMotion ? undefined : { opacity: [0.65, 1, 0.65] }
                 }
@@ -116,7 +116,7 @@ export function MeetingSummaryTransition({
             ))}
 
             <motion.div
-              className="absolute -left-5 top-0 h-7 w-px bg-[#C7FF3E]"
+              className="absolute -left-5 top-0 h-7 w-px bg-foreground"
               animate={reduceMotion ? undefined : { y: [0, 104, 0] }}
               transition={{
                 duration: 3.2,
