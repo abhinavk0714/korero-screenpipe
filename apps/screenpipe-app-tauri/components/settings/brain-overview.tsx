@@ -2374,7 +2374,7 @@ export function BrainOverview({
           />
           <p
             data-testid="overview-data-status"
-            className="basis-full pl-12 font-mono text-[9px] text-muted-foreground sm:basis-auto sm:pl-0"
+            className="min-w-0 basis-full shrink-0 whitespace-normal break-words pl-12 font-mono text-[9px] leading-4 text-muted-foreground sm:pl-0"
           >
             {onboardingColdStart
               ? "This view will appear when Screenpipe has enough real activity for your outcome."

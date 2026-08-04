@@ -568,6 +568,43 @@ describe("Brain Live Views", function () {
     expect((await statusText).toLowerCase()).toContain("updated");
     expect((await statusText).toLowerCase()).not.toMatch(/^updated /);
 
+    const headerLayout = await browser.execute(() => {
+      const switcher = document.querySelector(
+        "[data-testid='live-view-dashboard-switcher']",
+      );
+      const status = document.querySelector(
+        "[data-testid='overview-data-status']",
+      );
+      const row = document.querySelector(
+        "[data-testid='overview-dashboard-row']",
+      );
+      const controls = document.querySelector(
+        "[data-testid='overview-header-controls']",
+      );
+      if (!switcher || !status || !row || !controls) return null;
+      const switcherRect = switcher.getBoundingClientRect();
+      const statusRect = status.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      const controlsRect = controls.getBoundingClientRect();
+      return {
+        switcherBottom: switcherRect.bottom,
+        statusTop: statusRect.top,
+        statusRight: statusRect.right,
+        rowRight: rowRect.right,
+        controlsLeft: controlsRect.left,
+      };
+    });
+    expect(headerLayout).toBeTruthy();
+    expect(headerLayout!.statusTop).toBeGreaterThanOrEqual(
+      headerLayout!.switcherBottom,
+    );
+    expect(headerLayout!.statusRight).toBeLessThanOrEqual(
+      headerLayout!.rowRight,
+    );
+    expect(headerLayout!.rowRight).toBeLessThanOrEqual(
+      headerLayout!.controlsLeft,
+    );
+
     const cardText = (
       await waitForTestId("overview-card-tracked-work", 10_000)
     ).getText();

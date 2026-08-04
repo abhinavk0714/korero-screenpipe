@@ -723,6 +723,11 @@ describe("BrainOverview", () => {
     const row = await screen.findByTestId("overview-dashboard-row");
     expect(within(row).getByTestId("section-navigation")).toBeTruthy();
     expect(within(row).getByTestId("overview-dashboard-selector")).toBeTruthy();
+    const status = within(row).getByTestId("overview-data-status");
+    expect(status.className).toContain("basis-full");
+    expect(status.className).toContain("shrink-0");
+    expect(status.className).toContain("break-words");
+    expect(status.className).not.toContain("sm:basis-auto");
   });
 
   it("opens AI creation first and keeps blank manual creation available", async () => {
