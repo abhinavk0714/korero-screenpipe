@@ -20,39 +20,48 @@
 //!
 //! ## Reference benchmark numbers
 //!
-//! `rfdetr_v34` (512×512 input, FP16 ONNX with fp32 I/O wrapper, ~60 MB,
+//! `rfdetr_v38` (512×512 input, FP16 ONNX with fp32 I/O wrapper, ~60 MB,
 //! ~118 ms/frame CPU). Production decode (sigmoid, conf 0.50),
 //! recall@IoU0.5 on a 150-state real-app suite of planted PII that no
 //! model here trained on:
 //!
 //!     v27 (previous): recall 92.9 %, secrets 74/76, 1.04 strays/shot
-//!     v34 (this):     recall 95.3 %, secrets 75/76, 1.03 strays/shot
-//!   Both: 0 decoy false fires. For scale, an RFDETR-**Large** trained on
-//!   the same data scores 95.7 % — i.e. +0.4 over this nano model, so
-//!   accuracy here is data-limited, not capacity-limited.
+//!     v38 (this):     recall 95.7 %, secrets 75/76, 0.99 strays/shot
+//!   Both: 0 decoy false fires. An RFDETR-**Large** trained on the same
+//!   data also scores 95.7 %, i.e. this nano model now matches a far
+//!   larger backbone — accuracy here is data-limited, not
+//!   capacity-limited, so composition of the corpus is the lever.
+//!
+//! REAL-SCREEN BEHAVIOUR (240 captured frames, every detection cropped
+//! and OCR'd to judge it — the eval that actually predicts field
+//! behaviour):
+//!
+//!     v27: 274 detections, 0 verified true positives, 80 clear FPs
+//!     v38:  59 detections, 7 verified true positives,  0 clear FPs
+//!
+//! Every model before v38 — including what shipped — fired hundreds of
+//! times on real screens without a single verifiable PII hit. v38 is
+//! the first with measured real-screen precision above zero.
+//!
+//! What produced that: training on REAL console pixels with exact
+//! labels (monospace pixel projection, no OCR and no model in the
+//! labelling loop), at high PII density. Earlier console waves ran ~25 %
+//! PII per frame, which taught "console text is usually not PII" and
+//! dragged secrets down to 65-67/76; raising density to ~9 PII/frame
+//! recovered secrets to 75/76 while IMPROVING real-screen precision.
+//! Volume was never the problem — composition was.
 //!
 //! NOTE: numbers previously recorded in this file (~60 % recall, person
-//! 0/109) were produced by a scorer that compared tight detections
-//! against whole-OCR-line gold boxes while normalising by the gold
-//! area, so any PII short relative to its line scored as a miss. The
-//! weights were never that bad; the measurement was. Figures above use
+//! 0/109) came from a scorer that compared tight detections against
+//! whole-OCR-line gold boxes while normalising by the gold area, so any
+//! PII short relative to its line scored as a miss. The weights were
+//! never that bad; the measurement was. Figures above use
 //! substring-tight gold boxes.
 //!
-//! False-fire status: 0 fires on the 300-page zero-PII decoy suite and
-//! 0 decoy hits on the real-app suites. On 240 real captured frames
-//! v34 produces roughly half the pattern-identifiable false positives
-//! of v27 (39 vs 80) — the class this targets is hyphenated lowercase
-//! slugs (`tmpclaude-8ab0-cwd`, `v0-autoehr-landing-page`) that earlier
-//! models boxed as EMAIL in terminal listings.
-//!
-//! KNOWN LIMITATION, read before trusting these numbers: on those same
-//! real frames neither v27 nor v34 produced a single detection whose
-//! cropped pixels OCR to a well-formed email/phone/url/secret. The
-//! suites above are planted-PII harnesses rendered by our own
-//! generator; they are held out, but they are not real screens. Treat
-//! real-world behaviour as unmeasured until a verified real-frame eval
-//! exists. Other observed FP modes: brand wordmarks as person, and
-//! ordinary prose as email.
+//! Remaining caveat: the 150-state suite is a planted-PII harness from
+//! our own generator — held out, but not a real screen. The real-frame
+//! eval measures precision only; recall on real screens is still
+//! unmeasured for want of trustworthy labels.
 //!
 //! FP16 re-export recipe: torch half() at ONNX export from the FINAL
 //! training weights (`last.ckpt` — NOT `checkpoint_best_ema.pth`,
@@ -69,7 +78,7 @@ use crate::RedactError;
 use crate::SpanLabel;
 
 const RFDETR_NAME: &str = "rfdetr";
-const RFDETR_VERSION: u32 = 34; // matches the rfdetr_v34 ONNX (fp16, 512px, real-app trained)
+const RFDETR_VERSION: u32 = 38; // matches the rfdetr_v38 ONNX (fp16, 512px, real-app trained)
 
 #[cfg(feature = "onnx-cpu")]
 const NUM_CLASSES: usize = 12;
@@ -95,7 +104,7 @@ const CLASSES: [SpanLabel; NUM_CLASSES] = [
 ];
 
 /// Per-class score floors applied on top of `conf_threshold` (the higher
-/// wins). All zero since v19, and v34 keeps them zero: genuine secret
+/// wins). All zero since v19, and v38 keeps them zero: genuine secret
 /// detections score ~0.5–0.7 while zero secret false fires were
 /// observed at conf 0.50 across every zero-PII suite — a high floor
 /// would suppress real catches for no precision gain. Mechanism kept
@@ -107,7 +116,7 @@ const CLASS_MIN_SCORE: [f32; NUM_CLASSES] =
 /// Configuration for [`RfdetrRedactor`].
 #[derive(Debug, Clone)]
 pub struct RfdetrConfig {
-    /// Path to `rfdetr_vN.onnx`. We default to `~/.screenpipe/models/rfdetr_v34.onnx`
+    /// Path to `rfdetr_vN.onnx`. We default to `~/.screenpipe/models/rfdetr_v38.onnx`
     /// in [`Self::default_model_path`] but callers may override (e.g.
     /// for an INT8-quantized variant in the future).
     pub model_path: PathBuf,
@@ -138,14 +147,14 @@ impl Default for RfdetrConfig {
 }
 
 impl RfdetrConfig {
-    /// `~/.screenpipe/models/rfdetr_v34.onnx`. Created lazily by
+    /// `~/.screenpipe/models/rfdetr_v38.onnx`. Created lazily by
     /// [`Self::ensure_model_present`] on first run.
     pub fn default_model_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".screenpipe")
             .join("models")
-            .join("rfdetr_v34.onnx")
+            .join("rfdetr_v38.onnx")
     }
 
     /// HuggingFace download URL for the canonical ONNX. Pinned to
@@ -153,16 +162,16 @@ impl RfdetrConfig {
     /// (URL + expected SHA-256 + [`RFDETR_VERSION`] all bumped
     /// together).
     pub const HF_DOWNLOAD_URL: &'static str =
-        "https://huggingface.co/screenpipe/pii-image-redactor/resolve/main/rfdetr_v34.onnx";
+        "https://huggingface.co/screenpipe/pii-image-redactor/resolve/main/rfdetr_v38.onnx";
 
-    /// Expected SHA-256 of the canonical `rfdetr_v34.onnx`. Verified
+    /// Expected SHA-256 of the canonical `rfdetr_v38.onnx`. Verified
     /// after every download. If a future training run produces a new
     /// best, bump [`RFDETR_VERSION`], re-publish to HF, update this
     /// constant. Note: the worker is destructive-only and does NOT
     /// re-redact already-processed frames, so a model-version bump
     /// only takes effect for newly-captured frames going forward.
     pub const EXPECTED_SHA256: &'static str =
-        "02ffb5e9b25b83a36e105d3fa6d198b739b86c31c585d545ebcab3899c7d889b";
+        "0e968657aafcfb2c5d61ece264d5959ddeeec53091171fae226b45ecd3a8a880";
 
     /// Make sure the ONNX is present on disk. Idempotent — does
     /// nothing if [`Self::model_path`] already exists with the
@@ -191,7 +200,7 @@ impl RfdetrConfig {
         tracing::info!(
             url = Self::HF_DOWNLOAD_URL,
             target = %self.model_path.display(),
-            "downloading rfdetr_v34.onnx (~60 MB) — first-run only"
+            "downloading rfdetr_v38.onnx (~60 MB) — first-run only"
         );
         let resp = reqwest::Client::new()
             .get(Self::HF_DOWNLOAD_URL)
@@ -228,7 +237,7 @@ impl RfdetrConfig {
         tracing::info!(
             target = %self.model_path.display(),
             bytes = bytes.len(),
-            "rfdetr_v34.onnx ready"
+            "rfdetr_v38.onnx ready"
         );
         Ok(())
     }
@@ -575,7 +584,7 @@ mod tests {
         let p = RfdetrConfig::default_model_path();
         let expected_suffix = Path::new(".screenpipe")
             .join("models")
-            .join("rfdetr_v34.onnx");
+            .join("rfdetr_v38.onnx");
         assert!(
             p.ends_with(&expected_suffix),
             "default path {} should end with {}",
@@ -641,7 +650,7 @@ mod tests {
         // (Real download path is exercised by integration tests off
         // the unit-test harness.)
         let d = tempdir().unwrap();
-        let p = d.path().join("models").join("rfdetr_v34.onnx");
+        let p = d.path().join("models").join("rfdetr_v38.onnx");
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, b"not the real model").unwrap();
         let cfg = RfdetrConfig {
