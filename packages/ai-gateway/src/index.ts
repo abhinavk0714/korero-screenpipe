@@ -748,6 +748,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						),
 						piClient: userAgent.includes('pi-ai') || userAgent.includes('pi-coding-agent'),
 						model: body.model,
+						messageRoles: body.messages.map((message) => String(message.role)).join(',').slice(0, 256),
 						toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
 					});
 				}
