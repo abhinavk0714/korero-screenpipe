@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::AppHandle;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::notifications::client;
 use crate::notifications::store::NotificationPriority;
@@ -133,6 +133,8 @@ pub fn start_quarantined_database_recovery(app: AppHandle) -> Result<(), String>
         );
         return Ok(());
     }
+    let quarantine_telemetry =
+        crate::db_recovery_telemetry::QuarantineTelemetry::from_path(&live);
 
     RECOVERY_QUIT_NOTICE_SHOWN.store(false, Ordering::SeqCst);
     client::send_typed_with_priority(
@@ -147,6 +149,14 @@ pub fn start_quarantined_database_recovery(app: AppHandle) -> Result<(), String>
         match screenpipe_engine::cli::db::recover_quarantined_database(&data_dir).await {
             Ok(()) => {
                 RECOVERY_ACTIVE.store(false, Ordering::SeqCst);
+                if crate::db_recovery_telemetry::arm_healthy_relaunch_verification(
+                    &data_dir,
+                    &quarantine_telemetry,
+                )
+                .is_err()
+                {
+                    warn!("could not persist SQLite recovery relaunch verification receipt");
+                }
                 client::send_typed_with_priority(
                     "database repaired",
                     "your original database was preserved. screenpipe is reopening and checking recording.",
@@ -162,7 +172,11 @@ pub fn start_quarantined_database_recovery(app: AppHandle) -> Result<(), String>
             }
             Err(recovery_error) => {
                 RECOVERY_ACTIVE.store(false, Ordering::SeqCst);
-                error!("protected database recovery failed: {recovery_error:#}");
+                crate::db_recovery_telemetry::report_recovery_failed(&quarantine_telemetry);
+                error!(
+                    target: "screenpipe_app::local_db_recovery",
+                    "protected database recovery failed: {recovery_error:#}"
+                );
                 client::send_typed_with_actions_and_priority(
                     "database repair paused",
                     "your original data is still protected. screenpipe couldn't finish the repair. check free disk space, then retry. technical details were saved to the logs.",

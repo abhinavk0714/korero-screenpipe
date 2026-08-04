@@ -74,14 +74,36 @@ pub async fn note_respawn_failure(_app: &tauri::AppHandle, err: &str) {
 /// automatic full-app relaunch here can hide corruption, real disk I/O failure,
 /// or a dangerous restart loop behind a seemingly normal app window.
 pub async fn surface_manual_recovery(reason: &str) {
+    surface_manual_recovery_inner(reason, true).await;
+}
+
+/// Restore the fail-closed UI state for a marker already reported through the
+/// structured quarantine lifecycle event. Keeping this log at WARN avoids a
+/// duplicate Sentry issue on every relaunch while preserving local context.
+pub async fn surface_quarantined_recovery_at_launch() {
+    surface_manual_recovery_inner(
+        "durable SQLite quarantine was present at app launch",
+        false,
+    )
+    .await;
+}
+
+async fn surface_manual_recovery_inner(reason: &str, report_error: bool) {
     if GAVE_UP_NOTIFIED.swap(true, Ordering::SeqCst) {
         return;
     }
 
-    error!(
-        "db recovery: {} — not auto-relaunching; surfacing manual recovery",
-        reason
-    );
+    if report_error {
+        error!(
+            "db recovery: {} — not auto-relaunching; surfacing manual recovery",
+            reason
+        );
+    } else {
+        warn!(
+            "db recovery: {} — not auto-relaunching; surfacing manual recovery",
+            reason
+        );
+    }
     let evt = screenpipe_events::DbRecoveryEvent::needs_recovery();
     let _ = screenpipe_events::send_event(evt.event_name(), evt);
 }

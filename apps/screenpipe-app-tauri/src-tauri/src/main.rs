@@ -47,6 +47,7 @@ mod chatgpt_oauth;
 #[allow(deprecated)]
 mod commands;
 mod db_recovery_notifications;
+mod db_recovery_telemetry;
 mod db_relaunch;
 mod diagnostic_logs;
 mod disk_usage;
@@ -543,11 +544,13 @@ async fn main() {
     let _posthog_disabled = telemetry_disabled;
 
     let app_version = env!("CARGO_PKG_VERSION");
+    let app_release = format!("screenpipe-app@{app_version}");
+    let _ = screenpipe_db::set_sqlite_quarantine_origin_release(app_release.clone());
     let sentry_guard = if !telemetry_disabled {
         Some(sentry::init((
             "https://da4edafe2c8e5e8682505945695ecad7@o4505591122886656.ingest.us.sentry.io/4510761355116544",
             sentry::ClientOptions {
-                release: Some(format!("screenpipe-app@{}", app_version).into()),
+                release: Some(app_release.into()),
                 send_default_pii: false,
                 server_name: Some("screenpipe-app".into()),
                 before_send: Some(std::sync::Arc::new(|mut event| {
@@ -1126,8 +1129,8 @@ async fn main() {
                 .with_writer(std::io::stdout)
                 .with_filter(EnvFilter::new(LOG_FILTER));
 
-            // Initialize the tracing subscriber with both layers + optional Sentry layer
-            // The Sentry layer captures error!() and warn!() events (not just panics)
+            // Initialize the tracing subscriber with both layers + optional Sentry layer.
+            // ERROR events become Sentry issues; WARN/INFO become breadcrumbs.
             let registry = tracing_subscriber::registry()
                 .with(file_layer)
                 .with(console_layer);
@@ -1137,7 +1140,17 @@ async fn main() {
 
             if sentry_guard.is_some() {
                 registry
-                    .with(sentry::integrations::tracing::layer())
+                    .with(sentry::integrations::tracing::layer().event_filter(|metadata| {
+                        use sentry::integrations::tracing::EventFilter;
+                        // Recovery errors need full local diagnostics, but the
+                        // lifecycle event sent separately is deliberately
+                        // path- and reason-free.
+                        if metadata.target() == "screenpipe_app::local_db_recovery" {
+                            EventFilter::Ignore
+                        } else {
+                            sentry::integrations::tracing::default_event_filter(metadata)
+                        }
+                    }))
                     .init();
             } else {
                 registry.init();
@@ -1707,6 +1720,7 @@ async fn main() {
             let launch_db_path = data_dir.join("db.sqlite");
             let launch_db_quarantined = screenpipe_db::sqlite_quarantine_exists(&launch_db_path);
             if launch_db_quarantined {
+                crate::db_recovery_telemetry::report_active_at_launch(&launch_db_path);
                 // Preserve the cross-launch fail-closed boundary before any
                 // server, SQLite pool, watchdog, or capture thread is started.
                 crate::health::set_boot_error(
@@ -2114,10 +2128,7 @@ async fn main() {
                 // process that observed the hard fault. Start the notification
                 // subscriber first, then publish recovery-required immediately.
                 tauri::async_runtime::spawn(async {
-                    crate::db_relaunch::surface_manual_recovery(
-                        "durable SQLite quarantine was present at app launch",
-                    )
-                    .await;
+                    crate::db_relaunch::surface_quarantined_recovery_at_launch().await;
                 });
                 if !app_ui_hidden && !headless_startup {
                     crate::db_recovery_notifications::notify_quarantined_database(
