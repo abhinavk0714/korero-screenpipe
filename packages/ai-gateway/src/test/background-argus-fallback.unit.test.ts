@@ -131,6 +131,40 @@ describe('paid background Pipe Argus fallback', () => {
 		expect(alreadyBounded.max_tokens).toBe(512);
 	});
 
+	it('compacts only Argus tool-schema prose while preserving the executable contract', () => {
+		const originalTools = [{
+			type: 'function',
+			function: {
+				name: 'lookup_events',
+				description: 'Find matching events. '.repeat(20),
+				parameters: {
+					type: 'object',
+					title: 'Lookup input',
+					properties: {
+						query: {
+							type: 'string',
+							description: 'A long explanation repeated in every Pi tool schema.',
+							enum: ['recent', 'all'],
+						},
+					},
+					required: ['query'],
+				},
+			},
+		}];
+		const prepared = prepareArgusBackgroundFallbackBody({ ...body, tools: originalTools });
+		const fn = prepared.tools?.[0].function;
+
+		expect(prepared.tools).not.toBe(originalTools);
+		expect(originalTools[0].function.parameters.properties.query.description).toContain('long explanation');
+		expect(fn.name).toBe('lookup_events');
+		expect(fn.description.length).toBeLessThanOrEqual(160);
+		expect(fn.parameters).toEqual({
+			type: 'object',
+			properties: { query: { type: 'string', enum: ['recent', 'all'] } },
+			required: ['query'],
+		});
+	});
+
 	it('preserves the original allowance response when Argus is unavailable', async () => {
 		const attempt = mock(async () => {
 			throw Object.assign(new Error('Argus unavailable'), { status: 503 });

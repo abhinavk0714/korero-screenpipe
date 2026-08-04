@@ -6,7 +6,9 @@ import type { Env, RequestBody } from '../types';
 import { isHostedChatAllowanceError } from './cloudflare-ai-gateway';
 
 export const ARGUS_BACKGROUND_FALLBACK_MODEL = 'argus-trace-1';
-export const ARGUS_BACKGROUND_MAX_COMPLETION_TOKENS = 1_024;
+export const ARGUS_BACKGROUND_MAX_COMPLETION_TOKENS = 512;
+const ARGUS_TOOL_DESCRIPTION_MAX_CHARS = 160;
+const ARGUS_SCHEMA_METADATA_KEYS = new Set(['description', 'title', 'examples', 'default', '$comment']);
 
 const ARGUS_JSON_SYSTEM_PROMPT = 'Return only one valid JSON object matching the requested response format. Do not include markdown or prose.';
 
@@ -40,6 +42,40 @@ export function hasArgusUnsupportedInput(body: RequestBody): boolean {
 		part.type === 'image_url' ||
 		part.type === 'file',
 	));
+}
+
+function compactArgusSchema(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(compactArgusSchema);
+	if (!value || typeof value !== 'object') return value;
+	return Object.fromEntries(
+		Object.entries(value as Record<string, unknown>)
+			.filter(([key]) => !ARGUS_SCHEMA_METADATA_KEYS.has(key))
+			.map(([key, nested]) => [key, compactArgusSchema(nested)]),
+	);
+}
+
+/**
+ * Pi's full tool schemas can consume most of Argus's 8k window before the Pipe
+ * prompt is tokenized. Keep the executable JSON contract while removing prose
+ * that is redundant with the agent instructions. The primary request remains
+ * untouched; this compact copy is used only after its hosted allowance fails.
+ */
+function compactArgusTools(tools: RequestBody['tools']): RequestBody['tools'] {
+	if (!Array.isArray(tools)) return tools;
+	return tools.map((tool) => {
+		if (!tool || typeof tool !== 'object' || !tool.function || typeof tool.function !== 'object') return tool;
+		const description = typeof tool.function.description === 'string'
+			? tool.function.description.slice(0, ARGUS_TOOL_DESCRIPTION_MAX_CHARS)
+			: tool.function.description;
+		return {
+			...tool,
+			function: {
+				...tool.function,
+				description,
+				parameters: compactArgusSchema(tool.function.parameters),
+			},
+		};
+	});
 }
 
 /**
@@ -80,11 +116,12 @@ export function prepareArgusBackgroundFallbackBody(body: RequestBody): RequestBo
 		...body,
 		model: ARGUS_BACKGROUND_FALLBACK_MODEL,
 		messages,
+		tools: compactArgusTools(body.tools),
 		// Pi advertises the primary hosted model's 32k output budget. Argus has an
 		// 8,192-token total window and rejects that request before generating. Real
-		// Pi Pipe instructions plus 13 tool schemas already consume at least 6,145
-		// input tokens, so reserve only 1,024 output tokens and leave enough room for
-		// the prompt/tool contract.
+		// Pi Pipe instructions plus tool schemas can consume nearly the full window,
+		// so reserve a bounded agent turn and leave enough room for the compacted
+		// prompt/tool contract.
 		max_tokens: maxTokens,
 		max_completion_tokens: undefined,
 	};
