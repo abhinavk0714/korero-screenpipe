@@ -1852,11 +1852,6 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 },
                 sim_break,
             );
-            if decision.healthy {
-                crate::db_recovery_telemetry::report_healthy_relaunch_if_pending(
-                    &screenpipe_core::paths::default_screenpipe_data_dir(),
-                );
-            }
             // Recovery needs a real successful health response this tick:
             // decide_status holds "Recording" through up to 30 failed checks
             // (anti-flicker), which must not read as "recovered" mid-restart.

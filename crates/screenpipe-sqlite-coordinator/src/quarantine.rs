@@ -10,14 +10,12 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MARKER_SUFFIX: &str = ".quarantine.json";
 const RESERVE_SUFFIX: &str = ".quarantine.reserve.json";
 const MARKER_SCHEMA_VERSION: u32 = 1;
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-static QUARANTINE_ORIGIN_RELEASE: OnceLock<String> = OnceLock::new();
 
 /// Stable identity for one physical database file generation.
 ///
@@ -48,31 +46,8 @@ pub struct SqliteQuarantineMarker {
     pub database_path: PathBuf,
     pub file_identity: Option<SqliteFileIdentity>,
     pub sqlite_code: Option<i32>,
-    /// Release that armed or activated this marker, when the embedding app
-    /// registered one. Optional so schema-v1 markers from older builds remain
-    /// readable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub origin_release: Option<String>,
     pub detected_at_unix_ms: u64,
     pub reason: String,
-}
-
-/// Register the embedding app release recorded in future quarantine markers.
-///
-/// Call once, before opening SQLite. The coordinator deliberately owns this
-/// process-wide value because hard faults can originate in any database owner,
-/// well below the desktop app that knows the distributable release.
-pub fn set_sqlite_quarantine_origin_release(release: impl Into<String>) -> bool {
-    let release = release.into();
-    let release = release.trim();
-    if release.is_empty() {
-        return false;
-    }
-    QUARANTINE_ORIGIN_RELEASE.set(release.to_string()).is_ok()
-}
-
-fn quarantine_origin_release() -> Option<&'static str> {
-    QUARANTINE_ORIGIN_RELEASE.get().map(String::as_str)
 }
 
 fn now_unix_ms() -> u64 {
@@ -191,7 +166,6 @@ fn marker_for(
         database_path: canonical_database_path(database_path),
         file_identity: sqlite_file_identity(database_path).ok(),
         sqlite_code,
-        origin_release: quarantine_origin_release().map(str::to_owned),
         detected_at_unix_ms: now_unix_ms(),
         reason: reason.into(),
     }
@@ -261,24 +235,16 @@ pub fn prepare_sqlite_quarantine_reserve(database_path: impl AsRef<Path>) -> io:
     };
     if reserve_path.exists() {
         let current_identity = sqlite_file_identity(database_path).ok();
-        let reserve = fs::read(&reserve_path)
+        let reserve_is_current = fs::read(&reserve_path)
             .ok()
-            .and_then(|raw| serde_json::from_slice::<SqliteQuarantineMarker>(&raw).ok());
-        let reserve_is_current = reserve
-            .as_ref()
+            .and_then(|raw| serde_json::from_slice::<SqliteQuarantineMarker>(&raw).ok())
             .is_some_and(|marker| marker.file_identity == current_identity);
-        let reserve_has_current_release = quarantine_origin_release().is_none_or(|release| {
-            reserve
-                .as_ref()
-                .and_then(|marker| marker.origin_release.as_deref())
-                == Some(release)
-        });
-        if reserve_is_current && reserve_has_current_release {
+        if reserve_is_current {
             return Ok(());
         }
-        // A verified recovery removes its reserve. This also refreshes an old
-        // reserve with the current app release while the filesystem is healthy,
-        // so SQLITE_FULL can still activate useful origin metadata by rename.
+        // A verified recovery removes its reserve. This branch covers a manual
+        // out-of-band file replacement: discard only the inactive stale
+        // reserve, then arm one for the new physical generation.
         fs::remove_file(&reserve_path)?;
     }
     atomic_write_json(
@@ -477,41 +443,6 @@ mod tests {
         assert_eq!(marker.sqlite_code, Some(522));
         assert_eq!(marker.file_identity, Some(expected_identity));
         assert!(sqlite_quarantine_exists(&db));
-    }
-
-    #[test]
-    fn schema_v1_markers_without_origin_release_remain_readable() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let db = dir.path().join("db.sqlite");
-        fs::write(&db, b"generation one").expect("write db");
-        let mut marker = serde_json::to_value(marker_for(&db, Some(522), "disk I/O error"))
-            .expect("serialize marker");
-        marker
-            .as_object_mut()
-            .expect("marker object")
-            .remove("origin_release");
-        let marker: SqliteQuarantineMarker =
-            serde_json::from_value(marker).expect("read old schema-v1 marker");
-        assert_eq!(marker.schema_version, 1);
-        assert_eq!(marker.origin_release, None);
-    }
-
-    #[test]
-    fn registered_release_is_kept_in_the_full_disk_reserve() {
-        let _ = set_sqlite_quarantine_origin_release("screenpipe-app@2.5.176");
-        let dir = tempfile::tempdir().expect("tempdir");
-        let db = dir.path().join("db.sqlite");
-        fs::write(&db, b"generation one").expect("write db");
-        prepare_sqlite_quarantine_reserve(&db).expect("prepare reserve");
-
-        let reserve = fs::read(sqlite_quarantine_reserve_path(&db).expect("reserve path"))
-            .expect("read reserve");
-        let marker: SqliteQuarantineMarker =
-            serde_json::from_slice(&reserve).expect("parse reserve");
-        assert_eq!(
-            marker.origin_release.as_deref(),
-            Some("screenpipe-app@2.5.176")
-        );
     }
 
     #[test]

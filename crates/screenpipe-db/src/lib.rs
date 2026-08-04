@@ -29,9 +29,9 @@ pub use recovery::{
 };
 pub use screenpipe_sqlite_coordinator::{
     archive_resolved_sqlite_quarantine, persist_sqlite_quarantine,
-    prepare_sqlite_quarantine_reserve, read_sqlite_quarantine,
-    set_sqlite_quarantine_origin_release, sqlite_file_identity, sqlite_quarantine_exists,
-    sqlite_quarantine_marker_path, SqliteFileIdentity, SqliteQuarantineMarker,
+    prepare_sqlite_quarantine_reserve, read_sqlite_quarantine, sqlite_file_identity,
+    sqlite_quarantine_exists, sqlite_quarantine_marker_path, SqliteFileIdentity,
+    SqliteQuarantineMarker,
 };
 pub use text_normalizer::{expand_search_query, sanitize_fts5_query};
 pub use types::*;
