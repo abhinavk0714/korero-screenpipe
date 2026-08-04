@@ -20,6 +20,7 @@ import {
 } from '../services/cloudflare-ai-gateway';
 import {
   ARGUS_BACKGROUND_FALLBACK_MODEL,
+  prepareArgusBackgroundFallbackBody,
   isProviderQuotaOrBillingLimitError,
   shouldUseArgusBackgroundFallback,
 } from '../services/background-limit-fallback';
@@ -438,7 +439,7 @@ export async function tryArgusBackgroundFallback(
 ): Promise<Response | null> {
   if (!shouldUseArgusBackgroundFallback({ enabled, error, body, env })) return null;
   try {
-    const fallbackBody = { ...body, model: ARGUS_BACKGROUND_FALLBACK_MODEL };
+    const fallbackBody = prepareArgusBackgroundFallbackBody(body);
     const response = await attemptModel(
       ARGUS_BACKGROUND_FALLBACK_MODEL,
       fallbackBody,

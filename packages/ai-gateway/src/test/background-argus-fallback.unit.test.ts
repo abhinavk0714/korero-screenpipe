@@ -9,6 +9,7 @@ import {
 	hasArgusUnsupportedInput,
 	isAccountLocalAllowanceError,
 	isProviderQuotaOrBillingLimitError,
+	prepareArgusBackgroundFallbackBody,
 	shouldUseArgusBackgroundFallback,
 } from '../services/background-limit-fallback';
 import { HostedChatAllowanceExceededError } from '../services/cloudflare-ai-gateway';
@@ -82,6 +83,22 @@ describe('paid background Pipe Argus fallback', () => {
 			expect(response?.headers.get('x-screenpipe-background-fallback')).toBe('argus');
 			expect(attempt).toHaveBeenCalledTimes(1);
 		}
+	});
+
+	it('adds an explicit JSON-only constraint without changing text requests', () => {
+		const jsonBody = prepareArgusBackgroundFallbackBody({
+			...body,
+			response_format: { type: 'json_object' },
+		});
+		expect(jsonBody.model).toBe(ARGUS_BACKGROUND_FALLBACK_MODEL);
+		expect(jsonBody.messages[0]).toEqual({
+			role: 'system',
+			content: 'Return only one valid JSON object matching the requested response format. Do not include markdown or prose.',
+		});
+		expect(jsonBody.messages[1]).toEqual(body.messages[0]);
+
+		const textBody = prepareArgusBackgroundFallbackBody(body);
+		expect(textBody.messages).toBe(body.messages);
 	});
 
 	it('preserves the original allowance response when Argus is unavailable', async () => {

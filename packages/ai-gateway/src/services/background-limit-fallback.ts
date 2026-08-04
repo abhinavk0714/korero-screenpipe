@@ -7,6 +7,8 @@ import { isHostedChatAllowanceError } from './cloudflare-ai-gateway';
 
 export const ARGUS_BACKGROUND_FALLBACK_MODEL = 'argus-trace-1';
 
+const ARGUS_JSON_SYSTEM_PROMPT = 'Return only one valid JSON object matching the requested response format. Do not include markdown or prose.';
+
 const ACCOUNT_LOCAL_ALLOWANCE_CODES = new Set([
 	'credits_exhausted',
 	'daily_limit_exceeded',
@@ -37,6 +39,22 @@ export function hasArgusUnsupportedInput(body: RequestBody): boolean {
 		part.type === 'image_url' ||
 		part.type === 'file',
 	));
+}
+
+/**
+ * vLLM accepts OpenAI response_format, but the Argus adapter still needs an
+ * explicit output constraint to avoid wrapping valid JSON in prose or fences.
+ * Keep the caller's schema authoritative and add only the minimal instruction.
+ */
+export function prepareArgusBackgroundFallbackBody(body: RequestBody): RequestBody {
+	const messages = body.response_format?.type === 'json_object' || body.response_format?.type === 'json_schema'
+		? [{ role: 'system' as const, content: ARGUS_JSON_SYSTEM_PROMPT }, ...body.messages]
+		: body.messages;
+	return {
+		...body,
+		model: ARGUS_BACKGROUND_FALLBACK_MODEL,
+		messages,
+	};
 }
 
 function errorText(error: unknown): string {
