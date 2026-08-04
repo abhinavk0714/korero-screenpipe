@@ -33,7 +33,7 @@ import {
   selectExistingLiveViewForOnboarding,
 } from "@/lib/live-views/onboarding-activation";
 import {
-  ONBOARDING_GOALS,
+  ONBOARDING_GOAL_CHOICES,
   type OnboardingChoiceCategory,
   type OnboardingGoalCategory,
 } from "@/lib/live-views/onboarding-goals";
@@ -857,7 +857,7 @@ export default function FirstDashboard() {
         </p>
 
         <div className="mt-5 grid grid-cols-2 gap-2">
-          {[...ONBOARDING_GOALS, AI_CONTEXT_CHOICE].map((suggestion) => {
+          {[...ONBOARDING_GOAL_CHOICES, AI_CONTEXT_CHOICE].map((suggestion) => {
             const selected = goalCategory === suggestion.category;
             const Icon = GOAL_ICONS[suggestion.category] ?? MessageSquareText;
             return (

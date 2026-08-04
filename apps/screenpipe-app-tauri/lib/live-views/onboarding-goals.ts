@@ -29,6 +29,14 @@ export const ONBOARDING_GOALS: OnboardingGoalSuggestion[] = [
     preferredStorePipeSlugs: ["digital-clone"],
   },
   {
+    category: "meeting_follow_through",
+    title: "follow through after meetings",
+    description: "keep decisions, owners, and next steps from getting lost",
+    prompt:
+      "Build a meeting follow-through dashboard with recent meeting context, explicit decisions, owned action items, unresolved questions, and source-backed next steps.",
+    preferredStorePipeSlugs: ["meeting-intel"],
+  },
+  {
     category: "work_patterns",
     title: "review my day",
     description: "tasks, meetings, and where my time went",
@@ -51,6 +59,10 @@ export const ONBOARDING_GOALS: OnboardingGoalSuggestion[] = [
     ],
   },
 ];
+
+export const ONBOARDING_GOAL_CHOICES = ONBOARDING_GOALS.filter(
+  (goal) => goal.category !== "meeting_follow_through",
+);
 
 export function preferredStorePipeSlugs(
   category: OnboardingGoalCategory,
