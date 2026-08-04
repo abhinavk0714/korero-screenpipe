@@ -423,8 +423,8 @@ impl PiExecutor {
         s
     }
 
-    /// Install or wipe the `screenpipe-team` enterprise-admin skill in
-    /// `project_dir/.pi/skills/screenpipe-team/`.
+    /// Install or wipe the `screenpipe-team` enterprise-admin skill under an
+    /// app-owned, non-discovered root and return its exact skill file.
     ///
     /// This skill teaches pi how to query org-wide telemetry (devices,
     /// search, records) via `https://screenpi.pe/api/enterprise/v1/*`. It
@@ -436,30 +436,32 @@ impl PiExecutor {
     /// Source of truth: `~/.screenpipe/enterprise.json`. The Tauri host
     /// keeps that file populated with `{is_admin, license_active,
     /// team_api_token, ...}` based on the user's current license + role.
-    /// We re-check on every pi-agent boot, so role downgrades + license
-    /// expirations wipe the skill automatically.
-    pub fn ensure_screenpipe_team_skill(project_dir: &Path) -> Result<()> {
-        let skill_dir = project_dir
-            .join(".pi")
-            .join("skills")
-            .join("screenpipe-team");
+    /// The caller must pass the returned path to Pi with `--skill`. Keeping
+    /// this outside `.pi/skills` prevents the consumer and Enterprise apps,
+    /// which intentionally share chat history, from discovering or deleting
+    /// each other's Enterprise capability during concurrent starts.
+    ///
+    /// Consumer builds return before touching the directory. Enterprise builds
+    /// re-check on every Pi boot, so role downgrades and license expirations
+    /// remove the app-owned copy automatically.
+    pub fn ensure_screenpipe_team_skill(skill_root: &Path) -> Result<Option<PathBuf>> {
+        if !cfg!(feature = "enterprise-build") {
+            return Ok(None);
+        }
+
+        let skill_dir = skill_root.join("screenpipe-team");
         let skill_path = skill_dir.join("SKILL.md");
 
         let should_install = Self::is_enterprise_admin();
 
         if should_install {
             std::fs::create_dir_all(&skill_dir)?;
-            // Gateway orgs (write-only archive tier) query their own gateway
-            // inside the customer network — the hosted base has no read path
-            // to their data. Substitute the org's base URL at install time;
-            // hosted orgs get the asset verbatim.
-            let mut skill =
-                include_str!("../../assets/skills/screenpipe-team/SKILL.md").to_string();
-            if let Some(base) = Self::team_api_base_override() {
-                skill = skill.replace("https://screenpi.pe/api/enterprise/v1", &base);
-            }
-            std::fs::write(&skill_path, skill)?;
+            std::fs::write(
+                &skill_path,
+                include_str!("../../assets/skills/screenpipe-team/SKILL.md"),
+            )?;
             debug!("screenpipe-team skill installed at {:?}", skill_path);
+            return Ok(Some(skill_path));
         } else if skill_dir.exists() {
             // Wipe the whole dir — defense against partial state if a user
             // hand-edited or we ever ship sub-files in the future.
@@ -469,31 +471,13 @@ impl PiExecutor {
             );
         }
 
-        Ok(())
-    }
-
-    /// The org's team-API base URL from `~/.screenpipe/enterprise.json`
-    /// (`gateway_url`, written by the desktop app from the storage
-    /// binding's gateway URL). `None` = hosted org, keep the baked base.
-    fn team_api_base_override() -> Option<String> {
-        let home = dirs::home_dir()?;
-        let raw = std::fs::read_to_string(home.join(".screenpipe").join("enterprise.json")).ok()?;
-        let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
-        let base = parsed.get("gateway_url")?.as_str()?.trim();
-        let base = base.trim_end_matches('/');
-        if base.starts_with("http://") || base.starts_with("https://") {
-            Some(base.to_string())
-        } else {
-            None
-        }
+        Ok(None)
     }
 
     /// True only in the Enterprise app when `~/.screenpipe/enterprise.json`
-    /// declares this user as an active admin AND the user is signed into
-    /// screenpipe cloud (the Clerk JWT at `~/.screenpipe/auth.json` is what
-    /// authenticates the skill's HTTP calls to
-    /// `screenpi.pe/api/enterprise/v1`). The app-build check matters when the
-    /// consumer and Enterprise apps share `~/.screenpipe` on one machine.
+    /// declares this user as an active admin with a license key and dedicated
+    /// team API token. The app-build check matters when the consumer and
+    /// Enterprise apps share `~/.screenpipe` on one machine.
     ///
     /// Conservative: any I/O or parse error means "no" so we fail closed —
     /// we'd rather under-install the skill than show team affordances to
@@ -601,9 +585,15 @@ impl PiExecutor {
             debug!("{} skill installed at {:?}", name, skill_path);
         }
 
-        // Conditional: enterprise admins get the team skill, others get it
-        // wiped if a stale copy exists (e.g. after a role downgrade).
-        Self::ensure_screenpipe_team_skill(project_dir)?;
+        // Migration cleanup only. Enterprise capabilities are injected by the
+        // Enterprise app with Pi's explicit `--skill` flag from a path outside
+        // `.pi/skills`; they must never be auto-discovered by shared chat or
+        // background-Pipe projects.
+        let legacy_team_skill = skills_root.join("screenpipe-team");
+        if legacy_team_skill.exists() {
+            std::fs::remove_dir_all(&legacy_team_skill)?;
+            debug!("removed legacy auto-discovered team skill");
+        }
 
         // Mirror user-imported skills (Settings → Connections → Skills) into
         // this session. Best-effort; never blocks a run.
@@ -621,7 +611,7 @@ impl PiExecutor {
     const USER_SKILL_MARKER: &'static str = ".screenpipe-managed";
 
     /// Baseline skills screenpipe writes into every session itself
-    /// ([`Self::ensure_screenpipe_skill`] / [`Self::ensure_screenpipe_team_skill`]).
+    /// ([`Self::ensure_screenpipe_skill`]).
     /// A store entry under one of these names must never be mirrored: it would
     /// clobber the real baseline and, once stamped with
     /// [`Self::USER_SKILL_MARKER`], be deleted by a later sync. The desktop
@@ -791,11 +781,16 @@ impl PiExecutor {
             }
         }
 
-        // Enterprise-admin team skill is orthogonal to pipe permissions —
-        // it gates on the user's license role, not on what the pipe is
-        // allowed to do. Run it after the permission-filtered baseline so
-        // it correctly mirrors the user's current admin/license state.
-        Self::ensure_screenpipe_team_skill(project_dir)?;
+        // Migration cleanup only. A background Pipe must never inherit the
+        // Enterprise app's team-administration capability.
+        let legacy_team_skill = project_dir
+            .join(".pi")
+            .join("skills")
+            .join("screenpipe-team");
+        if legacy_team_skill.exists() {
+            std::fs::remove_dir_all(&legacy_team_skill)?;
+            debug!("removed legacy auto-discovered team skill");
+        }
 
         // Mirror user-imported skills into this session too (best-effort).
         if let Err(e) = Self::sync_user_skills(project_dir) {
@@ -3678,13 +3673,30 @@ mod tests {
         assert!(!consumer_skill.contains("screenpipe team pipes"));
         assert!(enterprise_skill.contains("screenpipe team pipes list"));
         assert!(enterprise_skill.contains("screenpipe team pipes schedule"));
-        assert!(enterprise_skill.contains("only inside the Enterprise app"));
+        assert!(enterprise_skill.contains("Injected only by the Enterprise app"));
+        assert!(!enterprise_skill.contains("curl "));
+        assert!(
+            enterprise_skill.lines().count() <= 60,
+            "Enterprise skill should stay compact; use the native CLI instead of duplicating its contract"
+        );
     }
 
     #[cfg(not(feature = "enterprise-build"))]
     #[test]
     fn consumer_build_never_enables_enterprise_team_skill() {
         assert!(!PiExecutor::is_enterprise_admin());
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let sentinel = root.path().join("screenpipe-team").join("KEEP");
+        std::fs::create_dir_all(sentinel.parent().expect("sentinel parent")).unwrap();
+        std::fs::write(&sentinel, b"owned by a concurrently running Enterprise app").unwrap();
+
+        let installed = PiExecutor::ensure_screenpipe_team_skill(root.path()).unwrap();
+        assert!(installed.is_none());
+        assert!(
+            sentinel.exists(),
+            "consumer builds must not race Enterprise by deleting its app-scoped skill"
+        );
     }
 
     #[cfg(windows)]
