@@ -849,18 +849,6 @@ export default function FirstDashboard() {
   return (
     <div className="flex flex-col items-center py-2">
       <div className="w-full max-w-sm">
-        {isAdditionalViewFlow && (
-          <button
-            type="button"
-            onClick={() => {
-              setCreatingAnotherView(false);
-              setError(null);
-            }}
-            className="mb-4 font-mono text-[10px] lowercase text-muted-foreground underline underline-offset-4 transition-colors hover:text-foreground"
-          >
-            back to my Live Views
-          </button>
-        )}
         <h2 className="text-center font-mono text-lg font-semibold lowercase">
           what do you want{isAdditionalViewFlow ? " next" : " first"}?
         </h2>
