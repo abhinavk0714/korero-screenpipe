@@ -7,8 +7,10 @@ import { isHostedChatAllowanceError } from './cloudflare-ai-gateway';
 
 export const ARGUS_BACKGROUND_FALLBACK_MODEL = 'argus-trace-1';
 export const ARGUS_BACKGROUND_MAX_COMPLETION_TOKENS = 512;
+export const ARGUS_BACKGROUND_REQUEST_CHAR_BUDGET = 48_000;
 const ARGUS_TOOL_DESCRIPTION_MAX_CHARS = 160;
 const ARGUS_SCHEMA_METADATA_KEYS = new Set(['description', 'title', 'examples', 'default', '$comment']);
+const ARGUS_CONTEXT_TRUNCATION_MARKER = '\n…[older background context truncated for Argus rescue]…\n';
 
 const ARGUS_JSON_SYSTEM_PROMPT = 'Return only one valid JSON object matching the requested response format. Do not include markdown or prose.';
 
@@ -78,6 +80,104 @@ function compactArgusTools(tools: RequestBody['tools']): RequestBody['tools'] {
 	});
 }
 
+function contentLength(content: RequestBody['messages'][number]['content']): number {
+	return typeof content === 'string'
+		? content.length
+		: content.reduce((total, part) => total + (part.text?.length ?? 0), 0);
+}
+
+function truncateTextForArgus(text: string, maxChars: number): string {
+	if (text.length <= maxChars) return text;
+	if (maxChars <= ARGUS_CONTEXT_TRUNCATION_MARKER.length) {
+		return ARGUS_CONTEXT_TRUNCATION_MARKER.slice(0, maxChars);
+	}
+	const usable = maxChars - ARGUS_CONTEXT_TRUNCATION_MARKER.length;
+	const head = Math.floor(usable * 0.4);
+	return text.slice(0, head) + ARGUS_CONTEXT_TRUNCATION_MARKER + text.slice(-(usable - head));
+}
+
+function truncateContentForArgus(
+	content: RequestBody['messages'][number]['content'],
+	maxChars: number,
+): RequestBody['messages'][number]['content'] {
+	if (typeof content === 'string') return truncateTextForArgus(content, maxChars);
+	const text = content.map((part) => part.text ?? '').join('\n');
+	return [{ type: 'text', text: truncateTextForArgus(text, maxChars) }];
+}
+
+/**
+ * Argus is a safety net, so an oversized Pipe must degrade its oldest context
+ * instead of surfacing another provider-limit error. Keep every message role
+ * and tool-call envelope intact, preserve both the start and end of truncated
+ * content, and spend the bounded context budget on the newest turn first.
+ *
+ * This is deliberately a conservative serialized-character budget rather than
+ * a tokenizer dependency in the Worker. Real Qwen prompts tokenize well below
+ * this bound, leaving headroom for the 512-token response and chat template.
+ */
+function compactArgusMessages(
+	messages: RequestBody['messages'],
+	tools: RequestBody['tools'],
+	responseFormat: RequestBody['response_format'],
+): RequestBody['messages'] {
+	const fixedChars = JSON.stringify({ tools, response_format: responseFormat }).length;
+	// Reserve a small envelope for JSON field names, commas, and the model/output
+	// fields added after this helper returns.
+	const messageBudget = Math.max(4_096, ARGUS_BACKGROUND_REQUEST_CHAR_BUDGET - fixedChars - 256);
+	if (JSON.stringify(messages).length <= messageBudget) return messages;
+
+	const compacted = messages.map((message) => ({
+		...message,
+		content: Array.isArray(message.content)
+			? message.content.map((part) => ({ ...part }))
+			: message.content,
+	}));
+	const emptyContentChars = JSON.stringify(compacted.map((message) => ({ ...message, content: '' }))).length;
+	let available = Math.max(0, messageBudget - emptyContentChars);
+	const allocations = new Array(compacted.length).fill(0) as number[];
+
+	// Preserve a small trace of every turn so tool-result chronology remains
+	// valid, then prioritize the newest task, the leading agent instructions,
+	// and finally recent intermediate turns.
+	for (let index = 0; index < compacted.length && available > 0; index += 1) {
+		const minimum = Math.min(contentLength(compacted[index].content), 128, available);
+		allocations[index] = minimum;
+		available -= minimum;
+	}
+	const priority = [
+		compacted.length - 1,
+		0,
+		...Array.from({ length: Math.max(0, compacted.length - 2) }, (_, index) => compacted.length - 2 - index),
+	].filter((index, position, values) => index >= 0 && values.indexOf(index) === position);
+	for (const index of priority) {
+		if (available <= 0) break;
+		const target = index === compacted.length - 1
+			? 16_384
+			: index === 0
+				? 12_288
+				: 4_096;
+		const extra = Math.min(
+			Math.max(0, contentLength(compacted[index].content) - allocations[index]),
+			Math.max(0, target - allocations[index]),
+			available,
+		);
+		allocations[index] += extra;
+		available -= extra;
+	}
+	for (const index of priority) {
+		if (available <= 0) break;
+		const desired = contentLength(compacted[index].content);
+		const extra = Math.min(desired - allocations[index], available);
+		allocations[index] += Math.max(0, extra);
+		available -= Math.max(0, extra);
+	}
+
+	return compacted.map((message, index) => ({
+		...message,
+		content: truncateContentForArgus(message.content, allocations[index]),
+	}));
+}
+
 /**
  * vLLM accepts OpenAI response_format, but the Argus adapter still needs an
  * explicit output constraint to avoid wrapping valid JSON in prose or fences.
@@ -105,6 +205,8 @@ export function prepareArgusBackgroundFallbackBody(body: RequestBody): RequestBo
 	const messages = body.response_format?.type === 'json_object' || body.response_format?.type === 'json_schema'
 		? [{ role: 'system' as const, content: ARGUS_JSON_SYSTEM_PROMPT }, ...argusCompatibleMessages]
 		: argusCompatibleMessages;
+	const tools = compactArgusTools(body.tools);
+	const boundedMessages = compactArgusMessages(messages, tools, body.response_format);
 	const requestedTokens = body.max_completion_tokens ?? body.max_tokens;
 	const maxTokens = Math.min(
 		typeof requestedTokens === 'number' && Number.isFinite(requestedTokens) && requestedTokens > 0
@@ -115,8 +217,8 @@ export function prepareArgusBackgroundFallbackBody(body: RequestBody): RequestBo
 	return {
 		...body,
 		model: ARGUS_BACKGROUND_FALLBACK_MODEL,
-		messages,
-		tools: compactArgusTools(body.tools),
+		messages: boundedMessages,
+		tools,
 		// Pi advertises the primary hosted model's 32k output budget. Argus has an
 		// 8,192-token total window and rejects that request before generating. Real
 		// Pi Pipe instructions plus tool schemas can consume nearly the full window,

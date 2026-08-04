@@ -7,6 +7,7 @@ import { tryArgusBackgroundFallback } from '../handlers/chat';
 import {
 	ARGUS_BACKGROUND_FALLBACK_MODEL,
 	ARGUS_BACKGROUND_MAX_COMPLETION_TOKENS,
+	ARGUS_BACKGROUND_REQUEST_CHAR_BUDGET,
 	hasArgusUnsupportedInput,
 	isAccountLocalAllowanceError,
 	isProviderQuotaOrBillingLimitError,
@@ -163,6 +164,36 @@ describe('paid background Pipe Argus fallback', () => {
 			properties: { query: { type: 'string', enum: ['recent', 'all'] } },
 			required: ['query'],
 		});
+	});
+
+	it('bounds oversized Pipe context while preserving instructions, chronology, and the newest task', () => {
+		const prepared = prepareArgusBackgroundFallbackBody({
+			...body,
+			messages: [
+				{ role: 'developer', content: `agent-start:${' instruction'.repeat(12_000)}:agent-end` } as any,
+				{ role: 'assistant', content: 'checking data', tool_calls: [{
+					id: 'call-1',
+					type: 'function',
+					function: { name: 'lookup', arguments: '{"query":"recent"}' },
+				}] },
+				{ role: 'tool', tool_call_id: 'call-1', content: `tool-start:${' result'.repeat(12_000)}:tool-end` },
+				{ role: 'user', content: `latest-start:${' context'.repeat(12_000)}:latest-end` },
+			],
+		});
+
+		expect(JSON.stringify({
+			messages: prepared.messages,
+			tools: prepared.tools,
+			response_format: prepared.response_format,
+		}).length).toBeLessThanOrEqual(ARGUS_BACKGROUND_REQUEST_CHAR_BUDGET);
+		expect(prepared.messages).toHaveLength(4);
+		expect(prepared.messages[0].content).toContain('agent-start:');
+		expect(prepared.messages[0].content).toContain(':agent-end');
+		expect(prepared.messages[1].tool_calls?.[0].id).toBe('call-1');
+		expect(prepared.messages[2].tool_call_id).toBe('call-1');
+		expect(prepared.messages[3].content).toContain('latest-start:');
+		expect(prepared.messages[3].content).toContain(':latest-end');
+		expect(JSON.stringify(prepared.messages)).toContain('older background context truncated for Argus rescue');
 	});
 
 	it('preserves the original allowance response when Argus is unavailable', async () => {
