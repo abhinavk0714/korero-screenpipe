@@ -6,7 +6,7 @@ import type { Env, RequestBody } from '../types';
 import { isHostedChatAllowanceError } from './cloudflare-ai-gateway';
 
 export const ARGUS_BACKGROUND_FALLBACK_MODEL = 'argus-trace-1';
-export const ARGUS_BACKGROUND_MAX_COMPLETION_TOKENS = 2_048;
+export const ARGUS_BACKGROUND_MAX_COMPLETION_TOKENS = 1_024;
 
 const ARGUS_JSON_SYSTEM_PROMPT = 'Return only one valid JSON object matching the requested response format. Do not include markdown or prose.';
 
@@ -81,9 +81,10 @@ export function prepareArgusBackgroundFallbackBody(body: RequestBody): RequestBo
 		model: ARGUS_BACKGROUND_FALLBACK_MODEL,
 		messages,
 		// Pi advertises the primary hosted model's 32k output budget. Argus has an
-		// 8,192-token total window and rejects that request before generating. Use
-		// the broadly supported vLLM field and preserve most of the window for the
-		// Pipe prompt and tool definitions.
+		// 8,192-token total window and rejects that request before generating. Real
+		// Pi Pipe instructions plus 13 tool schemas already consume at least 6,145
+		// input tokens, so reserve only 1,024 output tokens and leave enough room for
+		// the prompt/tool contract.
 		max_tokens: maxTokens,
 		max_completion_tokens: undefined,
 	};
