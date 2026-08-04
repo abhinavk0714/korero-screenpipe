@@ -49,14 +49,21 @@ export function hasArgusUnsupportedInput(body: RequestBody): boolean {
  */
 export function prepareArgusBackgroundFallbackBody(body: RequestBody): RequestBody {
 	// Pi uses OpenAI's newer `developer` role for its agent instructions. Argus's
-	// vLLM chat template accepts the equivalent `system` role but rejects
-	// `developer` before generation with "Unexpected message role." Keep this
-	// provider-specific compatibility shim inside the rescue lane so the primary
-	// hosted models continue receiving the caller's request unchanged.
+	// vLLM chat template rejects `developer`, while mapping it to `system` also
+	// collides with the tool parser's own leading system prompt ("System message
+	// must be at the beginning"). Preserve the instruction text as a labelled user
+	// message. Keep this provider-specific compatibility shim inside the rescue
+	// lane so primary hosted-model requests remain unchanged.
 	const hasDeveloperRole = body.messages.some((message) => String(message.role) === 'developer');
 	const argusCompatibleMessages = hasDeveloperRole
 		? body.messages.map((message) => String(message.role) === 'developer'
-			? { ...message, role: 'system' as const }
+			? {
+				...message,
+				role: 'user' as const,
+				content: typeof message.content === 'string'
+					? `[Background agent instructions]\n${message.content}`
+					: [{ type: 'text' as const, text: '[Background agent instructions]' }, ...message.content],
+			}
 			: message)
 		: body.messages;
 	const messages = body.response_format?.type === 'json_object' || body.response_format?.type === 'json_schema'
