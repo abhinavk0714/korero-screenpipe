@@ -53,6 +53,11 @@ export interface AnnouncementSurvey {
 
 export type SurveyAnswers = Record<string, string[]>;
 
+/** App-owned actions that remote announcements may request. The PostHog
+ * payload selects only this bounded semantic id; executable prompts and
+ * arbitrary commands remain compiled into the app. */
+export type AnnouncementAction = "setup-daily-email-summary";
+
 /** Where a `banner` sits. */
 export type BannerPosition = "top" | "bottom";
 /** Which corner a `card` docks in. */
@@ -76,6 +81,9 @@ export interface AnnouncementCta {
   /** internal app route (e.g. "/settings?section=account"). takes precedence
    *  over `url` when both are set. */
   route?: string;
+  /** Bounded app-owned action. Remote payloads cannot supply its prompt or
+   * implementation. Used only when neither route nor url is present. */
+  action?: AnnouncementAction;
 }
 
 export interface Announcement {
@@ -136,6 +144,7 @@ const BUBBLE_POSITIONS: readonly BubblePosition[] = [
   "bottom",
   "left",
 ];
+const ACTIONS: readonly AnnouncementAction[] = ["setup-daily-email-summary"];
 
 /** Resolve a placement valid for the surface, falling back to that surface's
  *  default. Modal has no placement. */
@@ -258,10 +267,14 @@ function normalizeCta(raw: unknown): AnnouncementCta | undefined {
   const cta: AnnouncementCta = { label };
   const url = safeAnnouncementExternalUrl(r.url);
   const route = safeInternalRoute(r.route);
+  const action = ACTIONS.includes(r.action as AnnouncementAction)
+    ? (r.action as AnnouncementAction)
+    : null;
   if (url) cta.url = url;
   if (route) cta.route = route;
+  if (!route && !url && action) cta.action = action;
   // a cta with neither destination is a dead button — drop it.
-  if (!cta.url && !cta.route) return undefined;
+  if (!cta.url && !cta.route && !cta.action) return undefined;
   return cta;
 }
 

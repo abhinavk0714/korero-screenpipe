@@ -16,6 +16,7 @@ const {
   optedOut,
   appName,
   appIdentifier,
+  actionMock,
 } = vi.hoisted(() => ({
   eventHandlers: new Map<string, Set<(e: { payload: unknown }) => void>>(),
   captureMock: vi.fn(),
@@ -27,6 +28,7 @@ const {
   optedOut: { current: false },
   appName: { current: "screenpipe" },
   appIdentifier: { current: "screenpi.pe" },
+  actionMock: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("posthog-js", () => ({
@@ -64,6 +66,10 @@ vi.mock("@tauri-apps/api/app", () => ({
 
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: openMock }));
 
+vi.mock("@/lib/announcement-actions", () => ({
+  executeAnnouncementAction: actionMock,
+}));
+
 import { useAnnouncement } from "@/lib/hooks/use-announcement";
 
 function fireAnnouncement(payload: unknown) {
@@ -90,6 +96,7 @@ describe("useAnnouncement", () => {
     reloadFlagsMock.mockClear();
     pushMock.mockClear();
     openMock.mockClear();
+    actionMock.mockClear();
     flagPayload.current = null;
     optedOut.current = false;
     appName.current = "screenpipe";
@@ -269,6 +276,28 @@ describe("useAnnouncement", () => {
 
     expect(openMock).toHaveBeenCalledWith("https://screenpi.pe/blog");
     expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it("activateCta runs a bounded app action and closes only after success", async () => {
+    flagPayload.current = {
+      ...FLAG,
+      cta: {
+        label: "set it up",
+        action: "setup-daily-email-summary",
+      },
+    };
+    const { result } = renderHook(() => useAnnouncement());
+    await flushAnnouncementEffects();
+
+    await act(async () => {
+      result.current.activateCta();
+      await actionMock.mock.results[0]?.value;
+    });
+
+    expect(actionMock).toHaveBeenCalledWith("setup-daily-email-summary");
+    expect(pushMock).not.toHaveBeenCalled();
+    expect(openMock).not.toHaveBeenCalled();
+    expect(result.current.announcement).toBeNull();
   });
 
   it("submits only configured survey option ids and dismisses", async () => {

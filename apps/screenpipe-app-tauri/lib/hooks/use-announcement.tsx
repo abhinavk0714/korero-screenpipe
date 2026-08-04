@@ -21,6 +21,7 @@ import {
   pickAnnouncement,
   sanitizeSurveyAnswers,
 } from "@/lib/announcements";
+import { executeAnnouncementAction } from "@/lib/announcement-actions";
 
 /**
  * PostHog feature-flag key that carries the announcement.
@@ -36,7 +37,7 @@ import {
  *     "position": "right",                 // top | right | bottom | left
  *     "title": "pipes run on a schedule",
  *     "body": "create one once and it keeps working.",
- *     "cta": { "label": "create a pipe", "route": "/home?section=pipes" },
+ *     "cta": { "label": "set it up", "action": "setup-daily-email-summary" },
  *     "expiresAt": "2026-07-01T00:00:00Z", // optional
  *     "dismissible": true                   // optional, default true
  *   }
@@ -237,6 +238,19 @@ export function useAnnouncement(): UseAnnouncementResult {
         cta_label: cta.label,
       });
     } catch {}
+
+    if (cta.action) {
+      void executeAnnouncementAction(cta.action)
+        .then(() => {
+          setDismissedIds(markDismissed(announcement.id));
+          setPreview(null);
+          setTriggered(null);
+        })
+        .catch((err) =>
+          console.error("failed to execute announcement action:", err),
+        );
+      return;
+    }
 
     if (cta.route) {
       router.push(cta.route);
