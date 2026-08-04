@@ -94,6 +94,18 @@ import {
 
 export { RateLimiter };
 
+/**
+ * Keep paid background-Pipe rescue independent from the flex-tier kill switch.
+ * The header identifies workload intent; resolveLatencyClass only controls
+ * whether the primary provider may use flex capacity.
+ */
+export function shouldEnableArgusBackgroundFallback(
+	request: Request,
+	authResult: AuthResult,
+): boolean {
+	return isBackgroundRequest(request) && hasPaidHostedAiPlan(authResult);
+}
+
 type BoundedJsonRead =
 	| { ok: true; value: unknown; bytes: number }
 	| { ok: false; tooLarge: boolean };
@@ -723,7 +735,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						freePreview: freeChat.mode === 'metered',
 						efficientOnly: getHostedAiPlan(authResult.accountPlan) !== 'business',
 						gatewayContext,
-						argusBackgroundFallback: latency === 'background' && hasPaidHostedAiPlan(authResult),
+						argusBackgroundFallback: shouldEnableArgusBackgroundFallback(request, authResult),
 					},
 				);
 				const latencyMs = Date.now() - reqStart;
