@@ -738,6 +738,19 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						argusBackgroundFallback: shouldEnableArgusBackgroundFallback(request, authResult),
 					},
 				);
+				if (response.status === 429 && body.stream) {
+					const userAgent = request.headers.get('user-agent')?.toLowerCase() ?? '';
+					console.warn('streaming hosted AI limit classification', {
+						backgroundHeader: isBackgroundRequest(request),
+						hasSessionAffinity: Boolean(
+							request.headers.get('x-session-id')
+							|| request.headers.get('x-screenpipe-session-id'),
+						),
+						piClient: userAgent.includes('pi-ai') || userAgent.includes('pi-coding-agent'),
+						model: body.model,
+						toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
+					});
+				}
 				const latencyMs = Date.now() - reqStart;
 				// Difficulty-router decision (null unless the router ran) for A/B measurement.
 				const routerTier = response.headers.get('x-screenpipe-router-tier');
