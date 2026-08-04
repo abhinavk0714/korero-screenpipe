@@ -7,7 +7,7 @@ import { isHostedChatAllowanceError } from './cloudflare-ai-gateway';
 
 export const ARGUS_BACKGROUND_FALLBACK_MODEL = 'argus-trace-1';
 export const ARGUS_BACKGROUND_MAX_COMPLETION_TOKENS = 512;
-export const ARGUS_BACKGROUND_REQUEST_CHAR_BUDGET = 48_000;
+export const ARGUS_BACKGROUND_REQUEST_CHAR_BUDGET = 20_000;
 const ARGUS_TOOL_DESCRIPTION_MAX_CHARS = 160;
 const ARGUS_SCHEMA_METADATA_KEYS = new Set(['description', 'title', 'examples', 'default', '$comment']);
 const ARGUS_CONTEXT_TRUNCATION_MARKER = '\n…[older background context truncated for Argus rescue]…\n';
@@ -124,7 +124,7 @@ function compactArgusMessages(
 	const fixedChars = JSON.stringify({ tools, response_format: responseFormat }).length;
 	// Reserve a small envelope for JSON field names, commas, and the model/output
 	// fields added after this helper returns.
-	const messageBudget = Math.max(4_096, ARGUS_BACKGROUND_REQUEST_CHAR_BUDGET - fixedChars - 256);
+	const messageBudget = Math.max(2_048, ARGUS_BACKGROUND_REQUEST_CHAR_BUDGET - fixedChars - 256);
 	if (JSON.stringify(messages).length <= messageBudget) return messages;
 
 	const compacted = messages.map((message) => ({
