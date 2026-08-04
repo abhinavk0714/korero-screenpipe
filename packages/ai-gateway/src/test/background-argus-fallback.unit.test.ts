@@ -102,6 +102,22 @@ describe('paid background Pipe Argus fallback', () => {
 		expect(textBody.messages).toBe(body.messages);
 	});
 
+	it('maps Pi developer instructions to the Argus-compatible system role', () => {
+		const piBody = prepareArgusBackgroundFallbackBody({
+			...body,
+			messages: [
+				{ role: 'developer', content: 'Run this background Pipe safely.' } as any,
+				{ role: 'user', content: 'Summarize the meeting.' },
+			],
+		});
+
+		expect(piBody.messages).toEqual([
+			{ role: 'system', content: 'Run this background Pipe safely.' },
+			{ role: 'user', content: 'Summarize the meeting.' },
+		]);
+		expect(piBody.messages.every((message) => String(message.role) !== 'developer')).toBe(true);
+	});
+
 	it('normalizes Pi\'s 32k output request to the bounded Argus vLLM field', () => {
 		const capped = prepareArgusBackgroundFallbackBody({
 			...body,

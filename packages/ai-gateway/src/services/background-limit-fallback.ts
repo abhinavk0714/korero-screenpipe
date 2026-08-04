@@ -48,9 +48,20 @@ export function hasArgusUnsupportedInput(body: RequestBody): boolean {
  * Keep the caller's schema authoritative and add only the minimal instruction.
  */
 export function prepareArgusBackgroundFallbackBody(body: RequestBody): RequestBody {
-	const messages = body.response_format?.type === 'json_object' || body.response_format?.type === 'json_schema'
-		? [{ role: 'system' as const, content: ARGUS_JSON_SYSTEM_PROMPT }, ...body.messages]
+	// Pi uses OpenAI's newer `developer` role for its agent instructions. Argus's
+	// vLLM chat template accepts the equivalent `system` role but rejects
+	// `developer` before generation with "Unexpected message role." Keep this
+	// provider-specific compatibility shim inside the rescue lane so the primary
+	// hosted models continue receiving the caller's request unchanged.
+	const hasDeveloperRole = body.messages.some((message) => String(message.role) === 'developer');
+	const argusCompatibleMessages = hasDeveloperRole
+		? body.messages.map((message) => String(message.role) === 'developer'
+			? { ...message, role: 'system' as const }
+			: message)
 		: body.messages;
+	const messages = body.response_format?.type === 'json_object' || body.response_format?.type === 'json_schema'
+		? [{ role: 'system' as const, content: ARGUS_JSON_SYSTEM_PROMPT }, ...argusCompatibleMessages]
+		: argusCompatibleMessages;
 	const requestedTokens = body.max_completion_tokens ?? body.max_tokens;
 	const maxTokens = Math.min(
 		typeof requestedTokens === 'number' && Number.isFinite(requestedTokens) && requestedTokens > 0
