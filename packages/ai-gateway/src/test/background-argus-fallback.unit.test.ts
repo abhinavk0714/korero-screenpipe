@@ -171,7 +171,7 @@ describe('paid background Pipe Argus fallback', () => {
 			...body,
 			messages: [
 				{ role: 'developer', content: `agent-start:${' instruction'.repeat(12_000)}:agent-end` } as any,
-				{ role: 'assistant', content: 'checking data', tool_calls: [{
+				{ role: 'assistant', content: null, tool_calls: [{
 					id: 'call-1',
 					type: 'function',
 					function: { name: 'lookup', arguments: '{"query":"recent"}' },
@@ -190,6 +190,7 @@ describe('paid background Pipe Argus fallback', () => {
 		expect(prepared.messages[0].content).toContain('agent-start:');
 		expect(prepared.messages[0].content).toContain(':agent-end');
 		expect(prepared.messages[1].tool_calls?.[0].id).toBe('call-1');
+		expect(prepared.messages[1].content).toBeNull();
 		expect(prepared.messages[2].tool_call_id).toBe('call-1');
 		expect(prepared.messages[3].content).toContain('latest-start:');
 		expect(prepared.messages[3].content).toContain(':latest-end');

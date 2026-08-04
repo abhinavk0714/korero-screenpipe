@@ -81,9 +81,9 @@ function compactArgusTools(tools: RequestBody['tools']): RequestBody['tools'] {
 }
 
 function contentLength(content: RequestBody['messages'][number]['content']): number {
-	return typeof content === 'string'
-		? content.length
-		: content.reduce((total, part) => total + (part.text?.length ?? 0), 0);
+	if (typeof content === 'string') return content.length;
+	if (!Array.isArray(content)) return 0;
+	return content.reduce((total, part) => total + (part.text?.length ?? 0), 0);
 }
 
 function truncateTextForArgus(text: string, maxChars: number): string {
@@ -101,6 +101,7 @@ function truncateContentForArgus(
 	maxChars: number,
 ): RequestBody['messages'][number]['content'] {
 	if (typeof content === 'string') return truncateTextForArgus(content, maxChars);
+	if (!Array.isArray(content)) return content;
 	const text = content.map((part) => part.text ?? '').join('\n');
 	return [{ type: 'text', text: truncateTextForArgus(text, maxChars) }];
 }
