@@ -34,8 +34,8 @@ console.log('cwd', cwd)
 const config = {
 	ffmpegRealname: 'ffmpeg',
 	windows: {
-		ffmpegName: 'ffmpeg-8.0.1-full_build-shared',
-		ffmpegUrl: 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.0.1-full_build-shared.7z',
+		ffmpegName: 'ffmpeg-9.0-full_build-shared',
+		ffmpegUrl: 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0-full_build-shared.7z',
 		// Windows ARM64 (aarch64-pc-windows-msvc) — tordona/ffmpeg-win-arm64
 		// Resolved dynamically at build time via GitHub API (daily autobuilds change filenames)
 		ffmpegArm64GithubRepo: 'tordona/ffmpeg-win-arm64',
@@ -824,7 +824,7 @@ async function validateWindowsFfmpeg(directory) {
 	}
 	if (winArch === 'arm64') return true
 	const readme = await fs.readFile(path.join(directory, 'README.txt'), 'utf8').catch(() => '')
-	return readme.includes('Version: 8.0.1-')
+	return readme.includes('Version: 9.0-')
 }
 
 async function setupWindowsFfmpeg(sevenZ) {
