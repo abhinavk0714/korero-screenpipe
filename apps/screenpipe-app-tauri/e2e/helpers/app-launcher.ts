@@ -217,7 +217,13 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
     );
   }
 
-  rmSync(E2E_DATA_DIR, { recursive: true, force: true });
+  rmSync(E2E_DATA_DIR, {
+    recursive: true,
+    force: true,
+    // Windows can keep handles alive briefly after taskkill returns.
+    maxRetries: process.platform === 'win32' ? 10 : 0,
+    retryDelay: 100,
+  });
   mkdirSync(E2E_DATA_DIR, { recursive: true });
   removeSpotlightExclusion(E2E_DATA_DIR);
 
@@ -297,7 +303,18 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
 
 export function stopApp(): void {
   if (appProcess) {
-    appProcess.kill('SIGTERM');
+    const pid = appProcess.pid;
+    if (process.platform === 'win32' && pid) {
+      try {
+        // Kill descendants too: bundled Bun installs can outlive the app
+        // parent and otherwise lock .e2e/pi-agent for the next spec run.
+        execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' });
+      } catch {
+        // It may have exited between the PID read and taskkill.
+      }
+    } else {
+      appProcess.kill('SIGTERM');
+    }
     appProcess = null;
   }
   try {
