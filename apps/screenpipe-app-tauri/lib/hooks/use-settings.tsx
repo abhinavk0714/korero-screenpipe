@@ -1566,6 +1566,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			website: settings.user?.website,
 			contact: settings.user?.contact,
 			cloud_subscribed: !!settings.user?.cloud_subscribed,
+			enhanced_ai_enabled: settings.enhancedAI === true,
 			app_entitled: !!(settings.user as any)?.app_entitled,
 			subscription_plan: (settings.user as any)?.subscription_plan,
 			machine_analytics_id: settings.analyticsId,
@@ -1579,7 +1580,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				posthog.identify(distinctId, baseProps);
 			});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [settings.analyticsId, settings.user?.id, settings.user?.clerk_id, settings.user?.cloud_subscribed, (settings.user as any)?.app_entitled, (settings.user as any)?.subscription_plan]);
+	}, [settings.analyticsId, settings.enhancedAI, settings.user?.id, settings.user?.clerk_id, settings.user?.cloud_subscribed, (settings.user as any)?.app_entitled, (settings.user as any)?.subscription_plan]);
 
 	// When user becomes a Pro subscriber, default to cloud transcription (one-time)
 	useEffect(() => {

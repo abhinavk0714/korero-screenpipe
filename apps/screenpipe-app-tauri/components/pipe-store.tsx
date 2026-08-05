@@ -74,6 +74,7 @@ import {
 } from "@/lib/pipe-publisher";
 import { PipeStoreSubmissionDialog } from "@/components/pipe-store-submission";
 import { buildPipeStoreSubmissionMailto } from "@/lib/pipe-store-submission";
+import { consumePipeStoreDeepLink } from "@/lib/pipe-store-route";
 // --- Types ---
 
 interface StorePipe {
@@ -589,7 +590,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     setReviewRating(0);
     setReviewComment("");
     try {
-      const res = await localFetch(`/pipes/store/${slug}`, {
+      const res = await localFetch(`/pipes/store/${encodeURIComponent(slug)}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -607,6 +608,26 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       setDetailLoading(false);
     }
   };
+
+  // Remote announcements can take an interested user straight to one Store
+  // detail page without installing anything implicitly. Installation and any
+  // required connection setup remain explicit actions in the Store flow.
+  useEffect(() => {
+    const currentSearch = window.location.search;
+    const params = new URLSearchParams(currentSearch);
+    if (!params.has("pipe")) return;
+
+    const { pipeSlug, nextSearch } = consumePipeStoreDeepLink(currentSearch);
+    window.history.replaceState(
+      {},
+      "",
+      `${window.location.pathname}${nextSearch}${window.location.hash}`,
+    );
+    if (pipeSlug) void openDetail(pipeSlug);
+    // The route is intentionally consumed once on Store mount. openDetail is
+    // component-local and does not need to retrigger this one-shot handoff.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const requestInstall = (pipe: StorePipe | PipeDetail) => {
     // Already installed with an update available → run the in-place UPDATE flow

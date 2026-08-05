@@ -13,9 +13,12 @@ const {
   pushMock,
   openMock,
   flagPayload,
+  dailyEmailTipPayload,
   optedOut,
   appName,
   appIdentifier,
+  enhancedAiEnabled,
+  settingsLoaded,
 } = vi.hoisted(() => ({
   eventHandlers: new Map<string, Set<(e: { payload: unknown }) => void>>(),
   captureMock: vi.fn(),
@@ -24,19 +27,33 @@ const {
   openMock: vi.fn(() => Promise.resolve()),
   // mutable holder so each test can set the active flag payload
   flagPayload: { current: null as unknown },
+  dailyEmailTipPayload: { current: null as unknown },
   optedOut: { current: false },
   appName: { current: "screenpipe" },
   appIdentifier: { current: "screenpi.pe" },
+  enhancedAiEnabled: { current: false },
+  settingsLoaded: { current: true },
 }));
 
 vi.mock("posthog-js", () => ({
   default: {
-    getFeatureFlagPayload: vi.fn(() => flagPayload.current),
+    getFeatureFlagPayload: vi.fn((key: string) =>
+      key === "daily-email-summary-tip"
+        ? dailyEmailTipPayload.current
+        : flagPayload.current,
+    ),
     onFeatureFlags: vi.fn(() => () => {}),
     reloadFeatureFlags: reloadFlagsMock,
     capture: captureMock,
     has_opted_out_capturing: vi.fn(() => optedOut.current),
   },
+}));
+
+vi.mock("@/lib/hooks/use-settings", () => ({
+  useSettings: () => ({
+    settings: { enhancedAI: enhancedAiEnabled.current },
+    isSettingsLoaded: settingsLoaded.current,
+  }),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -83,6 +100,19 @@ const FLAG = {
   body: "your timeline now syncs.",
 };
 
+const DAILY_EMAIL_TIP = {
+  id: "daily-email-summary-interest-v1",
+  kind: "tip",
+  surface: "card",
+  position: "bottom-right",
+  title: "want a daily recap in your inbox?",
+  body: "install a scheduled task that sends it from your Gmail account back to the same address.",
+  cta: {
+    label: "view daily email summary",
+    route: "/home?section=pipes&pipe=daily-email-summary",
+  },
+};
+
 describe("useAnnouncement", () => {
   beforeEach(() => {
     eventHandlers.clear();
@@ -91,9 +121,12 @@ describe("useAnnouncement", () => {
     pushMock.mockClear();
     openMock.mockClear();
     flagPayload.current = null;
+    dailyEmailTipPayload.current = null;
     optedOut.current = false;
     appName.current = "screenpipe";
     appIdentifier.current = "screenpi.pe";
+    enhancedAiEnabled.current = false;
+    settingsLoaded.current = true;
     const store = new Map<string, string>();
     Object.defineProperty(window, "localStorage", {
       configurable: true,
@@ -126,6 +159,58 @@ describe("useAnnouncement", () => {
       announcement_id: "flag-1",
       surface: "modal",
     });
+  });
+
+  it("prioritizes the dedicated daily-email tip when Enhanced AI is enabled", async () => {
+    enhancedAiEnabled.current = true;
+    flagPayload.current = FLAG;
+    dailyEmailTipPayload.current = DAILY_EMAIL_TIP;
+
+    const { result } = renderHook(() => useAnnouncement());
+    await flushAnnouncementEffects();
+
+    expect(result.current.announcement?.id).toBe(
+      "daily-email-summary-interest-v1",
+    );
+    act(() => result.current.activateCta());
+    expect(pushMock).toHaveBeenCalledWith(
+      "/home?section=pipes&pipe=daily-email-summary",
+    );
+  });
+
+  it("fails closed on the targeted tip when Enhanced AI is disabled", async () => {
+    flagPayload.current = FLAG;
+    dailyEmailTipPayload.current = DAILY_EMAIL_TIP;
+
+    const { result } = renderHook(() => useAnnouncement());
+    await flushAnnouncementEffects();
+
+    expect(result.current.announcement?.id).toBe("flag-1");
+  });
+
+  it("does not reveal the general prompt underneath a dismissed targeted tip", async () => {
+    enhancedAiEnabled.current = true;
+    flagPayload.current = FLAG;
+    dailyEmailTipPayload.current = DAILY_EMAIL_TIP;
+    window.localStorage.setItem(
+      "screenpipe-announcements-dismissed-v1",
+      JSON.stringify(["daily-email-summary-interest-v1"]),
+    );
+
+    const { result } = renderHook(() => useAnnouncement());
+    await flushAnnouncementEffects();
+
+    expect(result.current.announcement).toBeNull();
+  });
+
+  it("waits for local settings before loading either remote prompt", async () => {
+    settingsLoaded.current = false;
+    flagPayload.current = FLAG;
+
+    const { result } = renderHook(() => useAnnouncement());
+    await flushAnnouncementEffects();
+
+    expect(result.current.announcement).toBeNull();
   });
 
   it("refreshes flags on mount and when an already-open app regains focus", async () => {

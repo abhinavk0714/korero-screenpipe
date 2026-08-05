@@ -9,6 +9,7 @@ import posthog from "posthog-js";
 import { useRouter } from "next/navigation";
 import { getIdentifier, getName } from "@tauri-apps/api/app";
 import { useTauriEvent } from "./use-tauri-event";
+import { useSettings } from "./use-settings";
 import {
   type Announcement,
   type SurveyAnswers,
@@ -45,6 +46,9 @@ import {
  * rendering; it cannot name code, components, scripts, or arbitrary events.
  */
 export const ANNOUNCEMENT_FLAG_KEY = "app-announcement";
+/** Dedicated opt-in retention-interest tip. Keeping this separate prevents
+ *  a small daily-email-summary cohort from replacing the general prompt. */
+export const DAILY_EMAIL_SUMMARY_TIP_FLAG_KEY = "daily-email-summary-tip";
 export const ANNOUNCEMENT_REFRESH_INTERVAL_MS = 60_000;
 
 interface UseAnnouncementResult {
@@ -63,6 +67,8 @@ interface UseAnnouncementResult {
 
 export function useAnnouncement(): UseAnnouncementResult {
   const router = useRouter();
+  const { settings, isSettingsLoaded } = useSettings();
+  const enhancedAiEnabled = settings.enhancedAI === true;
   const [payload, setPayload] = useState<unknown>(null);
   const [preview, setPreview] = useState<Announcement | null>(null);
   // an announcement pushed at runtime via `POST /notify` (surface=…). emitted
@@ -96,6 +102,13 @@ export function useAnnouncement(): UseAnnouncementResult {
       setPayload(null);
       return;
     }
+    // The targeted tip is about sending captured context through an AI Pipe.
+    // Fail closed until the local preference is hydrated, and never show it
+    // when Enhanced AI is off even if the remote flag is misconfigured.
+    if (!isSettingsLoaded) {
+      setPayload(null);
+      return;
+    }
 
     let cancelled = false;
     let unsubscribe: (() => void) | undefined;
@@ -108,8 +121,20 @@ export function useAnnouncement(): UseAnnouncementResult {
           setPayload(null);
           return;
         }
+        const generalPayload =
+          posthog.getFeatureFlagPayload(ANNOUNCEMENT_FLAG_KEY) ?? null;
+        const dailyEmailPayload = enhancedAiEnabled
+          ? (posthog.getFeatureFlagPayload(DAILY_EMAIL_SUMMARY_TIP_FLAG_KEY) ??
+            null)
+          : null;
+
+        // A valid targeted tip wins for its cohort. Keeping the raw tip as the
+        // selected payload means dismissing it does not immediately reveal a
+        // second, general announcement underneath it.
         setPayload(
-          posthog.getFeatureFlagPayload(ANNOUNCEMENT_FLAG_KEY) ?? null,
+          parseAnnouncement(dailyEmailPayload)
+            ? dailyEmailPayload
+            : generalPayload,
         );
       } catch {
         setPayload(null);
@@ -169,7 +194,7 @@ export function useAnnouncement(): UseAnnouncementResult {
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, []);
+  }, [enhancedAiEnabled, isSettingsLoaded]);
 
   // Listen for runtime pushes from `POST /notify` (announcement surface). The
   // rust side emits the `announcement` event with the announcement object.
