@@ -93,6 +93,7 @@ describe("pack-contents gate — built-file contents", () => {
       "const url = typeof parsed?.gateway_url === \"string\" ? parsed.gateway_url : \"\";\n",
     "dist/index.js":
       'else if (args[i] === "--team-api-url" && args[i + 1]) {\n' +
+      'const HOSTED_TEAM_API = "https://screenpi.pe/api/enterprise/v1";\n' +
       "const TEAM_API = (0, team_config_1.discoverTeamApiBase)(teamApiOverride);\n",
   };
 

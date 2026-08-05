@@ -81,7 +81,7 @@ const REQUIRED_MARKERS = [
 const FORBIDDEN_MARKERS = [
   {
     file: "dist/index.js",
-    pattern: /TEAM_API\s*=\s*"https/,
+    pattern: /\bTEAM_API\s*=\s*"https/,
     why: "the team API base must be resolved at runtime (discoverTeamApiBase), never a literal — a hardcoded base is exactly what 401'd for gateway orgs",
   },
 ];

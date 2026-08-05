@@ -15,6 +15,8 @@ import * as os from "os";
 // a slow discovery blew past the host's startup timeout and the server never
 // attached. Discovery is now lazy + off the connect path — these tests spawn the
 // real built server and assert initialize returns well under any host timeout.
+// The published entry point is also exercised alone, outside this package and
+// without node_modules, so a partial bunx dependency tree cannot break startup.
 
 const PKG_ROOT = path.resolve(__dirname, "..");
 const CLI = path.join(PKG_ROOT, "dist", "cli.js");
@@ -44,7 +46,11 @@ function ensureBuilt(): void {
     ...inputs.filter((f) => fs.existsSync(f)).map((f) => fs.statSync(f).mtimeMs),
   );
   if (builtAt > newestInput) return;
-  execFileSync("npx", ["tsc"], { cwd: PKG_ROOT, stdio: "inherit", timeout: 120000 });
+  execFileSync("bun", ["run", "build"], {
+    cwd: PKG_ROOT,
+    stdio: "inherit",
+    timeout: 120000,
+  });
 }
 
 /**
@@ -59,6 +65,7 @@ function ensureBuilt(): void {
 function initializeHandshake(
   env: Record<string, string>,
   stripPath = false,
+  cliPath = CLI,
 ): Promise<{ ms: number; response: any }> {
   return new Promise((resolve, reject) => {
     const baseEnv: Record<string, string> = {
@@ -73,7 +80,7 @@ function initializeHandshake(
     };
     if (!stripPath) baseEnv.PATH = process.env.PATH || "";
 
-    const child = spawn(process.execPath, [CLI], {
+    const child = spawn(process.execPath, [cliPath], {
       env: baseEnv,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -252,5 +259,31 @@ describe("stdio startup handshake", () => {
     const { ms, response } = await initializeHandshake({}, /* stripPath */ true);
     expect(response.result?.serverInfo?.name).toBe("screenpipe");
     expect(ms).toBeLessThan(INIT_DEADLINE_MS);
+  });
+
+  it("starts from the published bundle without a node_modules tree", async () => {
+    const isolatedRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "screenpipe-mcp-bundle-"),
+    );
+    const isolatedCli = path.join(isolatedRoot, "cli.js");
+    fs.copyFileSync(CLI, isolatedCli);
+
+    try {
+      const { response } = await initializeHandshake(
+        { SCREENPIPE_LOCAL_API_KEY: "sp-smoke-test-key" },
+        false,
+        isolatedCli,
+      );
+      expect(response.result?.serverInfo?.name).toBe("screenpipe");
+    } finally {
+      fs.rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("publishes no runtime dependency graph for bunx to assemble", () => {
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.join(PKG_ROOT, "package.json"), "utf-8"),
+    );
+    expect(packageJson.dependencies ?? {}).toEqual({});
   });
 });
