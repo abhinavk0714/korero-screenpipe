@@ -11,6 +11,7 @@ import {
   Clock3,
   ListTodo,
   Pin,
+  X,
   Zap,
 } from "lucide-react";
 import posthog from "posthog-js";
@@ -32,6 +33,14 @@ import {
   DEFAULT_USER_GOAL_CATEGORY,
   type UserGoalCategory,
 } from "@/lib/live-views/onboarding-activation";
+import {
+  dismissUsageStudyInvite,
+  markUsageStudyGenerated,
+  markUsageStudyInviteShown,
+  recordUsageStudyActiveDay,
+  shouldShowUsageStudyInvite,
+  USAGE_STUDY_PROMPT,
+} from "@/lib/usage-study";
 import { CustomSummaryBuilder } from "./custom-summary-builder";
 
 interface SummaryCardsProps {
@@ -66,7 +75,12 @@ const HOME_CARD_SLUGS_BY_GOAL: Record<UserGoalCategory, string[]> = {
     "missed-todos",
     "time-breakdown",
   ],
-  work_memory: ["day-recap", "missed-todos", "time-breakdown", "automate-my-work"],
+  work_memory: [
+    "day-recap",
+    "missed-todos",
+    "time-breakdown",
+    "automate-my-work",
+  ],
   meeting_follow_through: [
     "missed-todos",
     "day-recap",
@@ -85,7 +99,13 @@ export function homeCardSlugsForGoal(category: UserGoalCategory): string[] {
   return HOME_CARD_SLUGS_BY_GOAL[category];
 }
 
-function HomeCardIcon({ slug, className }: { slug: string; className: string }) {
+function HomeCardIcon({
+  slug,
+  className,
+}: {
+  slug: string;
+  className: string;
+}) {
   const props = { className, strokeWidth: 1.5 };
   if (slug === "day-recap") return <CalendarDays {...props} />;
   if (slug === "time-breakdown") return <Clock3 {...props} />;
@@ -108,7 +128,23 @@ export function SummaryCards({
 }: SummaryCardsProps) {
   const [showAll, setShowAll] = useState(false);
   const [showBuilder, setShowBuilder] = useState(false);
-  const [editingTemplate, setEditingTemplate] = useState<CustomTemplate | null>(null);
+  const [editingTemplate, setEditingTemplate] = useState<CustomTemplate | null>(
+    null,
+  );
+  const [showUsageStudy, setShowUsageStudy] = useState(false);
+
+  useEffect(() => {
+    recordUsageStudyActiveDay();
+    setShowUsageStudy(shouldShowUsageStudyInvite());
+  }, []);
+
+  useEffect(() => {
+    if (!showUsageStudy || !markUsageStudyInviteShown()) return;
+    posthog.capture("usage_study_invite_shown", {
+      schema_version: 1,
+      surface: "chat_home",
+    });
+  }, [showUsageStudy]);
   // Curated home grid — kept deliberately small to reduce cognitive load.
   // Order matters. Definitions come from the app bundle (FALLBACK_TEMPLATES)
   // and win over engine template pipes, so prompt improvements ship with the
@@ -120,9 +156,9 @@ export function SummaryCards({
   const byName = new Map<string, TemplatePipe>();
   for (const t of templatePipes) byName.set(t.name, t);
   for (const t of FALLBACK_TEMPLATES) byName.set(t.name, t);
-  const featured = homeCardSlugs.map((slug) => byName.get(slug)).filter(
-    (t): t is TemplatePipe => Boolean(t),
-  );
+  const featured = homeCardSlugs
+    .map((slug) => byName.get(slug))
+    .filter((t): t is TemplatePipe => Boolean(t));
   const discover: TemplatePipe[] = [];
 
   const impressionSignature = featured.map((pipe) => pipe.name).join(":");
@@ -172,7 +208,11 @@ export function SummaryCards({
       <div className="relative mx-auto mb-2 w-fit">
         <div className="absolute -inset-4 border border-dashed border-border/50" />
         <div className="absolute -inset-2 border border-border/30" />
-        <PipeAIIconLarge size={40} thinking={false} className="relative text-foreground/80" />
+        <PipeAIIconLarge
+          size={40}
+          thinking={false}
+          className="relative text-foreground/80"
+        />
       </div>
       <h3 className="text-sm font-medium mb-0.5 text-foreground">
         {userName ? `How can I help, ${userName}?` : "How can I help today?"}
@@ -201,32 +241,35 @@ export function SummaryCards({
                 {featured[0].description}
               </div>
             </div>
-            <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground/30 group-hover:text-background/50" strokeWidth={1.5} />
+            <ArrowRight
+              className="h-4 w-4 shrink-0 text-muted-foreground/30 group-hover:text-background/50"
+              strokeWidth={1.5}
+            />
           </div>
         </button>
       )}
 
       {featured[1] && (
-          <button
-            data-testid={`summary-card-${featured[1].name}`}
-            onClick={() => handleCardClick(featured[1])}
-            className="group w-full max-w-lg mb-1.5 text-left px-3 py-2.5 border border-border/20 hover:bg-foreground hover:text-background hover:border-foreground transition-all duration-150 cursor-pointer"
-          >
-            <div className="flex items-center gap-2">
-              <HomeCardIcon
-                slug={featured[1].name}
-                className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-background"
-              />
-              <div className="flex-1">
-                <div className="text-xs font-medium text-muted-foreground group-hover:text-background leading-tight">
-                  {featured[1].title}
-                </div>
-                <div className="text-xs text-muted-foreground/60 group-hover:text-background/60 leading-tight mt-0.5">
-                  {featured[1].description}
-                </div>
+        <button
+          data-testid={`summary-card-${featured[1].name}`}
+          onClick={() => handleCardClick(featured[1])}
+          className="group w-full max-w-lg mb-1.5 text-left px-3 py-2.5 border border-border/20 hover:bg-foreground hover:text-background hover:border-foreground transition-all duration-150 cursor-pointer"
+        >
+          <div className="flex items-center gap-2">
+            <HomeCardIcon
+              slug={featured[1].name}
+              className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-background"
+            />
+            <div className="flex-1">
+              <div className="text-xs font-medium text-muted-foreground group-hover:text-background leading-tight">
+                {featured[1].title}
+              </div>
+              <div className="text-xs text-muted-foreground/60 group-hover:text-background/60 leading-tight mt-0.5">
+                {featured[1].description}
               </div>
             </div>
-          </button>
+          </div>
+        </button>
       )}
 
       {/* ─── Quick action chips ───────────────────────────────────────────── */}
@@ -251,8 +294,14 @@ export function SummaryCards({
         ))}
         {/* Quick summary chips */}
         {[
-          { label: "Meeting Prep", prompt: "Summarize context I'll need for upcoming meetings" },
-          { label: "Blockers", prompt: "What problems, errors, or blockers did I encounter?" },
+          {
+            label: "Meeting Prep",
+            prompt: "Summarize context I'll need for upcoming meetings",
+          },
+          {
+            label: "Blockers",
+            prompt: "What problems, errors, or blockers did I encounter?",
+          },
         ].map((qt) => (
           <button
             key={qt.label}
@@ -289,7 +338,9 @@ export function SummaryCards({
         ))}
         <button
           onClick={() => {
-            posthog.capture("home_card_clicked", { kind: "custom_summary_open" });
+            posthog.capture("home_card_clicked", {
+              kind: "custom_summary_open",
+            });
             setShowBuilder(true);
           }}
           className="px-2 py-0.5 text-[11px] border border-dashed border-border/40 text-muted-foreground/50 hover:text-foreground hover:border-foreground transition-all duration-150 cursor-pointer"
@@ -297,6 +348,58 @@ export function SummaryCards({
           + custom
         </button>
       </div>
+
+      {showUsageStudy && (
+        <div
+          data-testid="usage-study-invite"
+          className="mb-4 flex w-full max-w-lg items-start gap-3 border border-border/40 px-3 py-2.5 text-left"
+        >
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium text-foreground">
+              help improve screenpipe
+            </p>
+            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+              Generate a private, content-free study of how screenpipe fits into
+              your day. Nothing is shared automatically.
+            </p>
+            <button
+              type="button"
+              className="mt-2 border border-foreground bg-foreground px-2 py-1 font-mono text-[10px] uppercase tracking-wide text-background transition-colors duration-150 hover:bg-background hover:text-foreground"
+              onClick={() => {
+                markUsageStudyGenerated();
+                setShowUsageStudy(false);
+                posthog.capture("usage_study_prompt_started", {
+                  schema_version: 1,
+                  surface: "chat_home",
+                });
+                onSendMessage(
+                  USAGE_STUDY_PROMPT,
+                  "screenpipe usage study",
+                  "home_card",
+                  "other_builtin",
+                );
+              }}
+            >
+              generate study
+            </button>
+          </div>
+          <button
+            type="button"
+            aria-label="dismiss usage study"
+            className="p-1 text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background"
+            onClick={() => {
+              dismissUsageStudyInvite();
+              setShowUsageStudy(false);
+              posthog.capture("usage_study_invite_dismissed", {
+                schema_version: 1,
+                surface: "chat_home",
+              });
+            }}
+          >
+            <X className="h-3.5 w-3.5" strokeWidth={1.5} />
+          </button>
+        </div>
+      )}
 
       {/* Expanded: more templates */}
       {showAll && (

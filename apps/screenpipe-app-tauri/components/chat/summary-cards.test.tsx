@@ -4,8 +4,12 @@
 
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SummaryCards } from "./summary-cards";
+import {
+  recordUsageStudyActiveDay,
+  USAGE_STUDY_STORAGE_KEY,
+} from "@/lib/usage-study";
 
 const { captureMock } = vi.hoisted(() => ({ captureMock: vi.fn() }));
 
@@ -14,8 +18,77 @@ vi.mock("posthog-js", () => ({
 }));
 
 describe("SummaryCards", () => {
+  beforeEach(() => {
+    localStorage.removeItem(USAGE_STUDY_STORAGE_KEY);
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("offers an eligible user a private usage study without leaking its prompt to analytics", async () => {
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    for (let index = 0; index < 5; index += 1) {
+      recordUsageStudyActiveDay(now - index * day);
+    }
+    const onSendMessage = vi.fn();
+    render(
+      <SummaryCards
+        onSendMessage={onSendMessage}
+        customTemplates={[]}
+        onSaveCustomTemplate={vi.fn()}
+        onUpdateCustomTemplate={vi.fn()}
+        onDeleteCustomTemplate={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "generate study" }),
+    );
+
+    expect(onSendMessage).toHaveBeenCalledWith(
+      expect.stringContaining("Strict privacy rules"),
+      "screenpipe usage study",
+      "home_card",
+      "other_builtin",
+    );
+    expect(captureMock).toHaveBeenCalledWith("usage_study_prompt_started", {
+      schema_version: 1,
+      surface: "chat_home",
+    });
+    expect(JSON.stringify(captureMock.mock.calls)).not.toContain(
+      "Strict privacy rules",
+    );
+    expect(screen.queryByTestId("usage-study-invite")).toBeNull();
+  });
+
+  it("dismisses the usage study without starting Chat", async () => {
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    for (let index = 0; index < 5; index += 1) {
+      recordUsageStudyActiveDay(now - index * day);
+    }
+    const onSendMessage = vi.fn();
+    render(
+      <SummaryCards
+        onSendMessage={onSendMessage}
+        customTemplates={[]}
+        onSaveCustomTemplate={vi.fn()}
+        onUpdateCustomTemplate={vi.fn()}
+        onDeleteCustomTemplate={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "dismiss usage study" }),
+    );
+
+    expect(onSendMessage).not.toHaveBeenCalled();
+    expect(captureMock).toHaveBeenCalledWith("usage_study_invite_dismissed", {
+      schema_version: 1,
+      surface: "chat_home",
+    });
   });
 
   it("prioritizes cards from the saved onboarding goal", () => {
@@ -56,17 +129,11 @@ describe("SummaryCards", () => {
       onDeleteCustomTemplate: vi.fn(),
     };
     const { rerender } = render(
-      <SummaryCards
-        {...props}
-        userGoalCategory="work_memory"
-      />,
+      <SummaryCards {...props} userGoalCategory="work_memory" />,
     );
 
     rerender(
-      <SummaryCards
-        {...props}
-        userGoalCategory="meeting_follow_through"
-      />,
+      <SummaryCards {...props} userGoalCategory="meeting_follow_through" />,
     );
 
     const cards = screen.getAllByTestId(/^summary-card-/);
@@ -134,8 +201,11 @@ describe("SummaryCards", () => {
       position: 1,
       presentation: "hero",
     });
-    expect(screen.getByRole("button", { name: /automate my work/i }).closest(".ph-no-capture"))
-      .not.toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: /automate my work/i })
+        .closest(".ph-no-capture"),
+    ).not.toBeNull();
   });
 
   describe("saved template edit-before-run (#5239)", () => {
@@ -203,7 +273,8 @@ describe("SummaryCards", () => {
 
       const customRunEvent = captureMock.mock.calls.find(
         ([event, properties]) =>
-          event === "home_card_clicked" && properties.kind === "custom_template_run",
+          event === "home_card_clicked" &&
+          properties.kind === "custom_template_run",
       );
       expect(customRunEvent).toEqual([
         "home_card_clicked",
@@ -228,7 +299,9 @@ describe("SummaryCards", () => {
           id: "custom-123",
           title: "Daily Recap",
           instructions: "Summarize my day focusing on reviews",
-          prompt: expect.stringContaining("Summarize my day focusing on reviews"),
+          prompt: expect.stringContaining(
+            "Summarize my day focusing on reviews",
+          ),
         }),
       );
       expect(onSendMessage).not.toHaveBeenCalled();
