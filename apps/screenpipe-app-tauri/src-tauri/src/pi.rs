@@ -1879,8 +1879,19 @@ async fn ensure_pi_config(
         .map_err(|e| format!("Failed to create pi config dir: {}", e))?;
 
     let api_url = crate::config::screenpipe_ai_gateway_url()?;
-    let new_providers =
+    let mut new_providers =
         build_models_json_with_api_url(user_token, provider_config, &api_url).await;
+    if let Some(token) = user_token {
+        match screenpipe_core::device_check::session(&api_url, token).await {
+            Ok(Some(session)) => {
+                new_providers["providers"]["screenpipe"]["headers"]
+                    [screenpipe_core::device_check::DEVICE_SESSION_HEADER] =
+                    json!(session);
+            }
+            Ok(None) => {}
+            Err(error) => warn!("pi config: DeviceCheck session unavailable: {error}"),
+        }
+    }
 
     // Merge into existing models.json to avoid race conditions with concurrent pipes
     let models_path = config_dir.join("models.json");

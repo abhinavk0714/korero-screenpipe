@@ -92,6 +92,11 @@ import { getCloudflareHostedChatUsage } from './services/cloudflare-ai-gateway-u
 import {
 	resolveArgusBackgroundFallbackBody,
 } from './services/background-limit-fallback';
+import {
+	DEVICE_SESSION_HEADER,
+	handleDeviceCheckSession,
+	verifyDeviceSession,
+} from './services/device-check';
 // import { handleTTSWebSocketUpgrade } from './handlers/voice-ws';
 
 export { RateLimiter };
@@ -311,10 +316,14 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 		// Authenticate and get tier info for all other endpoints
 		const authResult = await validateAuth(request, env);
 		const usageTier = authResult.usageTier ?? authResult.tier;
+		const deviceSessionStatus = authResult.userId && authResult.service !== true
+			? await verifyDeviceSession(request.headers.get(DEVICE_SESSION_HEADER), authResult.userId, env)
+			: 'unconfigured';
 		console.log('auth result:', {
 			tier: authResult.tier,
 			usageTier,
 			deviceId: authResult.deviceId,
+			deviceSession: deviceSessionStatus,
 		});
 
 		// Check rate limit with tier info. Chat completions are checked inside
@@ -327,6 +336,13 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			if (!rateLimit.allowed && rateLimit.response) {
 				return rateLimit.response;
 			}
+		}
+
+		// Exchange Apple's ephemeral DeviceCheck token for a short-lived session
+		// bound to the already-verified account. Missing server bindings return
+		// 204, so rolling out the desktop before gateway secrets is safe.
+		if (path === '/v1/device-check/session' && request.method === 'POST') {
+			return addCorsHeaders(await handleDeviceCheckSession(request, env, authResult));
 		}
 
 		// Usage status endpoint - returns current usage without incrementing

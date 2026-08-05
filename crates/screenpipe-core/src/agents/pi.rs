@@ -1047,6 +1047,17 @@ impl PiExecutor {
                 .unwrap_or_else(|| "$SCREENPIPE_API_KEY".to_string());
             let api_key_value = api_key_value.as_str();
             let models = screenpipe_cloud_models(api_url, user_token).await;
+            let device_session = if api_key_value.starts_with('$') {
+                None
+            } else {
+                match crate::device_check::session(api_url, api_key_value).await {
+                    Ok(session) => session,
+                    Err(error) => {
+                        warn!(%error, "failed to create DeviceCheck session");
+                        None
+                    }
+                }
+            };
             // PiExecutor only runs pipes (PipeManager: scheduled / run-now),
             // which are latency-tolerant, so tag every cloud LLM call as
             // background. The gateway then serves it on the cheaper, best-effort
@@ -1054,12 +1065,16 @@ impl PiExecutor {
             // `headers` into each request (see pi-coding-agent model-registry),
             // and an old gateway simply ignores the unknown header (→ standard),
             // so there's no deploy-order coupling.
+            let mut headers = json!({ "x-screenpipe-latency": "background" });
+            if let Some(session) = device_session {
+                headers[crate::device_check::DEVICE_SESSION_HEADER] = json!(session);
+            }
             let screenpipe_provider = json!({
                 "baseUrl": api_url,
                 "api": "openai-completions",
                 "apiKey": api_key_value,
                 "authHeader": true,
-                "headers": { "x-screenpipe-latency": "background" },
+                "headers": headers,
                 "models": models
             });
 

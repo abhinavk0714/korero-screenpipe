@@ -155,6 +155,13 @@ export interface Env {
 	OPENAI_API_KEY: string;
 	/** Runner-only bearer for trusted backend jobs. Stored as a Worker secret. */
 	AI_GATEWAY_SERVICE_TOKEN?: string;
+	/** Apple DeviceCheck server key metadata. Key ID, team ID, and private key enable exchange. */
+	APPLE_DEVICECHECK_KEY_ID?: string;
+	APPLE_DEVICECHECK_TEAM_ID?: string;
+	APPLE_DEVICECHECK_PRIVATE_KEY?: string;
+	APPLE_DEVICECHECK_ENVIRONMENT?: 'development' | 'production';
+	/** HMAC key for short-lived, account-bound device sessions. */
+	DEVICE_CHECK_SESSION_SECRET?: string;
 	OPENAI_REALTIME_TRANSCRIPTION_COST_PER_HOUR?: string;
 	ANTHROPIC_API_KEY: string;
 	DEEPGRAM_API_KEY: string;
