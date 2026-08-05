@@ -74,6 +74,7 @@ pub fn sync_detected_ai_tools_in_background(
     api_auth_enabled: bool,
     api_port: u16,
     mode: screenpipe_engine::cli::agent::DesktopAgentSetupMode,
+    bundled_cli: PathBuf,
 ) {
     let Some(home) = background_ai_tools_home() else {
         info!("AI tool background setup skipped: no home directory");
@@ -110,12 +111,14 @@ pub fn sync_detected_ai_tools_in_background(
         for attempt in 1..=3 {
             let home = home.clone();
             let bun_path = bun_path.clone();
+            let bundled_cli = bundled_cli.clone();
             let api_key = api_key.clone();
             let api_url = api_url.clone();
             match tokio::task::spawn_blocking(move || {
                 let runtime = crate::mcp_runtime::ensure_mcp_runtime_with(
                     &bun_path,
                     &screenpipe_core::paths::default_screenpipe_data_dir(),
+                    &bundled_cli,
                 )
                 .map_err(|error| format!("MCP runtime install failed: {error:#}"))?;
                 let entrypoint = runtime

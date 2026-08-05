@@ -1546,11 +1546,17 @@ async fn main() {
                 } else {
                     screenpipe_engine::cli::agent::DesktopAgentSetupMode::ConnectDetected
                 };
-                skills::sync_detected_ai_tools_in_background(
-                    store.recording.api_auth,
-                    local_api.port,
-                    mode,
-                );
+                match mcp_runtime::bundled_cli_path(&app.handle()) {
+                    Ok(bundled_cli) => skills::sync_detected_ai_tools_in_background(
+                        store.recording.api_auth,
+                        local_api.port,
+                        mode,
+                        bundled_cli,
+                    ),
+                    Err(error) => {
+                        warn!(%error, "AI tool background setup skipped: bundled MCP runtime was not found")
+                    }
+                }
             }
 
             // Enterprise hidden-UI deployments always run headless with the
