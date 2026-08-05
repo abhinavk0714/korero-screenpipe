@@ -52,6 +52,7 @@ import type { ChatConversation, ChatMessage } from "@/lib/hooks/use-settings";
 interface PipeRunBuffer {
   pipeName: string;
   executionId: number;
+  continuous: boolean;
   startedAt: string;
   /** NDJSON lines accumulated so far (one per inner event JSON). */
   lines: string[];
@@ -107,7 +108,9 @@ async function handlePipeEnvelope(envelope: AgentEventEnvelope): Promise<void> {
   if (!inner) return;
   const parsed = parsePipeSessionId(envelope.sessionId);
   if (!parsed) return;
-  const { pipeName, executionId } = parsed;
+  const pipeName = parsed.pipeName;
+  const executionId = envelope.executionId ?? parsed.executionId;
+  if (executionId == null) return;
   const sid = envelope.sessionId;
 
   // Lazy-init the buffer on first event for this pipe sid. `started_at`
@@ -118,6 +121,7 @@ async function handlePipeEnvelope(envelope: AgentEventEnvelope): Promise<void> {
     buf = {
       pipeName,
       executionId,
+      continuous: parsed.continuous,
       startedAt: extractStartedAt(inner) ?? new Date().toISOString(),
       lines: [],
       firstEventAt: Date.now(),
@@ -167,12 +171,18 @@ async function finalizeBuffer(sid: string, buf: PipeRunBuffer): Promise<void> {
   // execution poll can upsert a metadata-only `pipe-run` row just before the
   // terminal event reaches us. Returning for that row loses the completed
   // transcript permanently and leaves an expanded history stale.
+  let existingTitle: string | undefined;
+  let existingCreatedAt: number | undefined;
   try {
     const { useChatStore } = await import("@/lib/stores/chat-store");
     const existing = useChatStore.getState().sessions[sid];
+    if (buf.continuous && existing) {
+      existingTitle = existing.title;
+      existingCreatedAt = existing.createdAt;
+    }
     if (
       existing?.kind === "pipe-watch" ||
-      (existing?.messages?.length ?? 0) > 0
+      (!buf.continuous && (existing?.messages?.length ?? 0) > 0)
     ) {
       return;
     }
@@ -207,10 +217,12 @@ async function finalizeBuffer(sid: string, buf: PipeRunBuffer): Promise<void> {
 
   const conv: ChatConversation = {
     id: sid,
-    title: `${buf.pipeName} #${buf.executionId}`,
+    title:
+      existingTitle ??
+      (buf.continuous ? buf.pipeName : `${buf.pipeName} #${buf.executionId}`),
     titleSource: "user",
     messages,
-    createdAt: buf.firstEventAt,
+    createdAt: existingCreatedAt ?? buf.firstEventAt,
     updatedAt: buf.lastEventAt,
     // Unwatched completed pipe runs should surface as unread until opened.
     lastContentAt: buf.lastEventAt,

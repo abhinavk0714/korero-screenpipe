@@ -122,7 +122,7 @@ import { parseEnterpriseManagedVersion } from "@/lib/hooks/use-enterprise-pipes"
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { pipeExecutionToConversation } from "@/lib/pipe-ndjson-to-chat";
 import { loadConversationFile, saveConversationFile } from "@/lib/chat-storage";
-import { pipeSessionId } from "@/lib/events/types";
+import { pipeExecutionConversationId } from "@/lib/pipe-execution-status";
 import { PipeStoreSubmissionDialog } from "@/components/pipe-store-submission";
 import {
   Dialog,
@@ -637,6 +637,7 @@ interface PipeExecution {
   error_type: string | null;
   error_message: string | null;
   duration_ms: number | null;
+  conversation_id: string | null;
 }
 
 function relativeTime(dateStr: string): string {
@@ -2035,7 +2036,9 @@ export function PipesSection() {
       if (envelope.source !== "pipe") return;
       const parsed = parsePipeSessionId(envelope.sessionId);
       if (!parsed) return;
-      const { pipeName, executionId } = parsed;
+      const pipeName = parsed.pipeName;
+      const executionId = envelope.executionId ?? parsed.executionId;
+      if (executionId == null) return;
       const pipeEvent = envelope.event;
 
       const key = `${pipeName}:${executionId}`;
@@ -3060,11 +3063,13 @@ export function PipesSection() {
                                       </button>
                                       <button className="text-muted-foreground hover:text-foreground p-0.5" title="open in chat" onClick={async () => {
                                         // Check if the recorder already saved this execution
-                                        const recorderSid = pipeSessionId(exec.pipe_name, exec.id);
+                                        const recorderSid =
+                                          pipeExecutionConversationId(exec);
                                         const existing = await loadConversationFile(recorderSid);
                                         if (!existing) {
                                           const conv = pipeExecutionToConversation(exec.pipe_name, exec.id, exec.stdout, exec.started_at);
                                           conv.id = recorderSid;
+                                          if (exec.conversation_id) conv.title = exec.pipe_name;
                                           conv.kind = "pipe-run";
                                           conv.titleSource = "user";
                                           conv.pipeContext = { pipeName: exec.pipe_name, executionId: exec.id, startedAt: exec.started_at || new Date().toISOString() };
@@ -3219,8 +3224,13 @@ export function PipesSection() {
                         </Select>
                       </div>
 
-                      <div className="flex items-center justify-between border px-3 py-2.5">
-                        <span className="text-xs font-medium cursor-help" title="when enabled, the pipe remembers context from previous runs">history</span>
+                      <div className="flex items-center justify-between gap-4 border px-3 py-2.5">
+                        <div>
+                          <div className="text-xs font-medium">continue in same chat</div>
+                          <div className="text-[11px] text-muted-foreground">
+                            each run resumes this pipe&apos;s previous context
+                          </div>
+                        </div>
                         <Switch
                         checked={!!pipe.config.history}
                         onCheckedChange={(checked) => {

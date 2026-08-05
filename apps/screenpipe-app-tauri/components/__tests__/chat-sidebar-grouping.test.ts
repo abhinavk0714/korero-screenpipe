@@ -18,7 +18,9 @@ import {
 import {
   buildPipeExecutionHistoryPage,
   isTerminalPipeExecutionStatus,
+  pipeExecutionConversationId,
   shouldReloadPipeExecutionHistory,
+  uniquePipeExecutionConversations,
 } from "@/lib/pipe-execution-status";
 import type { SessionRecord } from "@/lib/stores/chat-store";
 
@@ -61,6 +63,40 @@ describe("buildPipeExecutionHistoryPage", () => {
       12, 11, 10, 9, 8, 7, 6, 5, 4, 3,
     ]);
     expect(page.nextCursor).toBe(3);
+  });
+});
+
+describe("continued pipe chat inventory", () => {
+  it("collapses multiple runs onto their newest stable conversation", () => {
+    const executions = [
+      {
+        id: 12,
+        pipe_name: "daily-brief",
+        conversation_id: "pipe:daily-brief:continuous",
+      },
+      {
+        id: 11,
+        pipe_name: "daily-brief",
+        conversation_id: "pipe:daily-brief:continuous",
+      },
+      { id: 10, pipe_name: "daily-brief", conversation_id: null },
+    ];
+
+    expect(
+      uniquePipeExecutionConversations(executions).map((execution) => execution.id),
+    ).toEqual([12, 10]);
+    expect(pipeExecutionConversationId(executions[0])).toBe(
+      "pipe:daily-brief:continuous",
+    );
+    expect(pipeExecutionConversationId(executions[2])).toBe(
+      "pipe:daily-brief:10",
+    );
+    expect(
+      uniquePipeExecutionConversations(
+        executions,
+        new Set(["pipe:daily-brief:continuous"]),
+      ).map((execution) => execution.id),
+    ).toEqual([10]);
   });
 });
 

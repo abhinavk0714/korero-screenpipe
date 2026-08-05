@@ -4,6 +4,31 @@
 
 const ACTIVE_PIPE_EXECUTION_STATUSES = new Set(["queued", "running"]);
 
+export interface PipeExecutionChatIdentity {
+  id: number;
+  pipe_name: string;
+  conversation_id?: string | null;
+}
+
+export function pipeExecutionConversationId(
+  execution: PipeExecutionChatIdentity,
+): string {
+  return execution.conversation_id || `pipe:${execution.pipe_name}:${execution.id}`;
+}
+
+/** Keep the newest execution for each visible chat identity. */
+export function uniquePipeExecutionConversations<
+  T extends PipeExecutionChatIdentity,
+>(executions: T[], excludedIds: ReadonlySet<string> = new Set()): T[] {
+  const seen = new Set<string>(excludedIds);
+  return executions.filter((execution) => {
+    const id = pipeExecutionConversationId(execution);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
 export function isTerminalPipeExecutionStatus(status: string): boolean {
   return !ACTIVE_PIPE_EXECUTION_STATUSES.has(status.trim().toLowerCase());
 }

@@ -109,9 +109,11 @@ import { pipeExecutionToConversation } from "@/lib/pipe-ndjson-to-chat";
 import {
   buildPipeExecutionHistoryPage,
   isTerminalPipeExecutionStatus,
+  pipeExecutionConversationId,
   shouldReloadPipeExecutionHistory,
+  uniquePipeExecutionConversations,
 } from "@/lib/pipe-execution-status";
-import { parsePipeSessionId, pipeSessionId } from "@/lib/events/types";
+import { parsePipeSessionId } from "@/lib/events/types";
 import type { ChatConversation } from "@/lib/hooks/use-settings";
 import {
   PIPES_SIDEBAR_COLLAPSED_EVENT,
@@ -152,6 +154,7 @@ interface SidebarPipeExecution {
   stdout: string;
   stderr: string;
   error_message: string | null;
+  conversation_id: string | null;
 }
 
 function pipeExecutionConversation(execution: SidebarPipeExecution): ChatConversation {
@@ -166,7 +169,8 @@ function pipeExecutionConversation(execution: SidebarPipeExecution): ChatConvers
     ? new Date(execution.finished_at).getTime()
     : conversation.updatedAt;
 
-  conversation.id = pipeSessionId(execution.pipe_name, execution.id);
+  conversation.id = pipeExecutionConversationId(execution);
+  if (execution.conversation_id) conversation.title = execution.pipe_name;
   conversation.kind = "pipe-run";
   conversation.titleSource = "user";
   conversation.pipeContext = {
@@ -670,14 +674,20 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
         hasMore,
         nextCursor,
       } = buildPipeExecutionHistoryPage(executions, PIPE_RUNS_PER_GROUP);
-      const visibleExecutions = terminalExecutions.filter(
+      const alreadyLoadedIds = append
+        ? new Set((loadedPipeRuns[pipeName] ?? []).map((run) => run.id))
+        : undefined;
+      const visibleExecutions = uniquePipeExecutionConversations(
+        terminalExecutions,
+        alreadyLoadedIds,
+      ).filter(
         (execution) =>
           !deletedPipeExecutionIdsRef.current.has(
-            pipeSessionId(execution.pipe_name, execution.id),
+            pipeExecutionConversationId(execution),
           ),
       );
       const candidates = await Promise.all(visibleExecutions.map(async (execution) => {
-        const sessionId = pipeSessionId(execution.pipe_name, execution.id);
+        const sessionId = pipeExecutionConversationId(execution);
         executionMetadataRef.current.set(sessionId, execution);
         const savedConversation = await loadConversationFile(sessionId);
         const conversation = savedConversation ?? pipeExecutionConversation(execution);

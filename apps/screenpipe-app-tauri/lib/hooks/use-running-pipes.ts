@@ -204,7 +204,9 @@ async function mountRunningPipesTracker(): Promise<void> {
     if (envelope.source !== "pipe") return;
     const parsed = parsePipeSessionId(envelope.sessionId);
     if (!parsed) return;
-    const { pipeName, executionId } = parsed;
+    const pipeName = parsed.pipeName;
+    const executionId = envelope.executionId ?? parsed.executionId;
+    if (executionId == null) return;
     const inner = envelope.event;
     const actions = useRunningPipesStore.getState().actions;
     const t = inner?.type;

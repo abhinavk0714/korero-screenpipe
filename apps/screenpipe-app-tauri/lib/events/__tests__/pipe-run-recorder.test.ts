@@ -164,6 +164,66 @@ describe("pipe-run-recorder: finalize on terminal event", () => {
     expect(saveSpy).not.toHaveBeenCalled();
   });
 
+  it("updates an existing continued chat on the next execution", async () => {
+    const continuousSid = "pipe:my-pipe:continuous";
+    const originalCreatedAt = Date.now() - 1_000;
+    useChatStore.getState().actions.upsert({
+      id: continuousSid,
+      title: "Morning brief",
+      titleSource: "user",
+      preview: "previous result",
+      status: "idle",
+      messageCount: 1,
+      messages: [{ role: "assistant", content: "previous result" }],
+      createdAt: originalCreatedAt,
+      updatedAt: Date.now() - 1_000,
+      pinned: false,
+      unread: false,
+      kind: "pipe-run",
+      pipeContext: { pipeName: "my-pipe", executionId: 41 },
+    });
+    const continuedEnv = (event: any): AgentEventEnvelope => ({
+      source: "pipe",
+      sessionId: continuousSid,
+      executionId: 42,
+      event,
+    });
+
+    await __testing.inject(
+      continuedEnv({ type: "message_start", message: { role: "assistant" } }),
+    );
+    await __testing.inject(
+      continuedEnv({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "new result" },
+      }),
+    );
+    await __testing.inject(
+      continuedEnv({
+        type: "agent_end",
+        messages: [
+          { role: "user", content: "first run" },
+          { role: "assistant", content: "previous result" },
+          { role: "user", content: "second run" },
+          { role: "assistant", content: "new result" },
+        ],
+      }),
+    );
+
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+    const conversation = saveSpy.mock.calls[0]![0] as any;
+    expect(conversation.id).toBe(continuousSid);
+    expect(conversation.title).toBe("Morning brief");
+    expect(conversation.createdAt).toBe(originalCreatedAt);
+    expect(conversation.pipeContext.executionId).toBe(42);
+    expect(conversation.messages.map((message: any) => message.content)).toEqual([
+      "first run",
+      "previous result",
+      "second run",
+      "new result",
+    ]);
+  });
+
   it("clears the buffer after finalize (idempotent)", async () => {
     await __testing.inject(env({ type: "message_start", message: { role: "assistant" } }));
     await __testing.inject(
