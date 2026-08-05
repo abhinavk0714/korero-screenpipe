@@ -7,6 +7,7 @@
 use futures::StreamExt;
 use screenpipe_events::DiskSpaceLowEvent;
 use serde::Serialize;
+use serde_json::json;
 use tauri::{AppHandle, Manager};
 use tracing::{debug, warn};
 
@@ -14,6 +15,8 @@ use crate::notifications::client;
 use crate::notifications::store::NotificationPriority;
 use crate::recording::RecordingState;
 use crate::store::SettingsStore;
+
+const STORAGE_SETTINGS_DEEPLINK: &str = "screenpipe://settings?section=storage";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
@@ -36,10 +39,7 @@ pub fn start(app: AppHandle) {
     });
 }
 
-pub(crate) async fn handle(
-    app: &AppHandle,
-    event: DiskSpaceLowEvent,
-) -> DiskPressureOutcome {
+pub(crate) async fn handle(app: &AppHandle, event: DiskSpaceLowEvent) -> DiskPressureOutcome {
     if !guard_enabled(app) {
         debug!(
             available_bytes = event.available_bytes,
@@ -61,20 +61,36 @@ pub(crate) async fn handle(
 
     crate::health::set_recording_status(crate::health::RecordingStatus::Paused);
 
-    let available = readable_gib(event.available_bytes);
-    let threshold = readable_gib(event.threshold_bytes);
-    client::send_typed_with_priority(
+    client::send_typed_with_actions_and_priority(
         "recording stopped — disk almost full",
-        format!(
-            "screenpipe stopped capture because only {available} is free (safety threshold: \
-             {threshold}). free disk space, then start recording again. search and existing \
-             data remain available."
-        ),
+        low_disk_body(event.available_bytes, event.threshold_bytes),
         crate::notifications::gate::DISK_PRESSURE_NOTIFICATION_TYPE,
         None,
+        vec![review_storage_action()],
         NotificationPriority::High,
     );
     DiskPressureOutcome::CaptureStopped
+}
+
+fn review_storage_action() -> serde_json::Value {
+    json!({
+        "id": "review-storage",
+        "action": "review-storage",
+        "label": "review storage",
+        "type": "deeplink",
+        "url": STORAGE_SETTINGS_DEEPLINK,
+        "primary": true,
+    })
+}
+
+fn low_disk_body(available_bytes: u64, threshold_bytes: u64) -> String {
+    let available = readable_gib(available_bytes);
+    let threshold = readable_gib(threshold_bytes);
+    format!(
+        "screenpipe stopped capture because only {available} is free (safety threshold: \
+         {threshold}). review storage to preview cleanup or choose a retention policy before \
+         restarting. search and existing data remain available."
+    )
 }
 
 fn guard_enabled(app: &AppHandle) -> bool {
@@ -96,5 +112,18 @@ mod tests {
     fn low_disk_copy_is_human_readable() {
         assert_eq!(readable_gib(20 * 1024 * 1024 * 1024), "20.0 GB");
         assert_eq!(readable_gib(512 * 1024 * 1024), "0.5 GB");
+
+        let body = low_disk_body(1024 * 1024 * 1024, 20 * 1024 * 1024 * 1024);
+        assert!(body.contains("only 1.0 GB is free"));
+        assert!(body.contains("choose a retention policy"));
+        assert!(body.contains("search and existing data remain available"));
+    }
+
+    #[test]
+    fn review_storage_action_routes_to_retention_controls() {
+        let action = review_storage_action();
+        assert_eq!(action["type"], "deeplink");
+        assert_eq!(action["url"], STORAGE_SETTINGS_DEEPLINK);
+        assert_eq!(action["primary"], true);
     }
 }
