@@ -800,6 +800,8 @@ export function sessionRecordFromMeta(m: ConversationMeta): SessionRecord {
  *
  * A session is only reusable when it is a genuine blank CHAT draft:
  *   - `kind` is "chat" (or unset) — never a `pipe-run` / `pipe-watch`.
+ *   - `draft` is not explicitly false — a persisted conversation is never a
+ *     reusable blank, even while its message metadata is catching up.
  *   - `messageCount === 0` — this is what excludes on-disk-hydrated
  *     sidebar rows. Those carry no in-memory `messages` array (see the
  *     SessionRecord doc), so a naive `messages.length === 0` check would
@@ -814,6 +816,7 @@ export function getOrCreateEmptyChatId(): { id: string; isNew: boolean } {
   const state = useChatStore.getState();
   const isReusableBlankChat = (s: SessionRecord) => {
     if (s.kind && s.kind !== "chat") return false;
+    if (s.draft === false) return false;
     if (s.messageCount > 0) return false;
     const msgs = (s.messages as Array<{ role?: string }> | undefined) ?? [];
     return !msgs.some((m) => m?.role === "user");

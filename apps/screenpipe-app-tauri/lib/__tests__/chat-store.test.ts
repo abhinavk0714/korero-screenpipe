@@ -281,6 +281,25 @@ describe("chat-store: getOrCreateEmptyChatId (no spam on +new)", () => {
     expect(id).not.toBe("diskChat");
   });
 
+  it("does NOT reuse a persisted chat while its message count is stale", () => {
+    useChatStore.setState({
+      sessions: {
+        persistedChat: baseRecord({
+          id: "persistedChat",
+          draft: false,
+          messageCount: 0,
+          messages: [],
+        }),
+      },
+      currentId: "persistedChat",
+      panelSessionId: "persistedChat",
+    });
+
+    const { id, isNew } = getOrCreateEmptyChatId();
+    expect(isNew).toBe(true);
+    expect(id).not.toBe("persistedChat");
+  });
+
   it("does NOT reuse pipe-run / pipe-watch sessions (#4719 regression)", () => {
     useChatStore.setState({
       sessions: {
