@@ -14,7 +14,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::fs::{self, OpenOptions};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use tracing::info;
@@ -55,11 +55,24 @@ fn cli_looks_complete(path: &Path) -> bool {
     let Ok(mut file) = fs::File::open(path) else {
         return false;
     };
-    let mut header = vec![0; 512];
-    let Ok(read) = file.read(&mut header) else {
+    let mut header = vec![0; 64];
+    let Ok(header_read) = file.read(&mut header) else {
         return false;
     };
-    String::from_utf8_lossy(&header[..read]).contains("screenpipe")
+    if !header[..header_read].starts_with(b"#!/usr/bin/env node") {
+        return false;
+    }
+
+    let tail_len = metadata.len().min(4096) as i64;
+    if file.seek(SeekFrom::End(-tail_len)).is_err() {
+        return false;
+    }
+    let mut tail = Vec::with_capacity(tail_len as usize);
+    if file.read_to_end(&mut tail).is_err() {
+        return false;
+    }
+    let tail = String::from_utf8_lossy(&tail);
+    tail.contains("// src/cli.ts") && tail.contains("cli_startup")
 }
 
 fn staged_cli_path(stage: &Path) -> PathBuf {
@@ -271,7 +284,14 @@ mod tests {
         let data = tempfile::tempdir().expect("temp data dir");
         let cli = runtime_cli_path(data.path());
         fs::create_dir_all(cli.parent().unwrap()).unwrap();
-        fs::write(&cli, format!("// screenpipe\n{}", "x".repeat(2048))).unwrap();
+        fs::write(
+            &cli,
+            format!(
+                "#!/usr/bin/env node\n{}\n// src/cli.ts\ncli_startup\n",
+                "x".repeat(2048)
+            ),
+        )
+        .unwrap();
 
         let launch = ensure_mcp_runtime_with(Path::new("/missing/bun"), data.path()).unwrap();
         assert_eq!(launch.command, "/missing/bun");
@@ -298,12 +318,13 @@ test "$4" = "screenpipe-mcp@0.19.2"
 printf 'call\n' >> "{calls}"
 mkdir -p node_modules/screenpipe-mcp/dist
 printf '{{"version":"0.19.2"}}\n' > node_modules/screenpipe-mcp/package.json
-printf '#!/usr/bin/env bun\n// screenpipe runtime\n' > node_modules/screenpipe-mcp/dist/cli.js
+printf '#!/usr/bin/env node\n// screenpipe runtime\n' > node_modules/screenpipe-mcp/dist/cli.js
 i=0
 while test "$i" -lt 128; do
   printf '// bundled payload padding\n' >> node_modules/screenpipe-mcp/dist/cli.js
   i=$((i + 1))
 done
+printf '// src/cli.ts\ncli_startup\n' >> node_modules/screenpipe-mcp/dist/cli.js
 "#,
             calls = calls.display()
         );
