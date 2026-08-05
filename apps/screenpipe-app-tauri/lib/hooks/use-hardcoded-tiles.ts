@@ -64,6 +64,12 @@ function argsMatchKnownDefault(args: unknown): boolean {
   );
 }
 
+function argsMatchVersionedManagedRuntime(args: unknown): boolean {
+  if (!Array.isArray(args) || args.length !== 1 || typeof args[0] !== "string") return false;
+  const path = args[0].replace(/\\/g, "/");
+  return /\/mcp-runtime\/screenpipe-mcp-\d+\.\d+\.\d+\.js$/.test(path);
+}
+
 function commandLooksLikeOurs(command: unknown): boolean {
   if (typeof command !== "string" || !command) return false;
   const base = command.replace(/\\/g, "/").split("/").pop() || command;
@@ -72,9 +78,8 @@ function commandLooksLikeOurs(command: unknown): boolean {
 }
 
 // A screenpipe entry is "stale" when it uses one of OUR old package-manager
-// launch shapes. Even a fully attributed `bun x` entry now needs migration:
-// clients can start together and race Bun's shared cold-install linker before
-// the MCP code runs. Rewriting replaces it with the app-managed stable runtime.
+// launch shapes or a versioned runtime path from a pre-release build. Rewriting
+// replaces both with the permanent app-managed launcher path.
 //
 // Deliberately CONSERVATIVE: a hand-customized entry — a remote
 // `--screenpipe-url`, a custom `--port`, extra args, or any env key other than
@@ -86,7 +91,7 @@ export function isStaleClaudeScreenpipeEntry(entry: unknown): boolean {
 
   // Only repair entries that exactly match a shape we produced ourselves.
   if (!commandLooksLikeOurs(e.command)) return false;
-  if (!argsMatchKnownDefault(e.args)) return false;
+  if (!argsMatchKnownDefault(e.args) && !argsMatchVersionedManagedRuntime(e.args)) return false;
 
   // Any env keys beyond the ones we manage means the user customized it — leave it.
   if (e.env && typeof e.env === "object") {

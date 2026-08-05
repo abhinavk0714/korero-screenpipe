@@ -1536,14 +1536,20 @@ async fn main() {
 
             // The old connection slide blocked onboarding on work that can be
             // done safely and idempotently by Rust. During first-run setup,
-            // wire detected local AI tools in the background; after onboarding
-            // completes this no longer runs, so an explicit Settings removal
-            // remains removed on future launches.
-            if !onboarding_store.is_completed && !app_ui_hidden {
+            // wire detected local AI tools in the background. On later starts,
+            // refresh only screenpipe-owned entries so desktop MCP updates
+            // advance automatically while explicit disconnects stay removed.
+            if !app_ui_hidden {
                 let local_api = recording::local_api_context_from_app(&app.handle());
-                skills::connect_detected_ai_tools_in_background(
+                let mode = if onboarding_store.is_completed {
+                    screenpipe_engine::cli::agent::DesktopAgentSetupMode::RefreshManaged
+                } else {
+                    screenpipe_engine::cli::agent::DesktopAgentSetupMode::ConnectDetected
+                };
+                skills::sync_detected_ai_tools_in_background(
                     store.recording.api_auth,
                     local_api.port,
+                    mode,
                 );
             }
 

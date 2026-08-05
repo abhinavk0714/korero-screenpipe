@@ -64,11 +64,17 @@ async fn wait_for_background_api_key(api_auth_enabled: bool) -> Option<String> {
     }
 }
 
-/// During an incomplete onboarding, connect detected local AI tools once in a
-/// native background task. The task is non-blocking, retries naturally across
-/// permission-triggered app restarts, and stops running after onboarding is
-/// complete so a later explicit disconnect in Settings stays disconnected.
-pub fn connect_detected_ai_tools_in_background(api_auth_enabled: bool, api_port: u16) {
+/// Keep screenpipe-owned MCP entries on the desktop-managed runtime.
+///
+/// During onboarding this also connects detected tools. After onboarding it
+/// only refreshes entries carrying screenpipe's ownership marker, so an
+/// explicit Settings disconnect stays disconnected and custom configs remain
+/// untouched. The task is non-blocking and retries transient install failures.
+pub fn sync_detected_ai_tools_in_background(
+    api_auth_enabled: bool,
+    api_port: u16,
+    mode: screenpipe_engine::cli::agent::DesktopAgentSetupMode,
+) {
     let Some(home) = background_ai_tools_home() else {
         info!("AI tool background setup skipped: no home directory");
         return;
@@ -79,6 +85,25 @@ pub fn connect_detected_ai_tools_in_background(api_auth_enabled: bool, api_port:
     };
 
     tauri::async_runtime::spawn(async move {
+        if mode == screenpipe_engine::cli::agent::DesktopAgentSetupMode::RefreshManaged {
+            let scan_home = home.clone();
+            match tokio::task::spawn_blocking(move || {
+                screenpipe_engine::cli::agent::has_managed_desktop_mcp_in(&scan_home)
+            })
+            .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    info!("AI tool runtime refresh skipped: no managed MCP entries");
+                    return;
+                }
+                Err(error) => {
+                    warn!(%error, "AI tool runtime refresh scan failed");
+                    return;
+                }
+            }
+        }
+
         let api_key = wait_for_background_api_key(api_auth_enabled).await;
 
         let api_url = format!("http://localhost:{api_port}");
@@ -104,6 +129,7 @@ pub fn connect_detected_ai_tools_in_background(api_auth_enabled: bool, api_port:
                     &entrypoint,
                     api_key.as_deref(),
                     &api_url,
+                    mode,
                 ))
             })
             .await

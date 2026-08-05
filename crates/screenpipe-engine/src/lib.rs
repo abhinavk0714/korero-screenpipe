@@ -38,6 +38,12 @@ mod oauth_result_page;
 pub mod permission_monitor;
 pub mod piggyback_telemetry;
 pub mod pipe_permissions_middleware;
+
+/// Atomically replace a file without exposing a missing or partially written
+/// destination. Shared with the desktop runtime for stable managed launchers.
+pub fn replace_file_atomically(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    atomic_file::replace(path, bytes)
+}
 pub mod pipe_store;
 pub mod pipe_stream;
 pub mod pipes_api;

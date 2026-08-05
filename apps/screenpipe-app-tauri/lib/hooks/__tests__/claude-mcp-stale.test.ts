@@ -48,11 +48,24 @@ describe("isStaleClaudeScreenpipeEntry", () => {
     ).toBe(true);
   });
 
-  it("does NOT flag the app-managed stable runtime", () => {
+  it("flags the pre-release versioned runtime so it migrates to the permanent launcher", () => {
     expect(
       isStaleClaudeScreenpipeEntry({
         command: "/Applications/screenpipe.app/Contents/MacOS/bun",
         args: ["/Users/test/.screenpipe/mcp-runtime/screenpipe-mcp-0.19.2.js"],
+        env: {
+          SCREENPIPE_LOCAL_API_KEY: "sp-abc",
+          SCREENPIPE_MCP_CLIENT: "claude",
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("does NOT flag the permanent app-managed launcher", () => {
+    expect(
+      isStaleClaudeScreenpipeEntry({
+        command: "/Applications/screenpipe.app/Contents/MacOS/bun",
+        args: ["/Users/test/.screenpipe/mcp-runtime/screenpipe-mcp.js"],
         env: {
           SCREENPIPE_LOCAL_API_KEY: "sp-abc",
           SCREENPIPE_MCP_CLIENT: "claude",

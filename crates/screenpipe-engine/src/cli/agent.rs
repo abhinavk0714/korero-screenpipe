@@ -109,6 +109,14 @@ pub struct DesktopAgentSetupReport {
     pub failures: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DesktopAgentSetupMode {
+    /// First-run onboarding: connect every supported tool that is installed.
+    ConnectDetected,
+    /// Normal startup: update only entries previously written by screenpipe.
+    RefreshManaged,
+}
+
 const AGENT_SETUP_PROMPT_STATE: &str = "agent-setup-prompted-v1";
 
 /// Offer the desktop onboarding's "connect all your AI tools" flow when the
@@ -407,9 +415,27 @@ fn desktop_launch_config(
     api_url: &str,
     agent: DesktopDetectedAgent,
 ) -> McpLaunchConfig {
+    managed_desktop_launch_config(
+        bun_path,
+        mcp_entrypoint,
+        api_key,
+        api_url,
+        agent.id,
+        (agent.id == "openclaw").then_some("stdio"),
+    )
+}
+
+fn managed_desktop_launch_config(
+    bun_path: &Path,
+    mcp_entrypoint: &Path,
+    api_key: Option<&str>,
+    api_url: &str,
+    client: &str,
+    transport: Option<&str>,
+) -> McpLaunchConfig {
     let mut env = BTreeMap::from([
         ("SCREENPIPE_API_URL".to_string(), api_url.to_string()),
-        ("SCREENPIPE_MCP_CLIENT".to_string(), agent.id.to_string()),
+        ("SCREENPIPE_MCP_CLIENT".to_string(), client.to_string()),
     ]);
     if let Some(api_key) = api_key {
         env.insert("SCREENPIPE_LOCAL_API_KEY".to_string(), api_key.to_string());
@@ -418,8 +444,107 @@ fn desktop_launch_config(
         command: bun_path.to_string_lossy().to_string(),
         args: vec![mcp_entrypoint.to_string_lossy().to_string()],
         env,
-        transport: (agent.id == "openclaw").then_some("stdio".to_string()),
+        transport: transport.map(str::to_owned),
     }
+}
+
+fn json_entry_matches_launch(entry: &serde_json::Value, launch: &McpLaunchConfig) -> bool {
+    entry.get("command").and_then(|value| value.as_str()) == Some(launch.command.as_str())
+        && entry
+            .get("args")
+            .and_then(|value| serde_json::from_value::<Vec<String>>(value.clone()).ok())
+            .as_ref()
+            == Some(&launch.args)
+        && entry
+            .get("env")
+            .and_then(|value| {
+                serde_json::from_value::<BTreeMap<String, String>>(value.clone()).ok()
+            })
+            .as_ref()
+            == Some(&launch.env)
+        && entry.get("transport").and_then(|value| value.as_str()) == launch.transport.as_deref()
+}
+
+#[derive(serde::Deserialize)]
+struct ManagedMcpCandidate {
+    command: String,
+    args: Vec<String>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+    #[serde(default)]
+    transport: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+fn candidate_is_app_managed(candidate: &ManagedMcpCandidate, expected_client: &str) -> bool {
+    if candidate.enabled == Some(false)
+        || candidate
+            .env
+            .get("SCREENPIPE_MCP_CLIENT")
+            .map(String::as_str)
+            != Some(expected_client)
+        || candidate.env.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "SCREENPIPE_API_URL" | "SCREENPIPE_LOCAL_API_KEY" | "SCREENPIPE_MCP_CLIENT"
+            )
+        })
+        || candidate.env.get("SCREENPIPE_API_URL").is_some_and(|url| {
+            !url.starts_with("http://localhost:") && !url.starts_with("http://127.0.0.1:")
+        })
+    {
+        return false;
+    }
+
+    let command = candidate.command.replace('\\', "/");
+    let command = command.rsplit('/').next().unwrap_or(&command);
+    if !matches!(command, "npx" | "npx.cmd" | "bunx" | "bun" | "bun.exe") {
+        return false;
+    }
+    if candidate.transport.as_deref().is_some_and(|transport| {
+        transport != "stdio" || !matches!(expected_client, "openclaw" | "grok")
+    }) {
+        return false;
+    }
+
+    if matches!(
+        candidate.args.as_slice(),
+        [first, package]
+            if matches!(first.as_str(), "-y" | "x")
+                && matches!(package.as_str(), "screenpipe-mcp" | "screenpipe-mcp@latest")
+    ) {
+        return true;
+    }
+    let [entrypoint] = candidate.args.as_slice() else {
+        return false;
+    };
+    let entrypoint = entrypoint.replace('\\', "/");
+    entrypoint.ends_with("/mcp-runtime/screenpipe-mcp.js")
+        || regex::Regex::new(r"/mcp-runtime/screenpipe-mcp-\d+\.\d+\.\d+\.js$")
+            .expect("valid managed MCP path regex")
+            .is_match(&entrypoint)
+}
+
+fn desktop_mcp_is_app_managed(layout: &AgentLayout, expected_client: &str) -> bool {
+    let Ok(Some(existing)) = read_config_text(&layout.mcp_path) else {
+        return false;
+    };
+    let candidate = match layout.mcp_format {
+        McpFormat::Json => serde_json::from_str::<serde_json::Value>(&existing)
+            .ok()
+            .and_then(|root| root.get("mcpServers")?.get("screenpipe").cloned())
+            .and_then(|entry| serde_json::from_value(entry).ok()),
+        McpFormat::Toml => toml::from_str::<toml::Value>(&existing)
+            .ok()
+            .and_then(|root| root.get("mcp_servers")?.get("screenpipe").cloned())
+            .and_then(|entry| entry.try_into().ok()),
+        McpFormat::Yaml => serde_yaml::from_str::<serde_yaml::Value>(&existing)
+            .ok()
+            .and_then(|root| root.get("mcp_servers")?.get("screenpipe").cloned())
+            .and_then(|entry| serde_yaml::from_value(entry).ok()),
+    };
+    candidate.is_some_and(|candidate| candidate_is_app_managed(&candidate, expected_client))
 }
 
 fn desktop_mcp_ready(layout: &AgentLayout, launch: &McpLaunchConfig) -> bool {
@@ -430,24 +555,7 @@ fn desktop_mcp_ready(layout: &AgentLayout, launch: &McpLaunchConfig) -> bool {
         McpFormat::Json => serde_json::from_str::<serde_json::Value>(&existing)
             .ok()
             .and_then(|root| root.get("mcpServers")?.get("screenpipe").cloned())
-            .is_some_and(|entry| {
-                entry.get("command").and_then(|value| value.as_str())
-                    == Some(launch.command.as_str())
-                    && entry
-                        .get("args")
-                        .and_then(|value| serde_json::from_value::<Vec<String>>(value.clone()).ok())
-                        .as_ref()
-                        == Some(&launch.args)
-                    && entry
-                        .get("env")
-                        .and_then(|value| {
-                            serde_json::from_value::<BTreeMap<String, String>>(value.clone()).ok()
-                        })
-                        .as_ref()
-                        == Some(&launch.env)
-                    && entry.get("transport").and_then(|value| value.as_str())
-                        == launch.transport.as_deref()
-            }),
+            .is_some_and(|entry| json_entry_matches_launch(&entry, launch)),
         McpFormat::Toml => render_mcp_toml_block(launch)
             .ok()
             .is_some_and(|block| existing.contains(&block)),
@@ -531,6 +639,96 @@ fn setup_desktop_agent_in(
     Ok(())
 }
 
+fn grok_config_path(home: &Path) -> PathBuf {
+    home.join(".grok/user-settings.json")
+}
+
+fn grok_managed_server_index(root: &serde_json::Value) -> Option<usize> {
+    root.pointer("/mcp/servers")?
+        .as_array()?
+        .iter()
+        .position(|server| {
+            server.get("id").and_then(|value| value.as_str()) == Some("screenpipe")
+                && serde_json::from_value::<ManagedMcpCandidate>(server.clone())
+                    .ok()
+                    .is_some_and(|candidate| candidate_is_app_managed(&candidate, "grok"))
+        })
+}
+
+fn has_managed_grok_mcp_in(home: &Path) -> bool {
+    std::fs::read_to_string(grok_config_path(home))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .is_some_and(|root| grok_managed_server_index(&root).is_some())
+}
+
+fn refresh_managed_grok_mcp_in(
+    home: &Path,
+    bun_path: &Path,
+    mcp_entrypoint: &Path,
+    api_key: Option<&str>,
+    api_url: &str,
+) -> Result<bool> {
+    use serde_json::json;
+
+    let path = grok_config_path(home);
+    let Some(existing) = read_config_text(&path)? else {
+        return Ok(false);
+    };
+    let mut root: serde_json::Value = serde_json::from_str(&existing)
+        .with_context(|| format!("{} is not valid JSON; left it untouched", path.display()))?;
+    let Some(index) = grok_managed_server_index(&root) else {
+        return Ok(false);
+    };
+    let launch = managed_desktop_launch_config(
+        bun_path,
+        mcp_entrypoint,
+        api_key,
+        api_url,
+        "grok",
+        Some("stdio"),
+    );
+
+    let servers = root
+        .pointer_mut("/mcp/servers")
+        .and_then(serde_json::Value::as_array_mut)
+        .context("Grok mcp.servers is not an array")?;
+    if json_entry_matches_launch(&servers[index], &launch)
+        && servers[index]
+            .get("enabled")
+            .and_then(|value| value.as_bool())
+            != Some(false)
+    {
+        return Ok(false);
+    }
+
+    let server = servers[index]
+        .as_object_mut()
+        .context("Grok screenpipe MCP entry is not an object")?;
+    server.insert("command".to_string(), json!(launch.command));
+    server.insert("args".to_string(), json!(launch.args));
+    server.insert("env".to_string(), json!(launch.env));
+    server.insert("transport".to_string(), json!("stdio"));
+    server.insert("enabled".to_string(), json!(true));
+    replace_config(
+        &path,
+        Some(&existing),
+        &(serde_json::to_string_pretty(&root)? + "\n"),
+    )?;
+    Ok(true)
+}
+
+/// True when at least one installed client still has a screenpipe-owned MCP
+/// entry. Used before downloading a runtime on normal startup, so people who
+/// explicitly disconnected every client do no background package work.
+pub fn has_managed_desktop_mcp_in(home: &Path) -> bool {
+    detected_desktop_agents_in(home).into_iter().any(|agent| {
+        layout_in(agent.mcp_target, home)
+            .map(|layout| desktop_mcp_is_app_managed(&layout, agent.id))
+            .unwrap_or(false)
+    }) || has_managed_grok_mcp_in(home)
+}
+
 /// Connect every AI tool detected by the desktop Connections screen.
 ///
 /// This function is synchronous by design: the Tauri app runs it inside
@@ -543,14 +741,24 @@ pub fn setup_all_detected_desktop_in(
     mcp_entrypoint: &Path,
     api_key: Option<&str>,
     api_url: &str,
+    mode: DesktopAgentSetupMode,
 ) -> DesktopAgentSetupReport {
     let detected = detected_desktop_agents_in(home);
+    let grok_is_managed = has_managed_grok_mcp_in(home);
     let mut report = DesktopAgentSetupReport {
-        detected: detected.len(),
+        detected: detected.len() + usize::from(grok_is_managed),
         ..DesktopAgentSetupReport::default()
     };
 
     for agent in detected {
+        if mode == DesktopAgentSetupMode::RefreshManaged {
+            let is_managed = layout_in(agent.mcp_target, home)
+                .map(|layout| desktop_mcp_is_app_managed(&layout, agent.id))
+                .unwrap_or(false);
+            if !is_managed {
+                continue;
+            }
+        }
         let launch = desktop_launch_config(bun_path, mcp_entrypoint, api_key, api_url, agent);
         let skills_are_ready = match agent.skills_target {
             Some(target) => layout_in(target, home)
@@ -571,6 +779,14 @@ pub fn setup_all_detected_desktop_in(
         }
     }
 
+    if grok_is_managed {
+        match refresh_managed_grok_mcp_in(home, bun_path, mcp_entrypoint, api_key, api_url) {
+            Ok(true) => report.connected += 1,
+            Ok(false) => report.already_connected += 1,
+            Err(error) => report.failures.push(format!("Grok CLI: {error:#}")),
+        }
+    }
+
     report
 }
 
@@ -579,6 +795,7 @@ pub fn setup_all_detected_desktop(
     mcp_entrypoint: &Path,
     api_key: Option<&str>,
     api_url: &str,
+    mode: DesktopAgentSetupMode,
 ) -> Result<DesktopAgentSetupReport> {
     let home = dirs::home_dir().context("could not resolve home dir")?;
     Ok(setup_all_detected_desktop_in(
@@ -587,6 +804,7 @@ pub fn setup_all_detected_desktop(
         mcp_entrypoint,
         api_key,
         api_url,
+        mode,
     ))
 }
 
@@ -1829,13 +2047,14 @@ mod tests {
         std::fs::write(home.join(".codeium/windsurf/mcp_config.json"), "{}\n").unwrap();
 
         let bun = home.join("screenpipe-runtime/bun");
-        let mcp_entrypoint = home.join("mcp-runtime/screenpipe-mcp-0.19.2.js");
+        let mcp_entrypoint = home.join("mcp-runtime/screenpipe-mcp.js");
         let report = setup_all_detected_desktop_in(
             home,
             &bun,
             &mcp_entrypoint,
             Some("sp-test-key"),
             "http://localhost:31337",
+            DesktopAgentSetupMode::ConnectDetected,
         );
         assert_eq!(
             report,
@@ -1901,6 +2120,7 @@ mod tests {
             &mcp_entrypoint,
             Some("sp-test-key"),
             "http://localhost:31337",
+            DesktopAgentSetupMode::ConnectDetected,
         );
         assert_eq!(second.detected, 5);
         assert_eq!(second.connected, 0);
@@ -1910,6 +2130,171 @@ mod tests {
             std::fs::read_to_string(home.join(".codex/config.toml")).unwrap(),
             first_codex
         );
+    }
+
+    #[test]
+    fn test_desktop_refresh_updates_managed_entries_without_reconnecting_removed_or_custom_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(
+            home.join(".codex/config.toml"),
+            "model = \"gpt-5\"\n\n[mcp_servers.screenpipe]\ncommand = \"bun\"\nargs = [\"x\", \"screenpipe-mcp@latest\"]\n\n[mcp_servers.screenpipe.env]\nSCREENPIPE_MCP_CLIENT = \"codex\"\nSCREENPIPE_LOCAL_API_KEY = \"old-key\"\n",
+        )
+        .unwrap();
+
+        std::fs::create_dir_all(home.join(".cursor")).unwrap();
+        let custom_cursor = serde_json::json!({
+            "mcpServers": {
+                "screenpipe": {
+                    "command": "/opt/custom/runner",
+                    "args": ["--screenpipe-url", "https://example.test"],
+                    "env": {"SCREENPIPE_MCP_CLIENT": "cursor"}
+                }
+            }
+        })
+        .to_string();
+        std::fs::write(home.join(".cursor/mcp.json"), &custom_cursor).unwrap();
+
+        // An installed client with no screenpipe entry represents an explicit
+        // disconnect and must stay absent.
+        std::fs::create_dir_all(home.join(".openclaw")).unwrap();
+        std::fs::write(home.join(".openclaw/openclaw.json"), "{}\n").unwrap();
+
+        assert!(has_managed_desktop_mcp_in(home));
+        let report = setup_all_detected_desktop_in(
+            home,
+            Path::new("/bundled/bun"),
+            Path::new("/screenpipe/mcp-runtime/screenpipe-mcp.js"),
+            Some("current-key"),
+            "http://localhost:4242",
+            DesktopAgentSetupMode::RefreshManaged,
+        );
+        assert_eq!(report.detected, 3);
+        assert_eq!(report.connected, 1);
+        assert_eq!(report.already_connected, 0);
+        assert!(report.failures.is_empty());
+
+        let codex = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+        assert!(codex.contains("args = [\"/screenpipe/mcp-runtime/screenpipe-mcp.js\"]"));
+        assert!(codex.contains("SCREENPIPE_LOCAL_API_KEY = \"current-key\""));
+        assert!(!codex.contains("screenpipe-mcp@latest"));
+        assert_eq!(
+            std::fs::read_to_string(home.join(".cursor/mcp.json")).unwrap(),
+            custom_cursor
+        );
+        let openclaw: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(home.join(".openclaw/openclaw.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(openclaw["mcpServers"]["screenpipe"].is_null());
+    }
+
+    #[test]
+    fn test_desktop_refresh_updates_managed_grok_entry_and_preserves_other_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::create_dir_all(home.join(".grok")).unwrap();
+        std::fs::write(
+            home.join(".grok/user-settings.json"),
+            serde_json::json!({
+                "theme": "dark",
+                "mcp": {
+                    "servers": [
+                        {"id": "other", "command": "other-server"},
+                        {
+                            "id": "screenpipe",
+                            "label": "screenpipe",
+                            "enabled": true,
+                            "transport": "stdio",
+                            "command": "bun",
+                            "args": ["x", "screenpipe-mcp@latest"],
+                            "env": {
+                                "SCREENPIPE_MCP_CLIENT": "grok",
+                                "SCREENPIPE_LOCAL_API_KEY": "old-key"
+                            }
+                        }
+                    ]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert!(has_managed_desktop_mcp_in(home));
+        let report = setup_all_detected_desktop_in(
+            home,
+            Path::new("/bundled/bun"),
+            Path::new("/screenpipe/mcp-runtime/screenpipe-mcp.js"),
+            Some("current-key"),
+            "http://localhost:4242",
+            DesktopAgentSetupMode::RefreshManaged,
+        );
+        assert_eq!(report.detected, 1);
+        assert_eq!(report.connected, 1);
+        assert!(report.failures.is_empty());
+
+        let root: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(home.join(".grok/user-settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(root["theme"], "dark");
+        assert_eq!(root["mcp"]["servers"][0]["id"], "other");
+        assert_eq!(
+            root["mcp"]["servers"][1]["args"],
+            serde_json::json!(["/screenpipe/mcp-runtime/screenpipe-mcp.js"])
+        );
+        assert_eq!(
+            root["mcp"]["servers"][1]["env"]["SCREENPIPE_LOCAL_API_KEY"],
+            "current-key"
+        );
+        assert_eq!(
+            root["mcp"]["servers"][1]["env"]["SCREENPIPE_API_URL"],
+            "http://localhost:4242"
+        );
+    }
+
+    #[test]
+    fn test_desktop_refresh_scan_ignores_disconnected_and_custom_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(home.join(".codex/config.toml"), "model = \"gpt-5\"\n").unwrap();
+        std::fs::create_dir_all(home.join(".cursor")).unwrap();
+        std::fs::write(
+            home.join(".cursor/mcp.json"),
+            serde_json::json!({
+                "mcpServers": {
+                    "screenpipe": {
+                        "command": "bun",
+                        "args": ["x", "screenpipe-mcp@latest", "--port", "3999"],
+                        "env": {"SCREENPIPE_MCP_CLIENT": "cursor"}
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::create_dir_all(home.join(".hermes")).unwrap();
+        std::fs::write(
+            home.join(".hermes/config.yaml"),
+            "mcp_servers:\n  screenpipe:\n    enabled: false\n    command: \"bun\"\n    args:\n      - \"x\"\n      - \"screenpipe-mcp@latest\"\n    env:\n      SCREENPIPE_MCP_CLIENT: \"hermes\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(home.join(".grok")).unwrap();
+        std::fs::write(
+            home.join(".grok/user-settings.json"),
+            serde_json::json!({
+                "mcp": {"servers": [{
+                    "id": "screenpipe",
+                    "enabled": false,
+                    "env": {"SCREENPIPE_MCP_CLIENT": "grok"}
+                }]}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(!has_managed_desktop_mcp_in(home));
     }
 
     #[test]
@@ -1940,9 +2325,10 @@ mod tests {
         let report = setup_all_detected_desktop_in(
             home,
             Path::new("/bundled/bun"),
-            Path::new("/screenpipe/mcp-runtime/screenpipe-mcp-0.19.2.js"),
+            Path::new("/screenpipe/mcp-runtime/screenpipe-mcp.js"),
             Some("current-key"),
             "http://localhost:4242",
+            DesktopAgentSetupMode::ConnectDetected,
         );
         assert_eq!(report.connected, 1);
         assert_eq!(report.already_connected, 0);
@@ -1964,7 +2350,7 @@ mod tests {
         let home = dir.path();
         std::fs::create_dir_all(home.join(".codex")).unwrap();
         let bun = Path::new("/bundled/bun");
-        let mcp_entrypoint = Path::new("/screenpipe/mcp-runtime/screenpipe-mcp-0.19.2.js");
+        let mcp_entrypoint = Path::new("/screenpipe/mcp-runtime/screenpipe-mcp.js");
 
         let authenticated = setup_all_detected_desktop_in(
             home,
@@ -1972,12 +2358,19 @@ mod tests {
             mcp_entrypoint,
             Some("previous-key"),
             "http://localhost:3030",
+            DesktopAgentSetupMode::ConnectDetected,
         );
         assert!(authenticated.failures.is_empty());
         assert_eq!(authenticated.connected, 1);
 
-        let unauthenticated =
-            setup_all_detected_desktop_in(home, bun, mcp_entrypoint, None, "http://localhost:3030");
+        let unauthenticated = setup_all_detected_desktop_in(
+            home,
+            bun,
+            mcp_entrypoint,
+            None,
+            "http://localhost:3030",
+            DesktopAgentSetupMode::ConnectDetected,
+        );
         assert!(unauthenticated.failures.is_empty());
         assert_eq!(unauthenticated.connected, 1);
 
@@ -2005,9 +2398,10 @@ mod tests {
         let report = setup_all_detected_desktop_in(
             home,
             Path::new("/bundled/bun"),
-            Path::new("/screenpipe/mcp-runtime/screenpipe-mcp-0.19.2.js"),
+            Path::new("/screenpipe/mcp-runtime/screenpipe-mcp.js"),
             Some("sp-key"),
             "http://localhost:3030",
+            DesktopAgentSetupMode::ConnectDetected,
         );
         assert_eq!(report.detected, 2);
         assert_eq!(report.connected, 1);
