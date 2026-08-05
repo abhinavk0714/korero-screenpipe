@@ -317,6 +317,7 @@ export function TranscriptPanel({
   const [hasUnseenLive, setHasUnseenLive] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const lastObservedBlockSignalRef = useRef<string | null>(null);
   // User-dragged height in px (null = responsive default). Drag the top grip to
   // shrink/grow the drawer so it takes less of the window.
   const [panelHeight, setPanelHeight] = useState<number | null>(() =>
@@ -459,7 +460,6 @@ export function TranscriptPanel({
                 ? {
                     ...b,
                     text: event.payload.replace ? delta : `${b.text}${delta}`,
-                    capturedAt: event.payload.captured_at,
                   }
                 : b,
             );
@@ -499,7 +499,6 @@ export function TranscriptPanel({
                 ? {
                     ...b,
                     text: transcript,
-                    capturedAt: event.payload.captured_at,
                     final: true,
                   }
                 : b,
@@ -647,6 +646,12 @@ export function TranscriptPanel({
     const latest = displayBlocks[displayBlocks.length - 1];
     return latest ? `${latest.key}:${latest.text.length}` : "empty";
   }, [displayBlocks]);
+  const latestFinalLiveBlock = useMemo(
+    () =>
+      [...visibleLiveSpeakerBlocks].reverse().find((block) => block.final) ??
+      null,
+    [visibleLiveSpeakerBlocks],
+  );
 
   // Plain-text dump of the whole transcript (not the filtered view) for
   // clipboard. Each block becomes a "[hh:mm] name\ntext" paragraph.
@@ -707,6 +712,7 @@ export function TranscriptPanel({
     if (!isOpen) return;
     setIsFollowingLive(true);
     setHasUnseenLive(false);
+    lastObservedBlockSignalRef.current = null;
   }, [isOpen, meeting.id]);
 
   useEffect(() => {
@@ -741,9 +747,28 @@ export function TranscriptPanel({
   }, [isOpen]);
 
   useEffect(() => {
-    if (!isOpen || !isLive || query.trim()) return;
+    const previousSignal = lastObservedBlockSignalRef.current;
+    const transcriptChanged =
+      previousSignal !== null && previousSignal !== latestBlockSignal;
+    lastObservedBlockSignalRef.current = latestBlockSignal;
+
+    if (!isOpen || !isLive) return;
+    if (previousSignal === null) {
+      if (!query.trim() && hasTranscriptContent) {
+        scrollToLatest(loaded ? "smooth" : "auto");
+      }
+      return;
+    }
+    if (query.trim()) {
+      // Searching is an explicit reading mode. Keep the viewport still and
+      // require a deliberate return to live after the search is cleared.
+      setIsFollowingLive(false);
+      if (transcriptChanged) setHasUnseenLive(true);
+      return;
+    }
+    if (!transcriptChanged) return;
     if (!isFollowingLive) {
-      setHasUnseenLive(hasTranscriptContent);
+      setHasUnseenLive(true);
       return;
     }
     scrollToLatest(loaded ? "smooth" : "auto");
@@ -806,6 +831,17 @@ export function TranscriptPanel({
     : `Still recording; ${pendingTranscriptSegments} audio segment${
         pendingTranscriptSegments === 1 ? "" : "s"
       } waiting for background transcription.`;
+  const transcriptState = showRecoveryBanner
+    ? "recovering"
+    : !isLive
+      ? "saved transcript"
+      : visibleLiveBlocks.length > 0 || liveStatus?.active
+        ? "live transcript"
+        : captureState?.shortLabel || "listening";
+  const transcriptStateDetail =
+    displayBlocks.length > 0
+      ? `${displayBlocks.length} turn${displayBlocks.length === 1 ? "" : "s"}`
+      : null;
 
   return (
     <>
@@ -882,7 +918,35 @@ export function TranscriptPanel({
               className="min-w-0 flex-1 bg-transparent text-xs px-2 h-7 border border-input focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
             />
           ) : (
-            <div className="flex-1" />
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <span
+                className="inline-flex min-w-0 items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-foreground"
+                role="status"
+                aria-label={`transcript status: ${transcriptState}`}
+                data-testid="transcript-stream-status"
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    "h-1.5 w-1.5 shrink-0 rounded-full",
+                    transcriptState === "recovering"
+                      ? "bg-amber-500"
+                      : isLive
+                        ? "bg-foreground"
+                        : "bg-muted-foreground/45",
+                    isLive &&
+                      transcriptState !== "recovering" &&
+                      "animate-pulse motion-reduce:animate-none",
+                  )}
+                />
+                <span className="truncate">{transcriptState}</span>
+              </span>
+              {transcriptStateDetail && (
+                <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
+                  {transcriptStateDetail}
+                </span>
+              )}
+            </div>
           )}
           {query.trim() && (
             <span
@@ -910,6 +974,9 @@ export function TranscriptPanel({
                   searchOpen && "bg-accent text-accent-foreground",
                 )}
                 title={searchOpen ? "hide search" : "search transcript (⌘F)"}
+                aria-label={
+                  searchOpen ? "hide transcript search" : "search transcript"
+                }
                 aria-pressed={searchOpen}
               >
                 <Search className="h-3.5 w-3.5" />
@@ -922,6 +989,7 @@ export function TranscriptPanel({
               disabled={displayBlocks.length === 0}
               className="h-7 w-7 p-0"
               title={copied ? "copied" : "copy transcript"}
+              aria-label={copied ? "transcript copied" : "copy transcript"}
             >
               {copied ? (
                 <Check className="h-3.5 w-3.5" />
@@ -936,6 +1004,7 @@ export function TranscriptPanel({
                 onClick={onClose}
                 className="h-7 w-7 p-0"
                 title="close transcript"
+                aria-label="close transcript"
               >
                 <X className="h-3.5 w-3.5" />
               </Button>
@@ -994,6 +1063,16 @@ export function TranscriptPanel({
                 onSpeakerAssigned={refetch}
               />
             )}
+            <span
+              className="sr-only"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {latestFinalLiveBlock
+                ? `${latestFinalLiveBlock.speakerName}: ${latestFinalLiveBlock.text}`
+                : ""}
+            </span>
           </div>
           {showFollowButton && (
             <Button
@@ -1006,7 +1085,10 @@ export function TranscriptPanel({
             >
               <ArrowDown className="h-3.5 w-3.5" />
               {hasUnseenLive && (
-                <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-foreground" />
+                <span
+                  data-testid="follow-live-unseen"
+                  className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-foreground"
+                />
               )}
             </Button>
           )}
@@ -1026,12 +1108,7 @@ export const TranscriptRows = React.memo(function TranscriptRows({
   onSpeakerAssigned: () => void;
 }) {
   return (
-    <ol
-      className="space-y-0.5 px-4 pb-10 pt-3"
-      aria-label="meeting transcript"
-      aria-live="polite"
-      aria-relevant="additions text"
-    >
+    <ol className="space-y-0.5 px-4 pb-10 pt-3" aria-label="meeting transcript">
       {blocks.map((block, index) => (
         <SpeakerParagraph
           key={block.key}
@@ -1136,7 +1213,7 @@ export const SpeakerParagraph = React.memo(function SpeakerParagraph({
       >
         <p
           className={cn(
-            "whitespace-pre-wrap break-words text-[13px] font-medium leading-5",
+            "whitespace-pre-wrap break-words text-[13px] font-normal leading-5",
             block.final ? "text-foreground/90" : "text-foreground/60",
           )}
         >

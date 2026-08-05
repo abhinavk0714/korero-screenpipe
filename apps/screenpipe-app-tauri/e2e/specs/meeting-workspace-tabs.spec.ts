@@ -92,6 +92,7 @@ async function emitTranscript(
   text: string,
   finalSegment: boolean,
   replace = true,
+  capturedAt = new Date().toISOString(),
 ): Promise<void> {
   const event = finalSegment
     ? "meeting-transcript-final"
@@ -106,7 +107,7 @@ async function emitTranscript(
       device_name: `e2e-${deviceType}`,
       device_type: deviceType,
       ...(finalSegment ? { transcript: text } : { delta: text, replace }),
-      captured_at: new Date().toISOString(),
+      captured_at: capturedAt,
     },
   });
 }
@@ -237,16 +238,32 @@ describe("meeting workspace tabs and responsive layout", function () {
       "meeting-transcript-surface",
       10_000,
     );
+    const streamStatus = await waitForTestId("transcript-stream-status", 5_000);
     expect(await transcriptTab.getAttribute("aria-selected")).toBe("true");
     expect(await editor.isExisting()).toBe(true);
     expect(await editor.isDisplayed()).toBe(false);
 
+    // Keep the reorder probe behind the later synthetic turns while preserving
+    // deterministic spacing within the partial/refinement/final sequence.
+    const liveSequenceStart = Date.now() - 10_000;
     await emitTranscript(
       meetingId,
       "turn-01",
       "output",
       "The release should feel calm: one clear owner, one visible status, and no mystery after the meeting.",
       true,
+      true,
+      new Date(liveSequenceStart).toISOString(),
+    );
+    await browser.waitUntil(
+      async () =>
+        (await streamStatus.getText())
+          .toLowerCase()
+          .includes("live transcript"),
+      {
+        timeout: t(5_000),
+        timeoutMsg: "transcript header did not expose the live stream state",
+      },
     );
     await emitTranscript(
       meetingId,
@@ -254,11 +271,22 @@ describe("meeting workspace tabs and responsive layout", function () {
       "output",
       "The live transcript",
       false,
+      true,
+      new Date(liveSequenceStart + 1_000).toISOString(),
     );
     const refiningRow = await $(
       '[data-testid="transcript-row"][data-final="false"]',
     );
     await refiningRow.waitForExist({ timeout: t(5_000) });
+    await emitTranscript(
+      meetingId,
+      "turn-order-anchor",
+      "input",
+      "I will keep that thought in place while the next response arrives.",
+      true,
+      true,
+      new Date(liveSequenceStart + 2_000).toISOString(),
+    );
     const rowCountBeforeRefinement = (
       await $$('[data-testid="transcript-row"]')
     ).length;
@@ -269,6 +297,7 @@ describe("meeting workspace tabs and responsive layout", function () {
       " should settle in place as each phrase becomes certain.",
       false,
       false,
+      new Date(liveSequenceStart + 3_000).toISOString(),
     );
     await browser.waitUntil(
       async () =>
@@ -283,12 +312,27 @@ describe("meeting workspace tabs and responsive layout", function () {
     expect((await $$('[data-testid="transcript-row"]')).length).toBe(
       rowCountBeforeRefinement,
     );
+    const rowOrderAfterRefinement: string[] = [];
+    for (const row of await $$('[data-testid="transcript-row"]')) {
+      rowOrderAfterRefinement.push(await row.getText());
+    }
+    expect(
+      rowOrderAfterRefinement.findIndex((text) =>
+        text.includes("The live transcript should settle in place"),
+      ),
+    ).toBeLessThan(
+      rowOrderAfterRefinement.findIndex((text) =>
+        text.includes("I will keep that thought in place"),
+      ),
+    );
     await emitTranscript(
       meetingId,
       "turn-02",
       "output",
       "The live transcript should settle in place as each phrase becomes certain.",
       true,
+      true,
+      new Date(liveSequenceStart + 4_000).toISOString(),
     );
     await browser.waitUntil(
       async () =>
@@ -298,6 +342,19 @@ describe("meeting workspace tabs and responsive layout", function () {
         timeout: t(5_000),
         timeoutMsg: "final transcript did not replace its provisional state",
       },
+    );
+    const rowOrderAfterFinal: string[] = [];
+    for (const row of await $$('[data-testid="transcript-row"]')) {
+      rowOrderAfterFinal.push(await row.getText());
+    }
+    expect(
+      rowOrderAfterFinal.findIndex((text) =>
+        text.includes("The live transcript should settle in place"),
+      ),
+    ).toBeLessThan(
+      rowOrderAfterFinal.findIndex((text) =>
+        text.includes("I will keep that thought in place"),
+      ),
     );
     await emitTranscript(
       meetingId,
@@ -473,6 +530,35 @@ describe("meeting workspace tabs and responsive layout", function () {
     );
     const followLive = await $('button[aria-label="follow live transcript"]');
     await followLive.waitForDisplayed({ timeout: t(5_000) });
+    expect(await $('[data-testid="follow-live-unseen"]').isExisting()).toBe(
+      false,
+    );
+    await emitTranscript(
+      meetingId,
+      "turn-13",
+      "output",
+      "A new phrase can arrive without moving the reader's viewport.",
+      true,
+    );
+    await browser.waitUntil(
+      async () =>
+        (await transcriptSurface.getText()).includes(
+          "A new phrase can arrive without moving the reader's viewport.",
+        ),
+      {
+        timeout: t(5_000),
+        timeoutMsg: "new offscreen live phrase did not render",
+      },
+    );
+    await $('[data-testid="follow-live-unseen"]').waitForExist({
+      timeout: t(5_000),
+    });
+    expect(
+      (await browser.execute(
+        (element: HTMLElement) => element.scrollTop,
+        transcriptScroller,
+      )) as number,
+    ).toBeLessThanOrEqual(1);
     await browser.pause(t(250));
 
     const screenshotPath = resolve(
@@ -486,7 +572,15 @@ describe("meeting workspace tabs and responsive layout", function () {
       (element: HTMLElement) => element.scrollTop,
       transcriptScroller,
     )) as number;
-    await followLive.click();
+    // The unread state rerenders this button after new speech; query the live
+    // element again instead of retaining the pre-update WebDriver reference.
+    const currentFollowLive = await $(
+      'button[aria-label="follow live transcript"]',
+    );
+    await browser.execute(
+      (element: HTMLButtonElement) => element.click(),
+      currentFollowLive,
+    );
     await browser.waitUntil(
       async () =>
         ((await browser.execute(
