@@ -139,8 +139,9 @@ pub struct RfdetrConfig {
     /// 81.2% (email 75→92%, secret 1/2→2/2) with no loss of precision: on
     /// the held-out 240-frame set both modes produced zero pattern-clear
     /// false positives, and tiling emitted *fewer* raw detections (44 vs
-    /// 59). Costs ~4× inference time (99 → 378 ms/frame measured on CPU),
-    /// which is why it is gated on frame size and can be turned off.
+    /// 59). Costs 4 forward passes instead of 1 — measured in CPU-time,
+    /// not wall-clock, 365 → 1427 CPU-ms/frame at the 2-thread setting
+    /// this adapter pins. Gated on frame size and can be turned off.
     ///
     /// A 3×3 grid was measured and is worse (core 75%): it magnifies text
     /// past the trained scale and splits long strings across more seams.
@@ -306,13 +307,19 @@ mod imp {
                     // full-width pool burned ~4 cores in WorkerLoop while the
                     // redaction backlog drained (340% CPU regression after 3b9a1a105).
                     .with_intra_op_spinning(false)?
-                    // With CoreML the CPU pool only runs CoreML-rejected fallback
-                    // ops; 2 threads is plenty. CPU-only builds keep the full pool.
-                    .with_intra_threads(if cfg!(feature = "onnx-coreml") {
-                        2
-                    } else {
-                        num_cpus_physical()
-                    })?;
+                    // 2 threads on every CPU path. This graph parallelizes
+                    // badly: measured on 512px frames, whole-frame inference
+                    // costs 997 CPU-ms at the full physical pool but only
+                    // 365 CPU-ms at 2 threads — 2.7x less CPU — while wall
+                    // time only moves 135 -> 195 ms. This is a background
+                    // worker that already sleeps 20 ms between frames and
+                    // backs off on an adaptive CPU cooldown, so per-frame
+                    // latency is irrelevant and total CPU is what the user
+                    // actually pays for in heat and battery.
+                    //
+                    // (With CoreML the CPU pool only runs CoreML-rejected
+                    // fallback ops, where 2 was already the right number.)
+                    .with_intra_threads(2)?;
                 // Offload to the Apple Neural Engine (Mac) / NPU (Windows) instead of
                 // running CPU-only. CoreML MLProgram + ComputeUnits::All measured ~3.4x
                 // faster than the legacy default and keeps the work off the CPU/GPU.
@@ -445,12 +452,13 @@ mod imp {
             win_h: u32,
         ) -> Result<Vec<ImageRegion>, RedactError> {
             let window;
-            let src: &image::RgbImage = if ox == 0 && oy == 0 && win_w == img.width() && win_h == img.height() {
-                img
-            } else {
-                window = image::imageops::crop_imm(img, ox, oy, win_w, win_h).to_image();
-                &window
-            };
+            let src: &image::RgbImage =
+                if ox == 0 && oy == 0 && win_w == img.width() && win_h == img.height() {
+                    img
+                } else {
+                    window = image::imageops::crop_imm(img, ox, oy, win_w, win_h).to_image();
+                    &window
+                };
             let resized = image::imageops::resize(
                 src,
                 self.input_size,
@@ -615,12 +623,6 @@ mod imp {
     fn rt_err<E: std::fmt::Display>(ctx: &'static str) -> impl FnOnce(E) -> RedactError {
         move |e| RedactError::Runtime(format!("{ctx}: {e}"))
     }
-
-    fn num_cpus_physical() -> usize {
-        std::thread::available_parallelism()
-            .map(|n| (n.get() / 2).max(1))
-            .unwrap_or(2)
-    }
 }
 
 #[cfg(feature = "onnx-cpu")]
@@ -703,9 +705,21 @@ mod tests {
     fn overlapping_duplicates_are_suppressed() {
         // Same string caught in two overlapping tiles, plus a distinct box.
         let regions = vec![
-            ImageRegion { bbox: [100, 100, 80, 12], label: CLASSES[1], score: 0.7 },
-            ImageRegion { bbox: [102, 100, 78, 12], label: CLASSES[1], score: 0.9 },
-            ImageRegion { bbox: [400, 300, 60, 12], label: CLASSES[4], score: 0.6 },
+            ImageRegion {
+                bbox: [100, 100, 80, 12],
+                label: CLASSES[1],
+                score: 0.7,
+            },
+            ImageRegion {
+                bbox: [102, 100, 78, 12],
+                label: CLASSES[1],
+                score: 0.9,
+            },
+            ImageRegion {
+                bbox: [400, 300, 60, 12],
+                label: CLASSES[4],
+                score: 0.6,
+            },
         ];
         let kept = imp::suppress_overlaps(regions);
         assert_eq!(kept.len(), 2, "near-identical boxes must collapse to one");
