@@ -4587,11 +4587,51 @@ mod tests {
                 "context_window": 64_000,
                 "max_output_tokens": 0,
             }),
+            json!({
+                "id": "oversized-model-budget",
+                "context_window": 64_000,
+                "max_output_tokens": 128_000,
+            }),
         ]);
 
         assert_eq!(models[0].get("maxTokens"), Some(&json!(128_000)));
         assert_eq!(models[1].get("maxTokens"), Some(&json!(32_000)));
         assert_eq!(models[2].get("maxTokens"), Some(&json!(32_000)));
+        assert_eq!(models[3].get("maxTokens"), Some(&json!(64_000)));
+    }
+
+    #[tokio::test]
+    async fn gateway_output_budget_flows_from_http_to_pi_catalog() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [
+                    {
+                        "id": "claude-sonnet-5",
+                        "name": "Claude Sonnet 5",
+                        "context_window": 1_000_000,
+                        "max_output_tokens": 128_000,
+                        "intelligence": "highest",
+                    },
+                    {
+                        "id": "legacy-model",
+                        "name": "Legacy model",
+                        "context_window": 128_000,
+                    },
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let models = screenpipe_cloud_models(&server.uri(), None).await;
+        assert_eq!(models.pointer("/0/maxTokens"), Some(&json!(128_000)));
+        assert_eq!(models.pointer("/1/maxTokens"), Some(&json!(32_000)));
     }
 
     #[tokio::test]
