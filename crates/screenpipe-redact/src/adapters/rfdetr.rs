@@ -128,6 +128,23 @@ pub struct RfdetrConfig {
     /// — keep this one permissive (default 0.10) and tighten via the
     /// policy's `min_score`.
     pub conf_threshold: f32,
+    /// Run inference on a 2×2 grid of overlapping tiles instead of the
+    /// whole frame, when the frame is much larger than `input_size`.
+    ///
+    /// Squeezing a 1512×948 desktop into 512×512 shrinks a 14 px line of
+    /// text to ~8 px, below the scale the model was trained on. Tiling
+    /// presents each quadrant at native input size, putting real text back
+    /// in the trained regime. Measured on 522 captured frames carrying 44
+    /// unique real PII values, recall on email/phone/secret went 62.5% →
+    /// 81.2% (email 75→92%, secret 1/2→2/2) with no loss of precision: on
+    /// the held-out 240-frame set both modes produced zero pattern-clear
+    /// false positives, and tiling emitted *fewer* raw detections (44 vs
+    /// 59). Costs ~4× inference time (99 → 378 ms/frame measured on CPU),
+    /// which is why it is gated on frame size and can be turned off.
+    ///
+    /// A 3×3 grid was measured and is worse (core 75%): it magnifies text
+    /// past the trained scale and splits long strings across more seams.
+    pub tiled_inference: bool,
 }
 
 impl Default for RfdetrConfig {
@@ -141,6 +158,7 @@ impl Default for RfdetrConfig {
             // tighten further (e.g. 0.70 paranoid mode) — that just
             // applies a second floor.
             conf_threshold: 0.50,
+            tiled_inference: true,
         }
     }
 }
@@ -387,8 +405,54 @@ mod imp {
                 .map_err(|e| RedactError::Runtime(format!("open {}: {e}", image_path.display())))?
                 .to_rgb8();
             let (orig_w, orig_h) = (img.width(), img.height());
+
+            // Tiling only pays when the frame is much larger than the model
+            // input. On a frame already near `input_size` the downscale loses
+            // nothing, so 4× the compute would buy nothing.
+            let big = orig_w >= self.input_size * 2 && orig_h >= self.input_size * 3 / 2;
+            if !self.cfg.tiled_inference || !big {
+                return self.infer_window(&img, 0, 0, orig_w, orig_h);
+            }
+
+            // 2×2 with ~20% overlap, so a PII string sitting on a seam is
+            // still wholly contained in at least one tile.
+            let (tw, th) = (orig_w / 2, orig_h / 2);
+            let (ox, oy) = (tw / 5, th / 5);
+            let mut all: Vec<ImageRegion> = Vec::new();
+            for gy in 0..2u32 {
+                for gx in 0..2u32 {
+                    let x0 = (gx * tw).saturating_sub(ox);
+                    let y0 = (gy * th).saturating_sub(oy);
+                    let x1 = ((gx + 1) * tw + ox).min(orig_w);
+                    let y1 = ((gy + 1) * th + oy).min(orig_h);
+                    if x1 <= x0 || y1 <= y0 {
+                        continue;
+                    }
+                    all.extend(self.infer_window(&img, x0, y0, x1 - x0, y1 - y0)?);
+                }
+            }
+            Ok(suppress_overlaps(all))
+        }
+
+        /// Run the model over one window of `img` and return regions in
+        /// FULL-FRAME pixel coordinates. `ox`/`oy` is the window's origin.
+        fn infer_window(
+            &self,
+            img: &image::RgbImage,
+            ox: u32,
+            oy: u32,
+            win_w: u32,
+            win_h: u32,
+        ) -> Result<Vec<ImageRegion>, RedactError> {
+            let window;
+            let src: &image::RgbImage = if ox == 0 && oy == 0 && win_w == img.width() && win_h == img.height() {
+                img
+            } else {
+                window = image::imageops::crop_imm(img, ox, oy, win_w, win_h).to_image();
+                &window
+            };
             let resized = image::imageops::resize(
-                &img,
+                src,
                 self.input_size,
                 self.input_size,
                 image::imageops::FilterType::Triangle,
@@ -465,10 +529,12 @@ mod imp {
                 let cy = boxes[bo + 1];
                 let bw = boxes[bo + 2];
                 let bh = boxes[bo + 3];
-                let x1 = ((cx - bw / 2.0) * orig_w as f32).max(0.0);
-                let y1 = ((cy - bh / 2.0) * orig_h as f32).max(0.0);
-                let w_px = (bw * orig_w as f32).max(0.0);
-                let h_px = (bh * orig_h as f32).max(0.0);
+                // Model coords are normalized to the WINDOW; shift by the
+                // window origin to land in full-frame pixels.
+                let x1 = ((cx - bw / 2.0) * win_w as f32).max(0.0) + ox as f32;
+                let y1 = ((cy - bh / 2.0) * win_h as f32).max(0.0) + oy as f32;
+                let w_px = (bw * win_w as f32).max(0.0);
+                let h_px = (bh * win_h as f32).max(0.0);
                 if w_px <= 0.0 || h_px <= 0.0 {
                     continue;
                 }
@@ -479,6 +545,38 @@ mod imp {
                 });
             }
             Ok(out)
+        }
+    }
+
+    /// Greedy IoU suppression across tiles.
+    ///
+    /// Tiles overlap by design, so the same string is often detected twice —
+    /// once per tile. Keep the highest-scoring box and drop anything that
+    /// overlaps it heavily. Redaction only needs the pixels covered once, and
+    /// duplicate regions would inflate the audit counts.
+    pub(super) fn suppress_overlaps(mut regions: Vec<ImageRegion>) -> Vec<ImageRegion> {
+        regions.sort_by(|a, b| b.score.total_cmp(&a.score));
+        let mut kept: Vec<ImageRegion> = Vec::with_capacity(regions.len());
+        for r in regions {
+            if !kept.iter().any(|k| iou(k.bbox, r.bbox) >= 0.55) {
+                kept.push(r);
+            }
+        }
+        kept
+    }
+
+    /// Intersection-over-union of two `[x, y, w, h]` boxes.
+    fn iou(a: [u32; 4], b: [u32; 4]) -> f32 {
+        let (ax2, ay2) = (a[0] + a[2], a[1] + a[3]);
+        let (bx2, by2) = (b[0] + b[2], b[1] + b[3]);
+        let ix = ax2.min(bx2).saturating_sub(a[0].max(b[0]));
+        let iy = ay2.min(by2).saturating_sub(a[1].max(b[1]));
+        let inter = (ix as u64) * (iy as u64);
+        let union = (a[2] as u64) * (a[3] as u64) + (b[2] as u64) * (b[3] as u64) - inter;
+        if union == 0 {
+            0.0
+        } else {
+            inter as f32 / union as f32
         }
     }
 
@@ -570,12 +668,58 @@ impl ImageRedactor for RfdetrRedactor {
 mod tests {
     use super::*;
 
+    /// The 2×2 grid must cover every pixel of the frame. A gap between
+    /// tiles would be a blind spot where PII is never even looked at,
+    /// which is a silent privacy failure rather than a visible bug.
+    #[test]
+    fn tiles_cover_the_whole_frame() {
+        for (w, h) in [(1512u32, 948u32), (1920, 1080), (2560, 1440), (1023, 767)] {
+            let (tw, th) = (w / 2, h / 2);
+            let (ox, oy) = (tw / 5, th / 5);
+            let mut spans_x: Vec<(u32, u32)> = Vec::new();
+            let mut spans_y: Vec<(u32, u32)> = Vec::new();
+            for g in 0..2u32 {
+                spans_x.push(((g * tw).saturating_sub(ox), ((g + 1) * tw + ox).min(w)));
+                spans_y.push(((g * th).saturating_sub(oy), ((g + 1) * th + oy).min(h)));
+            }
+            // Tile 0 starts at 0, tile 1 ends at the edge, and they overlap.
+            assert_eq!(spans_x[0].0, 0, "{w}x{h}: x must start at 0");
+            assert_eq!(spans_y[0].0, 0, "{w}x{h}: y must start at 0");
+            assert_eq!(spans_x[1].1, w, "{w}x{h}: x must reach the right edge");
+            assert_eq!(spans_y[1].1, h, "{w}x{h}: y must reach the bottom edge");
+            assert!(
+                spans_x[1].0 < spans_x[0].1,
+                "{w}x{h}: horizontal gap between tiles"
+            );
+            assert!(
+                spans_y[1].0 < spans_y[0].1,
+                "{w}x{h}: vertical gap between tiles"
+            );
+        }
+    }
+
+    #[cfg(feature = "onnx-cpu")]
+    #[test]
+    fn overlapping_duplicates_are_suppressed() {
+        // Same string caught in two overlapping tiles, plus a distinct box.
+        let regions = vec![
+            ImageRegion { bbox: [100, 100, 80, 12], label: CLASSES[1], score: 0.7 },
+            ImageRegion { bbox: [102, 100, 78, 12], label: CLASSES[1], score: 0.9 },
+            ImageRegion { bbox: [400, 300, 60, 12], label: CLASSES[4], score: 0.6 },
+        ];
+        let kept = imp::suppress_overlaps(regions);
+        assert_eq!(kept.len(), 2, "near-identical boxes must collapse to one");
+        // The higher-scoring duplicate is the survivor.
+        assert!((kept[0].score - 0.9).abs() < f32::EPSILON);
+    }
+
     #[test]
     fn missing_model_path_is_unavailable() {
         let cfg = RfdetrConfig {
             model_path: PathBuf::from("/nonexistent/rfdetr.onnx"),
             input_size: 0,
             conf_threshold: 0.3,
+            tiled_inference: true,
         };
         let res = RfdetrRedactor::load(cfg);
         assert!(matches!(res, Err(RedactError::Unavailable(_))));
@@ -631,6 +775,7 @@ mod tests {
                 model_path: p,
                 input_size: 0,
                 conf_threshold: 0.3,
+                tiled_inference: true,
             };
             // This must return Err, not panic.
             let res = RfdetrRedactor::load(cfg);
@@ -659,6 +804,7 @@ mod tests {
             model_path: p.clone(),
             input_size: 0,
             conf_threshold: 0.3,
+            tiled_inference: true,
         };
         // Wrong-checksum file → ensure_model_present tries to
         // download. Network may or may not be available in CI, so
