@@ -59,6 +59,24 @@ pub(crate) fn capture_loop_silent_e2e_armed() -> bool {
         && screenpipe_engine::event_driven_capture::e2e_capture_loop_silent_fault_armed()
 }
 
+/// Debug-only profile for a healthy capture loop intentionally parked by the
+/// focus-aware scheduler. Accelerating the app threshold makes the pre-fix
+/// false alert reproducible in seconds; release builds never see this path.
+fn focus_cold_heartbeat_e2e_enabled() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        return std::env::var("SCREENPIPE_E2E_SEED")
+            .ok()
+            .is_some_and(|seeds| {
+                seeds
+                    .split(',')
+                    .any(|seed| seed.trim() == "focus-cold-heartbeat")
+            });
+    }
+    #[cfg(not(debug_assertions))]
+    false
+}
+
 /// Seconds since the last OS-level user input (keyboard/mouse/scroll), where
 /// the platform can answer cheaply. `None` on platforms without a source or
 /// on FFI failure — callers treat unknown as idle, the conservative direction
@@ -157,7 +175,7 @@ pub(crate) fn user_present_for_stale_tier(last_ui_timestamp: Option<&str>) -> bo
 ///   the engine's own gone-silent watchdog restarts the VisionManager at
 ///   ~240s. Only alert if staleness survives all of that (15 min).
 pub(crate) fn stale_stall_threshold(user_active: bool) -> u32 {
-    if capture_loop_silent_e2e_armed() {
+    if capture_loop_silent_e2e_armed() || focus_cold_heartbeat_e2e_enabled() {
         return 2;
     }
     if user_active {
