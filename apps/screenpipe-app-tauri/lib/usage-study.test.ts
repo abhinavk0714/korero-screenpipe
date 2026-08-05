@@ -9,6 +9,7 @@ import {
   markUsageStudyInviteShown,
   recordUsageStudyActiveDay,
   shouldShowUsageStudyInvite,
+  summarizeUsageStudyChats,
   USAGE_STUDY_PROMPT,
   USAGE_STUDY_STORAGE_KEY,
 } from "./usage-study";
@@ -62,6 +63,63 @@ describe("usage study invitation", () => {
     expect(USAGE_STUDY_PROMPT).toContain("Never reproduce");
     expect(USAGE_STUDY_PROMPT).toContain("Do not send or share the result automatically");
     expect(USAGE_STUDY_PROMPT).toContain("review this output before sharing");
+  });
+
+  it("summarizes Pi chats without retaining content, tool names, or arguments", () => {
+    const summary = summarizeUsageStudyChats(
+      [
+        {
+          messages: [
+            {
+              role: "user",
+              timestamp: START + DAY,
+              content: "private customer and project details",
+            },
+            {
+              role: "assistant",
+              timestamp: START + DAY,
+              content: "private AI response",
+              stoppedByUser: true,
+              contentBlocks: [
+                {
+                  type: "tool",
+                  toolCall: {
+                    toolName: "search_screenpipe",
+                    args: { query: "private search" },
+                    result: "private result",
+                    isError: false,
+                  },
+                },
+                {
+                  type: "tool",
+                  toolCall: {
+                    toolName: "gmail_private_tool_name",
+                    args: { recipient: "private@example.com" },
+                    isError: true,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      START + 8 * DAY,
+    );
+
+    expect(summary).toMatchObject({
+      active_days: 1,
+      conversations: 1,
+      user_turns: 1,
+      assistant_replies: 1,
+      tool_attempts: 2,
+      tool_failures: 1,
+      stopped_responses: 1,
+      capability_counts: { search: 1, connections: 1 },
+    });
+    const serialized = JSON.stringify(summary);
+    expect(serialized).not.toContain("private");
+    expect(serialized).not.toContain("gmail_private_tool_name");
+    expect(serialized).not.toContain("example.com");
   });
 
   it("fails closed when local invitation state is malformed", () => {

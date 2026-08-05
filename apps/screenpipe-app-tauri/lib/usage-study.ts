@@ -128,6 +128,122 @@ export function markUsageStudyGenerated(now = Date.now()): void {
   writeState({ ...readState(), generatedAt: now });
 }
 
+type UsageStudyMessage = {
+  role?: string;
+  timestamp?: number;
+  content?: string;
+  contentBlocks?: unknown[];
+  stoppedByUser?: boolean;
+  interruptedBySteer?: boolean;
+  steeredResponse?: boolean;
+};
+
+type UsageStudyConversation = {
+  messages?: UsageStudyMessage[];
+};
+
+const MAX_CHAT_FILES = 500;
+
+function toolCategory(toolName: unknown): string {
+  if (typeof toolName !== "string") return "other";
+  const name = toolName.toLowerCase();
+  if (/meeting|calendar/.test(name)) return "meetings";
+  if (/browser|navigate|web|url/.test(name)) return "browser";
+  if (/search|query|find|screenpipe|timeline|activity/.test(name)) return "search";
+  if (/pipe|schedule|automation|trigger/.test(name)) return "automation";
+  if (/gmail|email|slack|notion|connection/.test(name)) return "connections";
+  if (/memory|remember/.test(name)) return "memory";
+  if (/file|read|write|edit|document/.test(name)) return "files";
+  return "other";
+}
+
+export function summarizeUsageStudyChats(
+  conversations: UsageStudyConversation[],
+  now = Date.now(),
+) {
+  const windowEnd = new Date(now);
+  windowEnd.setHours(0, 0, 0, 0);
+  const end = windowEnd.getTime();
+  const start = end - 7 * 24 * 60 * 60 * 1000;
+  const activeDays = new Set<string>();
+  const activeConversations = new Set<number>();
+  const capabilities: Record<string, number> = {};
+  let userTurns = 0;
+  let assistantReplies = 0;
+  let toolAttempts = 0;
+  let toolFailures = 0;
+  let stoppedResponses = 0;
+  let steeredResponses = 0;
+
+  conversations.forEach((conversation, conversationIndex) => {
+    for (const message of conversation.messages ?? []) {
+      if (
+        typeof message.timestamp !== "number" ||
+        message.timestamp < start ||
+        message.timestamp >= end
+      ) {
+        continue;
+      }
+      activeConversations.add(conversationIndex);
+      activeDays.add(localDay(message.timestamp));
+      if (message.role === "user") userTurns += 1;
+      if (message.role === "assistant") {
+        const blocks = Array.isArray(message.contentBlocks)
+          ? message.contentBlocks
+          : [];
+        if ((message.content?.trim().length ?? 0) > 0 || blocks.length > 0) {
+          assistantReplies += 1;
+        }
+        if (message.stoppedByUser) stoppedResponses += 1;
+        if (message.interruptedBySteer || message.steeredResponse) {
+          steeredResponses += 1;
+        }
+        for (const block of blocks) {
+          if (!block || typeof block !== "object" || (block as any).type !== "tool") {
+            continue;
+          }
+          const toolCall = (block as any).toolCall;
+          if (!toolCall || typeof toolCall !== "object") continue;
+          toolAttempts += 1;
+          if (toolCall.isError === true) toolFailures += 1;
+          const category = toolCategory(toolCall.toolName);
+          capabilities[category] = (capabilities[category] ?? 0) + 1;
+        }
+      }
+    }
+  });
+
+  return {
+    schema_version: 1,
+    window: "previous_7_complete_local_days",
+    chat_files_scanned: Math.min(conversations.length, MAX_CHAT_FILES),
+    chat_scan_may_be_truncated: conversations.length >= MAX_CHAT_FILES,
+    active_days: activeDays.size,
+    conversations: activeConversations.size,
+    user_turns: userTurns,
+    assistant_replies: assistantReplies,
+    tool_attempts: toolAttempts,
+    tool_failures: toolFailures,
+    stopped_responses: stoppedResponses,
+    steered_responses: steeredResponses,
+    capability_counts: capabilities,
+  };
+}
+
+export async function buildUsageStudyPrompt(now = Date.now()): Promise<string> {
+  try {
+    const { loadAllConversations } = await import("@/lib/chat-storage");
+    const conversations = await loadAllConversations({
+      limit: MAX_CHAT_FILES,
+      includeHidden: true,
+    });
+    const summary = summarizeUsageStudyChats(conversations, now);
+    return `${USAGE_STUDY_PROMPT}\n\n<privacy_safe_local_pi_usage>\n${JSON.stringify(summary)}\n</privacy_safe_local_pi_usage>`;
+  } catch {
+    return `${USAGE_STUDY_PROMPT}\n\n<privacy_safe_local_pi_usage unavailable="true" />`;
+  }
+}
+
 export const USAGE_STUDY_PROMPT = `Conduct a privacy-preserving self-study of how I use screenpipe during the last 7 complete days.
 
 Purpose: help the screenpipe product team understand where screenpipe fits into my day, what outcomes I use it for, where I struggle, and whether it becomes a repeatable habit. Analyze behavior and workflow patterns, not the private contents of my work.
@@ -144,6 +260,7 @@ Strict privacy rules:
 
 Analyze:
 - active days and approximate meaningful screenpipe interactions
+- the supplied privacy-safe local Pi chat counters, including repeat chat use, coarse capability categories, stopped or steered responses, and tool failures
 - generic triggers, jobs, capabilities used, and attempted outcomes
 - useful outcomes, abandoned attempts, repeats, and workarounds
 - recurring friction, errors, slow paths, or missing capabilities
@@ -160,5 +277,6 @@ Output these sections only:
 6. Fit in my day: current role, strongest natural moment, and biggest break in the habit loop.
 7. Product feedback: most valuable capability, biggest obstacle, and smallest likely improvement.
 8. Privacy check: confirm exactly, “I excluded raw content and identifying or sensitive details. The user must still review this output before sharing.”
+9. Evidence coverage: distinguish captured activity, local Pi chat metadata, and unavailable evidence. screenpipe intentionally excludes its own UI from capture. Zero local Pi records may mean either no use or disabled/unavailable chat history, so do not infer which. Historical external MCP and product analytics are not available to this local prompt and must not be inferred; if the user shares, the team may correlate the one-time study code with content-free PostHog events.
 
 Do not send or share the result automatically. Return it only to the user for review; the user may explicitly choose to share the edited report. If evidence is insufficient, say so rather than weakening these privacy rules.`;

@@ -83,7 +83,7 @@ import { PlanExpirationNotice } from "@/components/plan-expiration-notice";
 import type { AppUser } from "@/lib/app-entitlement";
 import { ONBOARDING_BRAIN_HANDOFF_EVENT } from "@/lib/live-views/onboarding-activation";
 import { UsageStudySidebarInvite } from "@/components/usage-study-sidebar-invite";
-import { USAGE_STUDY_PROMPT } from "@/lib/usage-study";
+import { buildUsageStudyPrompt } from "@/lib/usage-study";
 
 type MainSection = "home" | "timeline" | "brain" | "pipes" | "connections" | "meetings" | "help";
 type ConnectionFocusRequest = {
@@ -1228,10 +1228,11 @@ function HomeContent() {
 
               <UsageStudySidebarInvite
                 onStart={async () => {
+                  const prompt = await buildUsageStudyPrompt();
                   setActiveSection("home");
                   await emit("chat-prefill", {
                     context: "",
-                    prompt: USAGE_STUDY_PROMPT,
+                    prompt,
                     displayLabel: "screenpipe usage study",
                     autoSend: true,
                     targetWindow: "home",

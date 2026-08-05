@@ -45,6 +45,7 @@ export function UsageStudyShare({ report }: { report: string }) {
   const [phase, setPhase] = useState<SharePhase>("review");
   const [error, setError] = useState("");
   const activeJobIdRef = useRef<string | null>(null);
+  const studyIdRef = useRef(crypto.randomUUID());
 
   useEffect(() => {
     let disposed = false;
@@ -57,8 +58,9 @@ export function UsageStudyShare({ report }: { report: string }) {
         if (payload.status === "sent") {
           setPhase("sent");
           posthog.capture("usage_study_shared", {
-            schema_version: 1,
+            schema_version: 2,
             surface: "chat_response",
+            study_id: studyIdRef.current,
           });
         } else {
           setPhase("failed");
@@ -92,7 +94,7 @@ export function UsageStudyShare({ report }: { report: string }) {
         jobId,
         identifier: getOrCreateMachineId(),
         reportType: "machine",
-        feedbackText: `[usage study]\n\n${reviewedReport}`,
+        feedbackText: `[usage study]\n[study code: ${studyIdRef.current}]\n\n${reviewedReport}`,
         includeDiagnostics: false,
         settingsJson: "",
         chatHistory: "",
@@ -157,7 +159,9 @@ export function UsageStudyShare({ report }: { report: string }) {
             </DialogTitle>
             <DialogDescription className="text-xs leading-relaxed">
               Only the edited text below, your app version, operating system,
-              and a random device identifier will be sent. No account, logs,
+              a random device identifier, and a one-time study code will be
+              sent. The code lets the team connect this report to your
+              content-free product and MCP usage analytics in PostHog. No account, logs,
               recordings, screenshots, settings, console data, or chat history.
               The report is stored in screenpipe&apos;s support database and
               posted to the private team Discord.

@@ -47,9 +47,8 @@ describe("UsageStudyShare", () => {
     render(<UsageStudyShare report="generated private report" />);
     fireEvent.click(screen.getByRole("button", { name: "review and share" }));
 
-    expect(
-      screen.getByText(/posted to the private team Discord/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/content-free product and MCP usage analytics/i))
+      .toBeInTheDocument();
 
     const send = screen.getByRole("button", { name: "send to screenpipe" });
     expect(send).toBeDisabled();
@@ -67,7 +66,9 @@ describe("UsageStudyShare", () => {
       expect.objectContaining({
         identifier: expect.any(String),
         reportType: "machine",
-        feedbackText: "[usage study]\n\nreviewed report",
+        feedbackText: expect.stringMatching(
+          /^\[usage study\]\n\[study code: [0-9a-f-]+\]\n\nreviewed report$/,
+        ),
         includeDiagnostics: false,
         settingsJson: "",
         chatHistory: "",
@@ -92,6 +93,10 @@ describe("UsageStudyShare", () => {
       expect(mocks.startFeedbackUpload).toHaveBeenCalledOnce(),
     );
     const request = mocks.startFeedbackUpload.mock.calls[0][0];
+    const studyId = request.feedbackText.match(
+      /\[study code: ([0-9a-f-]+)\]/,
+    )?.[1];
+    expect(studyId).toBeTruthy();
     act(() => {
       mocks.completionHandler?.({
         payload: {
@@ -108,5 +113,10 @@ describe("UsageStudyShare", () => {
     expect(
       await screen.findByText("sent to the screenpipe support system"),
     ).toBeInTheDocument();
+    expect(mocks.capture).toHaveBeenCalledWith("usage_study_shared", {
+      schema_version: 2,
+      surface: "chat_response",
+      study_id: studyId,
+    });
   });
 });
