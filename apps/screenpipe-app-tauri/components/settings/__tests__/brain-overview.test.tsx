@@ -1986,7 +1986,7 @@ describe("BrainOverview", () => {
       blocks: [
         {
           id: "focus-time",
-          title: "Focus time",
+          title: "Focused work",
           intent: "Calculate focused work time",
           component: "metric.v1",
           width: 6,
@@ -2031,7 +2031,15 @@ describe("BrainOverview", () => {
     fireEvent.click(screen.getByTestId("live-view-ai-generate"));
 
     expect(await screen.findByTestId("live-view-ai-review")).toBeTruthy();
-    expect(screen.getByTestId("canvas-block-habit-signals")).toBeTruthy();
+    const proposedBlock = screen.getByTestId("canvas-block-habit-signals");
+    expect(proposedBlock).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        proposedBlock.closest<HTMLElement>(
+          '[data-id="block:habit-signals"]',
+        )?.className,
+      ).toContain("selected"),
+    );
     mocks.saveBrainViewCanvas.mockClear();
     fireEvent.click(screen.getByTestId("canvas-tools-toggle"));
     fireEvent.click(screen.getByTestId("canvas-fit"));

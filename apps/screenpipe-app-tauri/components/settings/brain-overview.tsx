@@ -1600,7 +1600,10 @@ export function BrainOverview({
             ? (generated.periodPolicy ?? reference.periodPolicy)
             : null,
         );
-        setProposalFocusSlotId(proposals[0].id);
+        setProposalFocusSlotId(
+          proposals.find((proposal) => proposal.kind === "add")?.id ??
+            proposals[0].id,
+        );
       }
       posthog.capture("live_view_builder_agent_handoff_completed", {
         ...analyticsProperties,

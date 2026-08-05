@@ -472,9 +472,23 @@ export function LiveViewCanvas({
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const drawSessionRef = useRef<DrawSession | null>(null);
   const focusAnimationFrameRef = useRef<number | null>(null);
+  const focusAnimationTimeoutRef = useRef<number | null>(null);
+  const [focusViewport, setFocusViewport] = useState<Viewport | null>(null);
+  const focusViewportRef = useRef<Viewport | null>(null);
   const latestDocumentRef = useRef(document);
+  latestDocumentRef.current = document;
+  const focusBlockGeometry = useMemo(() => {
+    if (!focusSlotId) return null;
+    const block = document.blocks.find(
+      (candidate) => candidate.slotId === focusSlotId,
+    );
+    return block
+      ? `${block.slotId}:${block.x}:${block.y}:${block.width}:${block.height}`
+      : null;
+  }, [document.blocks, focusSlotId]);
   const isMountedRef = useRef(true);
   const callbacksRef = useRef({
+    onChange,
     onFeedback,
     onRegenerate,
     onAiEdit,
@@ -483,6 +497,7 @@ export function LiveViewCanvas({
     onProposalDecision,
   });
   callbacksRef.current = {
+    onChange,
     onFeedback,
     onRegenerate,
     onAiEdit,
@@ -502,10 +517,6 @@ export function LiveViewCanvas({
     };
   }, []);
 
-  useEffect(() => {
-    latestDocumentRef.current = document;
-  }, [document]);
-
   const setCanvasSelection = useCallback((next: string[]) => {
     setSelection((current) => (sameSelection(current, next) ? current : next));
   }, []);
@@ -514,19 +525,29 @@ export function LiveViewCanvas({
     (next: BrainViewCanvasDocument, persist: boolean) => {
       if (!isMountedRef.current) return;
       latestDocumentRef.current = next;
-      onChange(next, { persist });
+      callbacksRef.current.onChange(next, { persist });
     },
-    [onChange],
+    [],
   );
 
   const cancelFocusAnimation = useCallback(() => {
-    if (focusAnimationFrameRef.current === null) return;
-    window.cancelAnimationFrame(focusAnimationFrameRef.current);
-    focusAnimationFrameRef.current = null;
+    if (focusAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(focusAnimationFrameRef.current);
+      focusAnimationFrameRef.current = null;
+    }
+    if (focusAnimationTimeoutRef.current !== null) {
+      window.clearTimeout(focusAnimationTimeoutRef.current);
+      focusAnimationTimeoutRef.current = null;
+    }
+    focusViewportRef.current = null;
+    if (isMountedRef.current) setFocusViewport(null);
   }, []);
 
   useEffect(() => {
-    if (!focusSlotId) return;
+    if (!focusSlotId) {
+      cancelFocusAnimation();
+      return;
+    }
     const block = latestDocumentRef.current.blocks.find(
       (candidate) => candidate.slotId === focusSlotId,
     );
@@ -561,30 +582,63 @@ export function LiveViewCanvas({
       return;
     }
 
-    let startedAt: number | null = null;
+    const startedAt = performance.now();
+    const updateFocusViewport = (viewport: Viewport) => {
+      focusViewportRef.current = viewport;
+      setFocusViewport(viewport);
+    };
+    const finishFocusAnimation = () => {
+      if (!isMountedRef.current) return;
+      if (focusAnimationFrameRef.current !== null) {
+        window.cancelAnimationFrame(focusAnimationFrameRef.current);
+        focusAnimationFrameRef.current = null;
+      }
+      if (focusAnimationTimeoutRef.current !== null) {
+        window.clearTimeout(focusAnimationTimeoutRef.current);
+        focusAnimationTimeoutRef.current = null;
+      }
+      const viewport = interpolateCanvasFocusViewport(from, to, 1);
+      focusViewportRef.current = viewport;
+      applyDocument(
+        {
+          ...latestDocumentRef.current,
+          viewport,
+        },
+        false,
+      );
+      focusViewportRef.current = null;
+      setFocusViewport(null);
+    };
     const animate = (timestamp: number) => {
       if (!isMountedRef.current) return;
-      startedAt ??= timestamp;
       const progress = Math.min(
         1,
         (timestamp - startedAt) / PROPOSAL_FOCUS_DURATION_MS,
       );
-      applyDocument(
-        {
-          ...latestDocumentRef.current,
-          viewport: interpolateCanvasFocusViewport(from, to, progress),
-        },
-        false,
+      updateFocusViewport(
+        interpolateCanvasFocusViewport(from, to, progress),
       );
       if (progress < 1) {
         focusAnimationFrameRef.current = window.requestAnimationFrame(animate);
       } else {
-        focusAnimationFrameRef.current = null;
+        finishFocusAnimation();
       }
     };
     focusAnimationFrameRef.current = window.requestAnimationFrame(animate);
-    return cancelFocusAnimation;
-  }, [applyDocument, cancelFocusAnimation, focusSlotId, setCanvasSelection]);
+    // Background tabs and automated WebKit sessions can suspend animation
+    // frames mid-transition. Preserve smooth rAF updates in the foreground,
+    // but guarantee that focus still reaches its target on time.
+    focusAnimationTimeoutRef.current = window.setTimeout(() => {
+      focusAnimationTimeoutRef.current = null;
+      finishFocusAnimation();
+    }, PROPOSAL_FOCUS_DURATION_MS);
+  }, [
+    applyDocument,
+    cancelFocusAnimation,
+    focusBlockGeometry,
+    focusSlotId,
+    setCanvasSelection,
+  ]);
 
   useEffect(() => cancelFocusAnimation, [cancelFocusAnimation]);
 
@@ -1250,6 +1304,7 @@ export function LiveViewCanvas({
 
   const handleViewportChange = useCallback(
     (viewport: Viewport) => {
+      if (focusViewportRef.current) return;
       const current = latestDocumentRef.current;
       if (
         current.viewport.x === viewport.x &&
@@ -1307,7 +1362,7 @@ export function LiveViewCanvas({
           nodes={nodes}
           edges={edges}
           nodeTypes={CANVAS_NODE_TYPES}
-          viewport={document.viewport}
+          viewport={focusViewport ?? document.viewport}
           minZoom={0.25}
           maxZoom={2.5}
           snapToGrid
