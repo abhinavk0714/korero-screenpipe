@@ -128,8 +128,9 @@ pub struct RfdetrConfig {
     /// — keep this one permissive (default 0.10) and tighten via the
     /// policy's `min_score`.
     pub conf_threshold: f32,
-    /// Run inference on a 2×2 grid of overlapping tiles instead of the
-    /// whole frame, when the frame is much larger than `input_size`.
+    /// Additionally run inference on a 2×2 grid of overlapping tiles, on top
+    /// of the whole-frame pass, when the frame is much larger than
+    /// `input_size`.
     ///
     /// Squeezing a 1512×948 desktop into 512×512 shrinks a 14 px line of
     /// text to ~8 px, below the scale the model was trained on. Tiling
@@ -421,11 +422,25 @@ mod imp {
                 return self.infer_window(&img, 0, 0, orig_w, orig_h);
             }
 
+            // UNION of the whole frame and 2×2 tiles — the tiles ADD to the
+            // whole-frame pass, they do not replace it.
+            //
+            // This is load-bearing. The model has a narrow trained scale band.
+            // Real desktop frames sit BELOW it (a 14 px line lands at ~8 px
+            // once squeezed to 512), so tiling lifts them into band and recall
+            // rises. But content already inside the band gets magnified OUT of
+            // it by the same 1.8×, and recall collapses: measured on the
+            // planted harness, tiles alone score 56.1 % (person 25/109,
+            // address 43/107) against 95.7 % for the whole frame. Taking the
+            // union scores 96.7 % — better than either alone, because
+            // whichever pass presents a given string at the trained scale
+            // catches it.
+            //
             // 2×2 with ~20% overlap, so a PII string sitting on a seam is
             // still wholly contained in at least one tile.
             let (tw, th) = (orig_w / 2, orig_h / 2);
             let (ox, oy) = (tw / 5, th / 5);
-            let mut all: Vec<ImageRegion> = Vec::new();
+            let mut all: Vec<ImageRegion> = self.infer_window(&img, 0, 0, orig_w, orig_h)?;
             for gy in 0..2u32 {
                 for gx in 0..2u32 {
                     let x0 = (gx * tw).saturating_sub(ox);
