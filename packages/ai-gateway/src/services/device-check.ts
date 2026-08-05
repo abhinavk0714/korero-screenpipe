@@ -5,29 +5,44 @@
 import type { AuthResult, Env } from '../types';
 
 export const DEVICE_SESSION_HEADER = 'x-screenpipe-device-session';
-const SESSION_VERSION = 'v1';
+const SESSION_VERSION = 'v2';
 const SESSION_TTL_SECONDS = 15 * 60;
 const MAX_CLOCK_SKEW_SECONDS = 60;
 const MAX_DEVICE_TOKEN_BYTES = 8_192;
+const MAX_EXCHANGE_BYTES = MAX_DEVICE_TOKEN_BYTES + 2_048;
+const PROOF_DOMAIN = 'screenpipe-device-session-exchange/v1';
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-type DeviceCheckConfig = {
+export type DevicePlatform = 'macos' | 'windows' | 'linux';
+export type DeviceAssurance = 'apple' | 'software';
+export type DeviceSessionStatus = 'unconfigured' | 'missing' | DeviceAssurance | 'invalid';
+
+type AppleDeviceCheckConfig = {
 	keyId: string;
 	teamId: string;
 	privateKey: string;
-	sessionSecret: string;
 	environment: 'development' | 'production';
 };
 
 type DeviceSessionPayload = {
-	v: 1;
+	v: 2;
 	sub: string;
+	key: string;
+	platform: DevicePlatform;
+	assurance: DeviceAssurance;
 	iat: number;
 	exp: number;
 };
 
-export type DeviceSessionStatus = 'unconfigured' | 'missing' | 'valid' | 'invalid';
+export type DeviceProofRequest = {
+	platform: DevicePlatform;
+	public_key: string;
+	issued_at: number;
+	nonce: string;
+	proof: string;
+	device_token?: string;
+};
 
 function base64Url(bytes: Uint8Array): string {
 	let binary = '';
@@ -50,17 +65,15 @@ function sessionSecretFromEnv(env: Env): string | null {
 	return secret && encoder.encode(secret).length >= 32 ? secret : null;
 }
 
-function exchangeConfigFromEnv(env: Env): DeviceCheckConfig | null {
+function appleConfigFromEnv(env: Env): AppleDeviceCheckConfig | null {
 	const keyId = env.APPLE_DEVICECHECK_KEY_ID?.trim();
 	const teamId = env.APPLE_DEVICECHECK_TEAM_ID?.trim();
 	const privateKey = env.APPLE_DEVICECHECK_PRIVATE_KEY?.trim().replace(/\\n/g, '\n');
-	const sessionSecret = sessionSecretFromEnv(env);
-	if (!keyId || !teamId || !privateKey || !sessionSecret) return null;
+	if (!keyId || !teamId || !privateKey) return null;
 	return {
 		keyId,
 		teamId,
 		privateKey,
-		sessionSecret,
 		environment: env.APPLE_DEVICECHECK_ENVIRONMENT === 'development' ? 'development' : 'production',
 	};
 }
@@ -78,12 +91,17 @@ async function hmacKey(secret: string): Promise<CryptoKey> {
 	return crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
 }
 
+async function sha256(value: Uint8Array | string): Promise<Uint8Array> {
+	const bytes = typeof value === 'string' ? encoder.encode(value) : value;
+	return new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+}
+
 async function subjectDigest(userId: string): Promise<string> {
-	return base64Url(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(userId))));
+	return base64Url(await sha256(userId));
 }
 
 export async function createAppleProviderToken(
-	config: Pick<DeviceCheckConfig, 'keyId' | 'teamId' | 'privateKey'>,
+	config: Pick<AppleDeviceCheckConfig, 'keyId' | 'teamId' | 'privateKey'>,
 	nowSeconds = Math.floor(Date.now() / 1_000),
 ): Promise<string> {
 	const header = base64Url(encoder.encode(JSON.stringify({ alg: 'ES256', kid: config.keyId })));
@@ -100,7 +118,7 @@ function validDeviceToken(value: unknown): value is string {
 
 export async function validateAppleDeviceToken(
 	deviceToken: string,
-	config: DeviceCheckConfig,
+	config: AppleDeviceCheckConfig,
 	fetcher: typeof fetch = fetch,
 ): Promise<'valid' | 'invalid' | 'unavailable'> {
 	const providerToken = await createAppleProviderToken(config);
@@ -128,14 +146,70 @@ export async function validateAppleDeviceToken(
 	return 'invalid';
 }
 
+function authorizationToken(request: Request): string | null {
+	const authorization = request.headers.get('authorization');
+	const match = authorization?.match(/^(?:Bearer|Token) (\S+)$/);
+	return match?.[1] ?? null;
+}
+
+function isDevicePlatform(value: unknown): value is DevicePlatform {
+	return value === 'macos' || value === 'windows' || value === 'linux';
+}
+
+function parseProofRequest(value: unknown): DeviceProofRequest | null {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+	const candidate = value as Partial<DeviceProofRequest>;
+	if (!isDevicePlatform(candidate.platform)) return null;
+	if (typeof candidate.public_key !== 'string' || candidate.public_key.length > 128) return null;
+	if (typeof candidate.issued_at !== 'number' || !Number.isSafeInteger(candidate.issued_at)) return null;
+	if (typeof candidate.nonce !== 'string' || candidate.nonce.length > 128) return null;
+	if (typeof candidate.proof !== 'string' || candidate.proof.length > 256) return null;
+	if (candidate.device_token !== undefined && !validDeviceToken(candidate.device_token)) return null;
+	if (candidate.platform !== 'macos' && candidate.device_token !== undefined) return null;
+	return candidate as DeviceProofRequest;
+}
+
+async function proofPayload(body: DeviceProofRequest, bearer: string): Promise<Uint8Array> {
+	return encoder.encode([
+		PROOF_DOMAIN,
+		body.platform,
+		String(body.issued_at),
+		body.nonce,
+		body.public_key,
+		base64Url(await sha256(bearer)),
+	].join('\n'));
+}
+
+export async function verifyInstallationProof(
+	body: DeviceProofRequest,
+	bearer: string,
+	nowSeconds = Math.floor(Date.now() / 1_000),
+): Promise<boolean> {
+	if (Math.abs(nowSeconds - body.issued_at) > MAX_CLOCK_SKEW_SECONDS) return false;
+	try {
+		const publicKey = fromBase64Url(body.public_key);
+		const nonce = fromBase64Url(body.nonce);
+		const signature = fromBase64Url(body.proof);
+		if (publicKey.length !== 32 || nonce.length !== 24 || signature.length !== 64) return false;
+		const key = await crypto.subtle.importKey('raw', publicKey, { name: 'Ed25519' }, false, ['verify']);
+		return crypto.subtle.verify('Ed25519', key, signature, await proofPayload(body, bearer));
+	} catch {
+		return false;
+	}
+}
+
 export async function issueDeviceSession(
 	userId: string,
 	secret: string,
+	binding: { publicKey: string; platform: DevicePlatform; assurance: DeviceAssurance },
 	nowSeconds = Math.floor(Date.now() / 1_000),
 ): Promise<{ token: string; expires_at: number }> {
 	const payload: DeviceSessionPayload = {
-		v: 1,
+		v: 2,
 		sub: await subjectDigest(userId),
+		key: base64Url(await sha256(fromBase64Url(binding.publicKey))),
+		platform: binding.platform,
+		assurance: binding.assurance,
 		iat: nowSeconds,
 		exp: nowSeconds + SESSION_TTL_SECONDS,
 	};
@@ -165,14 +239,21 @@ export async function verifyDeviceSession(
 		if (!verified) return 'invalid';
 
 		const payload = JSON.parse(decoder.decode(fromBase64Url(encoded))) as Partial<DeviceSessionPayload>;
-		if (payload.v !== 1 || typeof payload.sub !== 'string' || typeof payload.iat !== 'number' || typeof payload.exp !== 'number') {
-			return 'invalid';
-		}
+		if (
+			payload.v !== 2 ||
+			typeof payload.sub !== 'string' ||
+			typeof payload.key !== 'string' ||
+			!isDevicePlatform(payload.platform) ||
+			(payload.assurance !== 'apple' && payload.assurance !== 'software') ||
+			typeof payload.iat !== 'number' ||
+			typeof payload.exp !== 'number'
+		) return 'invalid';
+		if (payload.assurance === 'apple' && payload.platform !== 'macos') return 'invalid';
 		if (payload.iat > nowSeconds + MAX_CLOCK_SKEW_SECONDS || payload.exp <= nowSeconds) return 'invalid';
 		if (payload.exp > payload.iat + SESSION_TTL_SECONDS || payload.exp > nowSeconds + SESSION_TTL_SECONDS + MAX_CLOCK_SKEW_SECONDS) {
 			return 'invalid';
 		}
-		return payload.sub === (await subjectDigest(userId)) ? 'valid' : 'invalid';
+		return payload.sub === (await subjectDigest(userId)) ? payload.assurance : 'invalid';
 	} catch {
 		return 'invalid';
 	}
@@ -190,24 +271,36 @@ function json(body: unknown, status = 200): Response {
 
 export async function handleDeviceCheckSession(request: Request, env: Env, auth: AuthResult): Promise<Response> {
 	if (!auth.userId || auth.tier === 'anonymous' || auth.service === true) {
-		return json({ error: 'device_check_requires_user' }, 401);
+		return json({ error: 'device_session_requires_user' }, 401);
 	}
-	const config = exchangeConfigFromEnv(env);
-	if (!config) return new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
+	const sessionSecret = sessionSecretFromEnv(env);
+	if (!sessionSecret) return new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
 
+	const bearer = authorizationToken(request);
+	if (!bearer) return json({ error: 'device_session_requires_user' }, 401);
 	const text = await request.text();
-	if (text.length > MAX_DEVICE_TOKEN_BYTES + 256) return json({ error: 'invalid_device_token' }, 400);
-	let deviceToken: unknown;
+	if (text.length > MAX_EXCHANGE_BYTES) return json({ error: 'invalid_device_proof' }, 400);
+	let body: DeviceProofRequest | null;
 	try {
-		deviceToken = (JSON.parse(text) as { device_token?: unknown }).device_token;
+		body = parseProofRequest(JSON.parse(text));
 	} catch {
 		return json({ error: 'invalid_json' }, 400);
 	}
-	if (!validDeviceToken(deviceToken)) return json({ error: 'invalid_device_token' }, 400);
+	if (!body || !(await verifyInstallationProof(body, bearer))) {
+		return json({ error: 'invalid_device_proof' }, 401);
+	}
 
-	const validation = await validateAppleDeviceToken(deviceToken, config);
-	if (validation === 'unavailable') return json({ error: 'device_check_unavailable' }, 503);
-	if (validation === 'invalid') return json({ error: 'invalid_device_token' }, 401);
+	let assurance: DeviceAssurance = 'software';
+	const appleConfig = appleConfigFromEnv(env);
+	if (body.platform === 'macos' && body.device_token && appleConfig) {
+		const validation = await validateAppleDeviceToken(body.device_token, appleConfig);
+		if (validation === 'invalid') return json({ error: 'invalid_device_token' }, 401);
+		if (validation === 'valid') assurance = 'apple';
+	}
 
-	return json(await issueDeviceSession(auth.userId, config.sessionSecret));
+	return json(await issueDeviceSession(
+		auth.userId,
+		sessionSecret,
+		{ publicKey: body.public_key, platform: body.platform, assurance },
+	));
 }

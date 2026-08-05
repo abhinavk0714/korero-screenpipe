@@ -6,10 +6,13 @@ import { describe, expect, it } from 'bun:test';
 import type { AuthResult, Env } from '../types';
 import {
 	createAppleProviderToken,
+	type DevicePlatform,
+	type DeviceProofRequest,
 	handleDeviceCheckSession,
 	issueDeviceSession,
 	validateAppleDeviceToken,
 	verifyDeviceSession,
+	verifyInstallationProof,
 } from './device-check';
 
 const sessionEnv = {
@@ -39,6 +42,46 @@ async function applePrivateKeyPem(): Promise<string> {
 	return `-----BEGIN PRIVATE KEY-----\n${lines}\n-----END PRIVATE KEY-----`;
 }
 
+async function installationProof(
+	platform: DevicePlatform,
+	bearer: string,
+	issuedAt = Math.floor(Date.now() / 1_000),
+	deviceToken?: string,
+): Promise<DeviceProofRequest> {
+	const key = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
+	const publicKey = Buffer.from(await crypto.subtle.exportKey('raw', key.publicKey)).toString('base64url');
+	const nonce = Buffer.from(Array.from({ length: 24 }, (_, index) => index)).toString('base64url');
+	const bearerDigest = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(bearer))).toString('base64url');
+	const payload = new TextEncoder().encode([
+		'screenpipe-device-session-exchange/v1',
+		platform,
+		String(issuedAt),
+		nonce,
+		publicKey,
+		bearerDigest,
+	].join('\n'));
+	const proof = Buffer.from(await crypto.subtle.sign('Ed25519', key.privateKey, payload)).toString('base64url');
+	return {
+		platform,
+		public_key: publicKey,
+		issued_at: issuedAt,
+		nonce,
+		proof,
+		...(deviceToken ? { device_token: deviceToken } : {}),
+	};
+}
+
+function exchangeRequest(bearer: string, body: DeviceProofRequest): Request {
+	return new Request('https://api.screenpipe.com/v1/device-check/session', {
+		method: 'POST',
+		headers: {
+			Authorization: `Bearer ${bearer}`,
+			'Content-Type': 'application/json',
+		},
+		body: JSON.stringify(body),
+	});
+}
+
 describe('DeviceCheck sessions', () => {
 	it('keeps exchange disabled without server keys but still requires user auth', async () => {
 		const request = () => new Request('https://api.screenpipe.com/v1/device-check/session', { method: 'POST' });
@@ -47,14 +90,46 @@ describe('DeviceCheck sessions', () => {
 	});
 
 	it('binds a short-lived signed session to one authenticated account', async () => {
-		const issued = await issueDeviceSession('user_a', sessionEnv.DEVICE_CHECK_SESSION_SECRET!, 1_000);
-		expect(await verifyDeviceSession(issued.token, 'user_a', sessionEnv, 1_100)).toBe('valid');
+		const issued = await issueDeviceSession(
+			'user_a',
+			sessionEnv.DEVICE_CHECK_SESSION_SECRET!,
+			{ publicKey: Buffer.alloc(32, 1).toString('base64url'), platform: 'macos', assurance: 'apple' },
+			1_000,
+		);
+		expect(await verifyDeviceSession(issued.token, 'user_a', sessionEnv, 1_100)).toBe('apple');
 		expect(await verifyDeviceSession(issued.token, 'user_b', sessionEnv, 1_100)).toBe('invalid');
 		expect(await verifyDeviceSession(issued.token, 'user_a', sessionEnv, issued.expires_at)).toBe('invalid');
 	});
 
-	it('rejects tampering and stays optional until every server binding exists', async () => {
-		const issued = await issueDeviceSession('user_a', sessionEnv.DEVICE_CHECK_SESSION_SECRET!, 1_000);
+	it('issues a software-key session to Windows and Linux without Apple configuration', async () => {
+		for (const platform of ['windows', 'linux'] as const) {
+			const proof = await installationProof(platform, 'account-token');
+			const response = await handleDeviceCheckSession(
+				exchangeRequest('account-token', proof),
+				{ DEVICE_CHECK_SESSION_SECRET: sessionEnv.DEVICE_CHECK_SESSION_SECRET } as Env,
+				userAuth,
+			);
+			expect(response.status).toBe(200);
+			const issued = await response.json() as { token: string };
+			expect(await verifyDeviceSession(issued.token, 'user_a', sessionEnv)).toBe('software');
+		}
+	});
+
+	it('binds installation proof to the bearer and rejects stale proof', async () => {
+		const now = 10_000;
+		const proof = await installationProof('windows', 'account-token', now);
+		expect(await verifyInstallationProof(proof, 'account-token', now)).toBe(true);
+		expect(await verifyInstallationProof(proof, 'stolen-token', now)).toBe(false);
+		expect(await verifyInstallationProof(proof, 'account-token', now + 61)).toBe(false);
+	});
+
+	it('rejects tampering and stays optional until the session secret exists', async () => {
+		const issued = await issueDeviceSession(
+			'user_a',
+			sessionEnv.DEVICE_CHECK_SESSION_SECRET!,
+			{ publicKey: Buffer.alloc(32, 2).toString('base64url'), platform: 'windows', assurance: 'software' },
+			1_000,
+		);
 		expect(await verifyDeviceSession(`${issued.token}x`, 'user_a', sessionEnv, 1_100)).toBe('invalid');
 		expect(await verifyDeviceSession(null, 'user_a', sessionEnv, 1_100)).toBe('missing');
 		expect(
@@ -64,7 +139,7 @@ describe('DeviceCheck sessions', () => {
 				{ DEVICE_CHECK_SESSION_SECRET: sessionEnv.DEVICE_CHECK_SESSION_SECRET } as Env,
 				1_100,
 			),
-		).toBe('valid');
+		).toBe('software');
 		expect(await verifyDeviceSession(issued.token, 'user_a', {} as Env, 1_100)).toBe('unconfigured');
 	});
 });
@@ -92,7 +167,6 @@ describe('Apple DeviceCheck validation', () => {
 				keyId: 'KEY123',
 				teamId: 'TEAM123',
 				privateKey,
-				sessionSecret: 'a'.repeat(32),
 				environment: 'development',
 			},
 			async (input, init) => {
@@ -113,7 +187,6 @@ describe('Apple DeviceCheck validation', () => {
 			keyId: 'KEY123',
 			teamId: 'TEAM123',
 			privateKey,
-			sessionSecret: 'a'.repeat(32),
 			environment: 'production' as const,
 		};
 		expect(await validateAppleDeviceToken('A'.repeat(32), config, async () => new Response(null, { status: 429 }))).toBe('unavailable');

@@ -49,6 +49,7 @@ hex = { workspace = true, optional = true }
 async-trait = { workspace = true }
 screenpipe-secrets = { path = "../screenpipe-secrets", optional = true }
 screenpipe-vault = { path = "../screenpipe-vault", optional = true }
+ed25519-dalek = { version = "2", optional = true }
 # Shared sync primitives. `upload_to_s3` delegates to
 # `screenpipe_sync::HttpPutDirect` so the retry / bytes-pool / cancellation
 # code path is the same one enterprise desktop sync uses. Gated to the cloud-sync feature so
@@ -75,7 +76,13 @@ cargo-clippy = []
 # standalone CLI builds leave it disabled.
 enterprise-build = []
 security = ["dep:regex", "dep:lazy_static"]
-secrets = ["dep:screenpipe-secrets", "dep:screenpipe-vault"]
+secrets = [
+    "dep:screenpipe-secrets",
+    "dep:screenpipe-vault",
+    "dep:ed25519-dalek",
+    "dep:sha2",
+    "dep:base64",
+]
 cloud-sync = [
     "dep:argon2",
     "dep:chacha20poly1305",

@@ -1053,7 +1053,7 @@ impl PiExecutor {
                 match crate::device_check::session(api_url, api_key_value).await {
                     Ok(session) => session,
                     Err(error) => {
-                        warn!(%error, "failed to create DeviceCheck session");
+                        warn!(%error, "failed to create desktop identity session");
                         None
                     }
                 }

@@ -1467,7 +1467,7 @@ async fn generate_ai_suggestions(
             );
         }
         Ok(None) => {}
-        Err(error) => warn!("suggestions: DeviceCheck session unavailable: {error}"),
+        Err(error) => warn!("suggestions: desktop identity session unavailable: {error}"),
     }
     let resp = request.send().await;
 

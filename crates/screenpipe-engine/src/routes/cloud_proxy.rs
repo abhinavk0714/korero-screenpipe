@@ -50,7 +50,7 @@ pub async fn chat_completions(
             );
         }
         Ok(None) => {}
-        Err(error) => warn!("cloud_proxy: DeviceCheck session unavailable: {error}"),
+        Err(error) => warn!("cloud_proxy: desktop identity session unavailable: {error}"),
     }
     let resp = match request.send().await {
         Ok(r) => r,

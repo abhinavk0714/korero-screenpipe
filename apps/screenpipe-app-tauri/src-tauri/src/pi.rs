@@ -1889,7 +1889,7 @@ async fn ensure_pi_config(
                     json!(session);
             }
             Ok(None) => {}
-            Err(error) => warn!("pi config: DeviceCheck session unavailable: {error}"),
+            Err(error) => warn!("pi config: desktop identity session unavailable: {error}"),
         }
     }
 

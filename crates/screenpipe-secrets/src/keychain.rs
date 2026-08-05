@@ -18,22 +18,28 @@ use tracing::{debug, info, warn};
 
 const SERVICE: &str = "com.screenpipe.app";
 const KEY_NAME: &str = "store-encryption-key";
+const DEVICE_IDENTITY_KEY_NAME: &str = "hosted-ai-device-identity-v1";
 
 /// Cache successful keychain keys for the process lifetime.
 static CACHED_KEY: OnceLock<Mutex<Option<[u8; 32]>>> = OnceLock::new();
+static CACHED_DEVICE_IDENTITY_KEY: OnceLock<Mutex<Option<[u8; 32]>>> = OnceLock::new();
 
 fn cache() -> &'static Mutex<Option<[u8; 32]>> {
     CACHED_KEY.get_or_init(|| Mutex::new(None))
 }
 
-fn set_cached_key(key: Option<[u8; 32]>) {
-    if let Ok(mut guard) = cache().lock() {
+fn device_identity_cache() -> &'static Mutex<Option<[u8; 32]>> {
+    CACHED_DEVICE_IDENTITY_KEY.get_or_init(|| Mutex::new(None))
+}
+
+fn set_cached_key(cache: &Mutex<Option<[u8; 32]>>, key: Option<[u8; 32]>) {
+    if let Ok(mut guard) = cache.lock() {
         *guard = key;
     }
 }
 
-fn get_cached_key() -> Option<[u8; 32]> {
-    cache().lock().ok().and_then(|guard| *guard)
+fn get_cached_key(cache: &Mutex<Option<[u8; 32]>>) -> Option<[u8; 32]> {
+    cache.lock().ok().and_then(|guard| *guard)
 }
 
 /// Result of a keychain key lookup.
@@ -86,7 +92,11 @@ pub fn is_keychain_available() -> bool {
 
 /// Retrieve the encryption key from the keychain (read-only, never triggers a modal).
 pub fn get_key() -> KeyResult {
-    if let Some(cached) = get_cached_key() {
+    get_named_key(KEY_NAME, cache())
+}
+
+fn get_named_key(key_name: &str, key_cache: &Mutex<Option<[u8; 32]>>) -> KeyResult {
+    if let Some(cached) = get_cached_key(key_cache) {
         debug!("keychain: cache hit");
         return KeyResult::Found(cached);
     }
@@ -98,13 +108,13 @@ pub fn get_key() -> KeyResult {
         return KeyResult::Unavailable;
     }
 
-    match get_password_from_keychain() {
+    match get_password_from_keychain(key_name) {
         KeychainLookup::Found(b64) => {
             let bytes = match B64.decode(&b64) {
                 Ok(b) => b,
                 Err(_) => {
                     warn!("keychain: stored key is not valid base64, treating as not found");
-                    set_cached_key(None);
+                    set_cached_key(key_cache, None);
                     return KeyResult::NotFound;
                 }
             };
@@ -113,21 +123,21 @@ pub fn get_key() -> KeyResult {
                     "keychain: stored key has wrong length ({}), treating as not found",
                     bytes.len()
                 );
-                set_cached_key(None);
+                set_cached_key(key_cache, None);
                 return KeyResult::NotFound;
             }
             let mut key = [0u8; 32];
             key.copy_from_slice(&bytes);
             debug!("keychain: retrieved existing encryption key");
-            set_cached_key(Some(key));
+            set_cached_key(key_cache, Some(key));
             KeyResult::Found(key)
         }
         KeychainLookup::NotFound => {
-            set_cached_key(None);
+            set_cached_key(key_cache, None);
             KeyResult::NotFound
         }
         KeychainLookup::AccessDenied => {
-            set_cached_key(None);
+            set_cached_key(key_cache, None);
             KeyResult::AccessDenied
         }
     }
@@ -159,10 +169,94 @@ pub fn get_key_for_read() -> Option<[u8; 32]> {
 /// On macOS this may trigger a keychain access modal.
 /// Returns None if access was denied or keychain unavailable.
 pub fn get_or_create_key() -> Option<[u8; 32]> {
-    match get_key() {
+    get_or_create_named_key(KEY_NAME, cache())
+}
+
+/// Return the stable seed used to prove possession of this desktop install.
+///
+/// The seed is separate from the encrypted-store key and is never sent to the
+/// gateway. Windows/macOS use their credential vault; Linux falls back to a
+/// mode-0600 local file when Secret Service is unavailable.
+pub fn get_or_create_device_identity_key() -> Option<[u8; 32]> {
+    let key = get_or_create_named_key(DEVICE_IDENTITY_KEY_NAME, device_identity_cache());
+    #[cfg(target_os = "linux")]
+    {
+        key.or_else(get_or_create_linux_device_identity_file)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        key
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn get_or_create_linux_device_identity_file() -> Option<[u8; 32]> {
+    use std::fs::{self, OpenOptions};
+    use std::io::{ErrorKind, Read, Write};
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    fn read_key(path: &std::path::Path) -> Option<[u8; 32]> {
+        let metadata = fs::symlink_metadata(path).ok()?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            warn!("device identity fallback is not a regular file");
+            return None;
+        }
+        if metadata.permissions().mode() & 0o077 != 0 {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).ok()?;
+        }
+        let mut file = OpenOptions::new().read(true).open(path).ok()?;
+        let mut key = [0u8; 32];
+        file.read_exact(&mut key).ok()?;
+        let mut trailing = [0u8; 1];
+        if file.read(&mut trailing).ok()? != 0 {
+            warn!("device identity fallback has an invalid length");
+            return None;
+        }
+        Some(key)
+    }
+
+    let path = dirs::data_local_dir()?
+        .join("screenpipe")
+        .join("device-identity-v1");
+    if path.exists() {
+        return read_key(&path);
+    }
+    let parent = path.parent()?;
+    fs::create_dir_all(parent).ok()?;
+    fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).ok()?;
+
+    let mut key = [0u8; 32];
+    use rand::RngCore;
+    rand::rng().fill_bytes(&mut key);
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+    {
+        Ok(mut file) => {
+            if file.write_all(&key).and_then(|_| file.sync_all()).is_err() {
+                drop(file);
+                let _ = fs::remove_file(&path);
+                warn!("failed to persist device identity fallback");
+                return None;
+            }
+            set_cached_key(device_identity_cache(), Some(key));
+            Some(key)
+        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => read_key(&path),
+        Err(_) => None,
+    }
+}
+
+fn get_or_create_named_key(
+    key_name: &str,
+    key_cache: &Mutex<Option<[u8; 32]>>,
+) -> Option<[u8; 32]> {
+    match get_named_key(key_name, key_cache) {
         KeyResult::Found(key) => return Some(key),
         KeyResult::AccessDenied => {
-            warn!("keychain: access denied — cannot create or retrieve encryption key");
+            warn!("keychain: access denied — cannot create or retrieve key");
             return None;
         }
         KeyResult::Unavailable => return None,
@@ -172,24 +266,24 @@ pub fn get_or_create_key() -> Option<[u8; 32]> {
     // Generate a new random 32-byte key
     let mut key = [0u8; 32];
     use rand::RngCore;
-    rand::thread_rng().fill_bytes(&mut key);
+    rand::rng().fill_bytes(&mut key);
 
     let b64 = B64.encode(key);
 
-    if !set_password_in_keychain(&b64) {
-        warn!("keychain: failed to store encryption key");
-        set_cached_key(None);
+    if !set_password_in_keychain(key_name, &b64) {
+        warn!("keychain: failed to store key");
+        set_cached_key(key_cache, None);
         return None;
     }
-    set_cached_key(Some(key));
-    info!("keychain: generated and stored new encryption key");
+    set_cached_key(key_cache, Some(key));
+    info!("keychain: generated and stored new key");
     Some(key)
 }
 
 /// Delete the encryption key from the keychain (for testing/reset).
 #[allow(dead_code)]
 pub fn delete_key() -> Result<(), String> {
-    set_cached_key(None);
+    set_cached_key(cache(), None);
     #[cfg(target_os = "macos")]
     {
         let status = std::process::Command::new("security")
@@ -220,9 +314,9 @@ enum KeychainLookup {
 }
 
 #[cfg(target_os = "macos")]
-fn get_password_from_keychain() -> KeychainLookup {
+fn get_password_from_keychain(key_name: &str) -> KeychainLookup {
     let output = match std::process::Command::new("security")
-        .args(["find-generic-password", "-s", SERVICE, "-a", KEY_NAME, "-w"])
+        .args(["find-generic-password", "-s", SERVICE, "-a", key_name, "-w"])
         .output()
     {
         Ok(o) => o,
@@ -251,10 +345,10 @@ fn get_password_from_keychain() -> KeychainLookup {
 }
 
 #[cfg(target_os = "macos")]
-fn set_password_in_keychain(password: &str) -> bool {
+fn set_password_in_keychain(key_name: &str, password: &str) -> bool {
     // Delete existing entry first (add-generic-password fails if it exists)
     let _ = std::process::Command::new("security")
-        .args(["delete-generic-password", "-s", SERVICE, "-a", KEY_NAME])
+        .args(["delete-generic-password", "-s", SERVICE, "-a", key_name])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
@@ -265,7 +359,7 @@ fn set_password_in_keychain(password: &str) -> bool {
             "-s",
             SERVICE,
             "-a",
-            KEY_NAME,
+            key_name,
             "-w",
             password,
             "-T",
@@ -285,8 +379,8 @@ fn set_password_in_keychain(password: &str) -> bool {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn get_password_from_keychain() -> KeychainLookup {
-    let entry = match keyring::Entry::new(SERVICE, KEY_NAME) {
+fn get_password_from_keychain(key_name: &str) -> KeychainLookup {
+    let entry = match keyring::Entry::new(SERVICE, key_name) {
         Ok(e) => e,
         Err(_) => return KeychainLookup::AccessDenied,
     };
@@ -298,8 +392,8 @@ fn get_password_from_keychain() -> KeychainLookup {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn set_password_in_keychain(password: &str) -> bool {
-    let entry = match keyring::Entry::new(SERVICE, KEY_NAME) {
+fn set_password_in_keychain(key_name: &str, password: &str) -> bool {
+    let entry = match keyring::Entry::new(SERVICE, key_name) {
         Ok(e) => e,
         Err(_) => return false,
     };

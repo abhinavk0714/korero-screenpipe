@@ -338,9 +338,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			}
 		}
 
-		// Exchange Apple's ephemeral DeviceCheck token for a short-lived session
-		// bound to the already-verified account. Missing server bindings return
-		// 204, so rolling out the desktop before gateway secrets is safe.
+		// Exchange an installation-key proof for a short-lived session bound to
+		// the already-verified account. macOS may add Apple's DeviceCheck token
+		// for stronger assurance. Missing server bindings return 204.
 		if (path === '/v1/device-check/session' && request.method === 'POST') {
 			return addCorsHeaders(await handleDeviceCheckSession(request, env, authResult));
 		}
