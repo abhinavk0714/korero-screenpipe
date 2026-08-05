@@ -144,6 +144,23 @@ const RESIZE_HANDLE_STYLE: React.CSSProperties = {
   background: "hsl(var(--background))",
 };
 
+const PROPOSAL_FOCUS_DURATION_MS = 360;
+
+export function interpolateCanvasFocusViewport(
+  from: Viewport,
+  to: Viewport,
+  progress: number,
+  reduceMotion = false,
+): Viewport {
+  const boundedProgress = Math.max(0, Math.min(1, progress));
+  const easedProgress = reduceMotion ? 1 : 1 - Math.pow(1 - boundedProgress, 3);
+  return {
+    x: from.x + (to.x - from.x) * easedProgress,
+    y: from.y + (to.y - from.y) * easedProgress,
+    zoom: from.zoom + (to.zoom - from.zoom) * easedProgress,
+  };
+}
+
 function sameSelection(left: string[], right: string[]): boolean {
   if (left.length !== right.length) return false;
   const rightIds = new Set(right);
@@ -454,6 +471,7 @@ export function LiveViewCanvas({
   );
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const drawSessionRef = useRef<DrawSession | null>(null);
+  const focusAnimationFrameRef = useRef<number | null>(null);
   const latestDocumentRef = useRef(document);
   const isMountedRef = useRef(true);
   const callbacksRef = useRef({
@@ -501,6 +519,12 @@ export function LiveViewCanvas({
     [onChange],
   );
 
+  const cancelFocusAnimation = useCallback(() => {
+    if (focusAnimationFrameRef.current === null) return;
+    window.cancelAnimationFrame(focusAnimationFrameRef.current);
+    focusAnimationFrameRef.current = null;
+  }, []);
+
   useEffect(() => {
     if (!focusSlotId) return;
     const block = latestDocumentRef.current.blocks.find(
@@ -515,17 +539,54 @@ export function LiveViewCanvas({
         (surface.height - 96) / block.height,
       ),
     );
-    const next = {
-      ...latestDocumentRef.current,
-      viewport: {
-        zoom,
-        x: surface.width / 2 - (block.x + block.width / 2) * zoom,
-        y: surface.height / 2 - (block.y + block.height / 2) * zoom,
-      },
+    const from = { ...latestDocumentRef.current.viewport };
+    const to = {
+      zoom,
+      x: surface.width / 2 - (block.x + block.width / 2) * zoom,
+      y: surface.height / 2 - (block.y + block.height / 2) * zoom,
     };
-    applyDocument(next, false);
     setCanvasSelection([canvasBlockNodeId(focusSlotId)]);
-  }, [applyDocument, focusSlotId, setCanvasSelection]);
+    cancelFocusAnimation();
+
+    const reduceMotion =
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    if (reduceMotion) {
+      applyDocument(
+        {
+          ...latestDocumentRef.current,
+          viewport: interpolateCanvasFocusViewport(from, to, 1, true),
+        },
+        false,
+      );
+      return;
+    }
+
+    let startedAt: number | null = null;
+    const animate = (timestamp: number) => {
+      if (!isMountedRef.current) return;
+      startedAt ??= timestamp;
+      const progress = Math.min(
+        1,
+        (timestamp - startedAt) / PROPOSAL_FOCUS_DURATION_MS,
+      );
+      applyDocument(
+        {
+          ...latestDocumentRef.current,
+          viewport: interpolateCanvasFocusViewport(from, to, progress),
+        },
+        false,
+      );
+      if (progress < 1) {
+        focusAnimationFrameRef.current = window.requestAnimationFrame(animate);
+      } else {
+        focusAnimationFrameRef.current = null;
+      }
+    };
+    focusAnimationFrameRef.current = window.requestAnimationFrame(animate);
+    return cancelFocusAnimation;
+  }, [applyDocument, cancelFocusAnimation, focusSlotId, setCanvasSelection]);
+
+  useEffect(() => cancelFocusAnimation, [cancelFocusAnimation]);
 
   const updateNodeGeometry = useCallback(
     (
@@ -1202,6 +1263,13 @@ export function LiveViewCanvas({
     [applyDocument],
   );
 
+  const handleMoveStart = useCallback(
+    (event: MouseEvent | TouchEvent | null) => {
+      if (event) cancelFocusAnimation();
+    },
+    [cancelFocusAnimation],
+  );
+
   const handleMoveEnd = useCallback(
     (event: MouseEvent | TouchEvent | null, viewport: Viewport) => {
       if (!event) return;
@@ -1277,6 +1345,7 @@ export function LiveViewCanvas({
             setCanvasSelection([]);
             setArrowSource(null);
           }}
+          onMoveStart={handleMoveStart}
           onViewportChange={handleViewportChange}
           onMoveEnd={handleMoveEnd}
         >

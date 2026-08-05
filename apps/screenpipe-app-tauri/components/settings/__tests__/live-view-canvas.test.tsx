@@ -5,7 +5,10 @@
 import React, { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { LiveViewCanvas } from "../live-view-canvas";
+import {
+  interpolateCanvasFocusViewport,
+  LiveViewCanvas,
+} from "../live-view-canvas";
 import { createCanvasDocument } from "@/lib/live-views/canvas-layout";
 import type {
   BrainViewCanvasDocument,
@@ -137,6 +140,21 @@ afterEach(() => {
 });
 
 describe("LiveViewCanvas", () => {
+  it("eases AI proposal focus instead of jumping and respects reduced motion", () => {
+    const from = { x: 0, y: 0, zoom: 1 };
+    const to = { x: -1_720, y: -790, zoom: 0.75 };
+
+    const halfway = interpolateCanvasFocusViewport(from, to, 0.5);
+    expect(halfway.x).toBeLessThan(from.x);
+    expect(halfway.x).toBeGreaterThan(to.x);
+    expect(halfway.y).toBeLessThan(from.y);
+    expect(halfway.y).toBeGreaterThan(to.y);
+    expect(halfway.zoom).toBeLessThan(from.zoom);
+    expect(halfway.zoom).toBeGreaterThan(to.zoom);
+    expect(interpolateCanvasFocusViewport(from, to, 1)).toEqual(to);
+    expect(interpolateCanvasFocusViewport(from, to, 0.01, true)).toEqual(to);
+  });
+
   it("keeps the source-backed Live View cards interactive inside the canvas", () => {
     render(<CanvasHarness />);
 
