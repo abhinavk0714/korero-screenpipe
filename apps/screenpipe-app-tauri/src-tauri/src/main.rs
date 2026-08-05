@@ -68,6 +68,7 @@ mod livetext;
 #[cfg(target_os = "macos")]
 mod livetext_ffi;
 mod meeting_export;
+mod mcp_runtime;
 mod meeting_live_notes;
 mod meeting_stall_notifications;
 mod oauth;

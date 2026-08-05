@@ -89,9 +89,9 @@ struct DetectedAgent {
 
 /// MCP process configuration written by the native desktop background setup.
 ///
-/// The CLI still uses `npx`, while the desktop app passes its bundled Bun path
-/// and local API key. Keeping the serializer here means both entry points use
-/// the same safe, preserving config writers.
+/// The CLI still uses `npx`, while the desktop app passes bundled Bun, a stable
+/// installed MCP entrypoint, and the local API key. Keeping the serializer here
+/// means both entry points use the same safe, preserving config writers.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct McpLaunchConfig {
     pub command: String,
@@ -402,6 +402,7 @@ fn skills_ready(layout: &AgentLayout) -> bool {
 
 fn desktop_launch_config(
     bun_path: &Path,
+    mcp_entrypoint: &Path,
     api_key: Option<&str>,
     api_url: &str,
     agent: DesktopDetectedAgent,
@@ -415,7 +416,7 @@ fn desktop_launch_config(
     }
     McpLaunchConfig {
         command: bun_path.to_string_lossy().to_string(),
-        args: vec!["x".to_string(), "screenpipe-mcp@latest".to_string()],
+        args: vec![mcp_entrypoint.to_string_lossy().to_string()],
         env,
         transport: (agent.id == "openclaw").then_some("stdio".to_string()),
     }
@@ -539,6 +540,7 @@ fn setup_desktop_agent_in(
 pub fn setup_all_detected_desktop_in(
     home: &Path,
     bun_path: &Path,
+    mcp_entrypoint: &Path,
     api_key: Option<&str>,
     api_url: &str,
 ) -> DesktopAgentSetupReport {
@@ -549,7 +551,7 @@ pub fn setup_all_detected_desktop_in(
     };
 
     for agent in detected {
-        let launch = desktop_launch_config(bun_path, api_key, api_url, agent);
+        let launch = desktop_launch_config(bun_path, mcp_entrypoint, api_key, api_url, agent);
         let skills_are_ready = match agent.skills_target {
             Some(target) => layout_in(target, home)
                 .map(|layout| skills_ready(&layout))
@@ -574,12 +576,17 @@ pub fn setup_all_detected_desktop_in(
 
 pub fn setup_all_detected_desktop(
     bun_path: &Path,
+    mcp_entrypoint: &Path,
     api_key: Option<&str>,
     api_url: &str,
 ) -> Result<DesktopAgentSetupReport> {
     let home = dirs::home_dir().context("could not resolve home dir")?;
     Ok(setup_all_detected_desktop_in(
-        &home, bun_path, api_key, api_url,
+        &home,
+        bun_path,
+        mcp_entrypoint,
+        api_key,
+        api_url,
     ))
 }
 
@@ -1822,9 +1829,11 @@ mod tests {
         std::fs::write(home.join(".codeium/windsurf/mcp_config.json"), "{}\n").unwrap();
 
         let bun = home.join("screenpipe-runtime/bun");
+        let mcp_entrypoint = home.join("mcp-runtime/screenpipe-mcp-0.19.2.js");
         let report = setup_all_detected_desktop_in(
             home,
             &bun,
+            &mcp_entrypoint,
             Some("sp-test-key"),
             "http://localhost:31337",
         );
@@ -1844,6 +1853,8 @@ mod tests {
             "command = {}",
             serde_json::to_string(&bun.to_string_lossy()).unwrap()
         )));
+        assert!(codex.contains(&mcp_entrypoint.to_string_lossy().to_string()));
+        assert!(!codex.contains("screenpipe-mcp@latest"));
         assert!(codex.contains("SCREENPIPE_LOCAL_API_KEY = \"sp-test-key\""));
         assert!(codex.contains("SCREENPIPE_MCP_CLIENT = \"codex\""));
         assert!(codex.contains("SCREENPIPE_API_URL = \"http://localhost:31337\""));
@@ -1861,6 +1872,10 @@ mod tests {
         assert_eq!(
             cursor["mcpServers"]["screenpipe"]["command"],
             bun.to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            cursor["mcpServers"]["screenpipe"]["args"],
+            serde_json::json!([mcp_entrypoint.to_string_lossy()])
         );
         assert_eq!(
             cursor["mcpServers"]["screenpipe"]["env"]["SCREENPIPE_LOCAL_API_KEY"],
@@ -1883,6 +1898,7 @@ mod tests {
         let second = setup_all_detected_desktop_in(
             home,
             &bun,
+            &mcp_entrypoint,
             Some("sp-test-key"),
             "http://localhost:31337",
         );
@@ -1924,6 +1940,7 @@ mod tests {
         let report = setup_all_detected_desktop_in(
             home,
             Path::new("/bundled/bun"),
+            Path::new("/screenpipe/mcp-runtime/screenpipe-mcp-0.19.2.js"),
             Some("current-key"),
             "http://localhost:4242",
         );
@@ -1947,14 +1964,20 @@ mod tests {
         let home = dir.path();
         std::fs::create_dir_all(home.join(".codex")).unwrap();
         let bun = Path::new("/bundled/bun");
+        let mcp_entrypoint = Path::new("/screenpipe/mcp-runtime/screenpipe-mcp-0.19.2.js");
 
-        let authenticated =
-            setup_all_detected_desktop_in(home, bun, Some("previous-key"), "http://localhost:3030");
+        let authenticated = setup_all_detected_desktop_in(
+            home,
+            bun,
+            mcp_entrypoint,
+            Some("previous-key"),
+            "http://localhost:3030",
+        );
         assert!(authenticated.failures.is_empty());
         assert_eq!(authenticated.connected, 1);
 
         let unauthenticated =
-            setup_all_detected_desktop_in(home, bun, None, "http://localhost:3030");
+            setup_all_detected_desktop_in(home, bun, mcp_entrypoint, None, "http://localhost:3030");
         assert!(unauthenticated.failures.is_empty());
         assert_eq!(unauthenticated.connected, 1);
 
@@ -1982,6 +2005,7 @@ mod tests {
         let report = setup_all_detected_desktop_in(
             home,
             Path::new("/bundled/bun"),
+            Path::new("/screenpipe/mcp-runtime/screenpipe-mcp-0.19.2.js"),
             Some("sp-key"),
             "http://localhost:3030",
         );

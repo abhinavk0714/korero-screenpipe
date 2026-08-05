@@ -35,11 +35,24 @@ describe("isStaleClaudeScreenpipeEntry", () => {
     ).toBe(true);
   });
 
-  it("does NOT flag a managed entry carrying the key and Claude attribution", () => {
+  it("flags a fully attributed bun-x entry so it migrates to the stable runtime", () => {
     expect(
       isStaleClaudeScreenpipeEntry({
         command: "/Applications/screenpipe.app/Contents/MacOS/bun",
         args: ["x", "screenpipe-mcp@latest"],
+        env: {
+          SCREENPIPE_LOCAL_API_KEY: "sp-abc",
+          SCREENPIPE_MCP_CLIENT: "claude",
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("does NOT flag the app-managed stable runtime", () => {
+    expect(
+      isStaleClaudeScreenpipeEntry({
+        command: "/Applications/screenpipe.app/Contents/MacOS/bun",
+        args: ["/Users/test/.screenpipe/mcp-runtime/screenpipe-mcp-0.19.2.js"],
         env: {
           SCREENPIPE_LOCAL_API_KEY: "sp-abc",
           SCREENPIPE_MCP_CLIENT: "claude",

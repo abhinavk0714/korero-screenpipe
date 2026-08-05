@@ -91,7 +91,7 @@ export async function detectAiTools(): Promise<ConnectAllToolId[]> {
   return detected;
 }
 
-// ─── MCP command (bundled bun + local API key) ───────────────────────────────
+// ─── MCP command (stable runtime + local API key) ───────────────────────────
 
 /**
  * Resolve the local API key for MCP configs. The fetch can race engine
@@ -118,9 +118,11 @@ async function resolveLocalApiKeyForMcp(): Promise<string | undefined> {
 }
 
 /**
- * MCP install config for screenpipe. Prefers the `bun` binary we ship with the
- * desktop app over `npx`: no Node dependency, ~3× faster cold start, absolute
- * path. `forceNpx` is for copy-paste configs aimed at users without the app.
+ * MCP install config for screenpipe. The desktop app installs one exact,
+ * self-contained package and returns bundled Bun + its stable JS entrypoint.
+ * Client startup therefore never runs a package manager or races another
+ * client in Bun's shared linker. `forceNpx` is only for copy-paste configs
+ * aimed at users without the app.
  */
 export async function buildMcpConfig(opts?: {
   forceNpx?: boolean;
@@ -134,18 +136,11 @@ export async function buildMcpConfig(opts?: {
   };
 
   if (opts?.forceNpx) return { command: "npx", args: ["-y", "screenpipe-mcp@latest"], env };
-  try {
-    const res = await commands.bunCheck();
-    if (res.status === "ok" && res.data.available && res.data.path) {
-      return { command: res.data.path, args: ["x", "screenpipe-mcp@latest"], env };
-    }
-  } catch { /* fall through to npx */ }
-  // Unintended fallback: the desktop app should always ship a bundled `bun`, so
-  // reaching here means bun couldn't be resolved. The npx config needs Node,
-  // which many users don't have — don't fail silently. Callers writing an app
-  // config surface this to the user; see handleConnect.
-  console.warn("[mcp] bundled bun not found — falling back to npx (requires Node). MCP setup may not work without Node installed.");
-  return { command: "npx", args: ["-y", "screenpipe-mcp@latest"], env };
+  const res = await commands.ensureMcpRuntime();
+  if (res.status === "error") {
+    throw new Error(res.error);
+  }
+  return { command: res.data.command, args: res.data.args, env };
 }
 
 // ─── Safe config IO (issue #5291) ────────────────────────────────────────────
@@ -544,8 +539,8 @@ const UNINSTALL_MCP: Record<ConnectAllToolId, () => Promise<void>> = {
  * Connect one tool transactionally: skills first (additive and trivially
  * reversible), then the MCP config write (the risky step — it can refuse an
  * invalid config). If the MCP step fails the skills are rolled back, so the
- * tool is left exactly as it was — never half-connected. Returns the MCP
- * command written so callers can warn about the npx fallback.
+ * tool is left exactly as it was — never half-connected. Returns the exact MCP
+ * command written so the UI can reflect the installed launch.
  */
 export async function connectAiTool(id: ConnectAllToolId): Promise<McpCommand> {
   const skillsTarget = SKILLS_TARGET[id];

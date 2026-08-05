@@ -88,16 +88,27 @@ pub fn connect_detected_ai_tools_in_background(api_auth_enabled: bool, api_port:
             let api_key = api_key.clone();
             let api_url = api_url.clone();
             match tokio::task::spawn_blocking(move || {
-                screenpipe_engine::cli::agent::setup_all_detected_desktop_in(
+                let runtime = crate::mcp_runtime::ensure_mcp_runtime_with(
+                    &bun_path,
+                    &screenpipe_core::paths::default_screenpipe_data_dir(),
+                )
+                .map_err(|error| format!("MCP runtime install failed: {error:#}"))?;
+                let entrypoint = runtime
+                    .args
+                    .first()
+                    .map(PathBuf::from)
+                    .ok_or_else(|| "MCP runtime returned no entrypoint".to_string())?;
+                Ok::<_, String>(screenpipe_engine::cli::agent::setup_all_detected_desktop_in(
                     &home,
                     &bun_path,
+                    &entrypoint,
                     api_key.as_deref(),
                     &api_url,
-                )
+                ))
             })
             .await
             {
-                Ok(report) if report.failures.is_empty() => {
+                Ok(Ok(report)) if report.failures.is_empty() => {
                     info!(
                         detected = report.detected,
                         connected = report.connected,
@@ -106,7 +117,7 @@ pub fn connect_detected_ai_tools_in_background(api_auth_enabled: bool, api_port:
                     );
                     return;
                 }
-                Ok(report) => {
+                Ok(Ok(report)) => {
                     if attempt < 3 {
                         warn!(
                             attempt,
@@ -126,6 +137,14 @@ pub fn connect_detected_ai_tools_in_background(api_auth_enabled: bool, api_port:
                     for failure in report.failures {
                         warn!(failure = %failure, "AI tool background setup could not connect one tool");
                     }
+                    return;
+                }
+                Ok(Err(error)) if attempt < 3 => {
+                    warn!(attempt, %error, "AI tool background setup failed; retrying");
+                    tokio::time::sleep(Duration::from_secs(attempt * 2)).await;
+                }
+                Ok(Err(error)) => {
+                    warn!(%error, "AI tool background setup failed");
                     return;
                 }
                 Err(error) if attempt < 3 => {

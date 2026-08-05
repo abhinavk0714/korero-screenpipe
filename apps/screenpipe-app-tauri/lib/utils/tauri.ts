@@ -38,22 +38,6 @@ async awaitSafeRestart(timeoutSecs: number | null) : Promise<string> {
     return await TAURI_INVOKE("await_safe_restart", { timeoutSecs });
 },
 /**
- * Locate the bundled bun binary so the frontend can write absolute-path
- * MCP configs (e.g. `{ command: <bun>, args: ["x", "screenpipe-mcp@latest"] }`)
- * instead of `npx -y screenpipe-mcp`. npx requires a global Node install
- * — many Claude Desktop users don't have it, and the silent first-run
- * `npx` download often blows past Claude's MCP startup timeout. Using
- * the bun we already ship sidesteps both failure modes.
- */
-async bunCheck() : Promise<Result<PiCheckResult, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("bun_check") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
  * Request Calendar permission (shows one-time macOS popup).
  * Returns "granted", "denied", or an error message.
  */
@@ -672,6 +656,14 @@ async enableKeychainEncryption() : Promise<Result<KeychainStatus, string>> {
 async enableOverlayClickThrough() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("enable_overlay_click_through") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async ensureMcpRuntime() : Promise<Result<McpRuntimeLaunch, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ensure_mcp_runtime") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -3028,6 +3020,7 @@ export type LogFile = { name: string; path: string; modified_at: number }
  * from drifting away from the values enforced by the capture engine.
  */
 export type LowDiskGuardConfig = { thresholdBytes: number; checkIntervalSeconds: number }
+export type McpRuntimeLaunch = { command: string; args: string[] }
 export type MeetingExportSummary = { job_id: string; output_path: string; frame_count: number; audio_chunk_count: number; duration_secs: number; file_size_bytes: number }
 export type MonitorDevice = { id: number; stableId: string; name: string; isDefault: boolean; width: number; height: number }
 export type NotificationActionEvent = { actionType: string | null; rawJson: string; payload: JsonValue }

@@ -121,6 +121,14 @@ export const E2E_BUN_PATH = resolve(
   'debug',
   process.platform === 'win32' ? 'bun.exe' : 'bun',
 );
+export const E2E_MCP_PACKAGE_ROOT = resolve(
+  APP_ROOT,
+  '..',
+  '..',
+  'packages',
+  'screenpipe-mcp',
+);
+export const E2E_MCP_ENTRYPOINT = resolve(E2E_MCP_PACKAGE_ROOT, 'dist', 'cli.js');
 
 export function getAppPath(): string {
   const base = resolve(APP_ROOT, 'src-tauri/target/debug');
@@ -214,6 +222,18 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
   removeSpotlightExclusion(E2E_DATA_DIR);
 
   if (backgroundAiToolsEnabled) {
+    // This lane validates the current source tree before the matching package
+    // version exists on npm. Build it locally and let the e2e-only Rust hook
+    // use that exact bundle while production exercises the pinned installer.
+    execSync('bun install --frozen-lockfile', {
+      cwd: E2E_MCP_PACKAGE_ROOT,
+      stdio: 'inherit',
+    });
+    execSync('bun run build', {
+      cwd: E2E_MCP_PACKAGE_ROOT,
+      stdio: 'inherit',
+    });
+
     // Cross-platform fake agent homes. The app's e2e-only home override keeps
     // the native background writer away from real ~/.codex and ~/.cursor.
     mkdirSync(resolve(E2E_AI_TOOLS_HOME, '.codex'), { recursive: true });
@@ -242,6 +262,7 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
         ? {
             SCREENPIPE_E2E_AI_TOOLS_HOME: E2E_AI_TOOLS_HOME,
             SCREENPIPE_E2E_BUN_PATH: E2E_BUN_PATH,
+            SCREENPIPE_E2E_MCP_ENTRYPOINT: E2E_MCP_ENTRYPOINT,
           }
         : {}),
       // When the app panics under E2E (common during early platform bring-up),
