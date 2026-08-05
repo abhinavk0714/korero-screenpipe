@@ -108,11 +108,11 @@ const PRODUCTION_VISION_WATCHDOG: VisionWatchdogConfig = VisionWatchdogConfig {
 
 fn vision_watchdog_config() -> VisionWatchdogConfig {
     #[cfg(debug_assertions)]
-    if crate::event_driven_capture::e2e_capture_loop_silent_fault_armed() {
+    if crate::event_driven_capture::e2e_capture_loop_silent_fault_started() {
         // Fast enough to exercise the complete failure → visible incident →
         // watchdog recovery path in CI, while preserving threshold ordering.
-        // The explicit arm is load-bearing: selecting the seed must not make a
-        // slow first real capture look like the injected post-baseline stall.
+        // The explicit fault-start phase is load-bearing: selecting or arming
+        // the seed must not make healthy pre-fault scheduling look stalled.
         return VisionWatchdogConfig {
             attempt_fresh_secs: 2,
             db_stale_secs: 5,

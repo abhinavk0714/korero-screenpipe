@@ -137,6 +137,12 @@ async fn e2e_park_capture_loop_once(
                 b"1",
             );
         }
+        // The arm command wakes the watcher, but the capture loop may not
+        // enter the fault until a later focus/backstop wake. Notify again only
+        // after phase 1 is observable so accelerated watchdog thresholds can
+        // never classify the healthy pre-fault interval as the injected stall.
+        #[cfg(target_os = "macos")]
+        crate::sleep_monitor::display_reconfig_notify().notify_one();
     }
 
     if E2E_CAPTURE_LOOP_SILENT_PHASE.load(Ordering::SeqCst) == 1 {
@@ -165,12 +171,22 @@ pub fn e2e_arm_capture_loop_silent_fault() -> bool {
     true
 }
 
-/// Whether the full-stack liveness probe has explicitly entered its fault
-/// window. App-side alert acceleration uses this instead of the seed alone so
-/// slow debug startup can never be mistaken for the injected incident.
+/// Whether the full-stack liveness probe has entered or completed its fault
+/// window. Threshold acceleration starts only after a capture loop actually
+/// parks (phase 1), then remains enabled through recovery (phase 2). Merely
+/// arming the probe is not enough: a healthy loop may still be waiting on its
+/// normal focus/backstop cadence.
 #[cfg(debug_assertions)]
-pub fn e2e_capture_loop_silent_fault_armed() -> bool {
-    e2e_capture_loop_silent_enabled() && E2E_CAPTURE_LOOP_SILENT_ARMED.load(Ordering::SeqCst)
+pub fn e2e_capture_loop_silent_fault_started() -> bool {
+    e2e_capture_loop_silent_enabled()
+        && e2e_capture_loop_silent_phase_started(
+            E2E_CAPTURE_LOOP_SILENT_PHASE.load(Ordering::SeqCst),
+        )
+}
+
+#[cfg(debug_assertions)]
+fn e2e_capture_loop_silent_phase_started(phase: u8) -> bool {
+    phase != 0
 }
 
 #[cfg(not(debug_assertions))]
@@ -179,7 +195,7 @@ pub fn e2e_arm_capture_loop_silent_fault() -> bool {
 }
 
 #[cfg(not(debug_assertions))]
-pub fn e2e_capture_loop_silent_fault_armed() -> bool {
+pub fn e2e_capture_loop_silent_fault_started() -> bool {
     false
 }
 
@@ -3435,6 +3451,13 @@ mod tests {
         assert!(!seed_list_has_capture_loop_silent(
             "prefix-capture-loop-silent-once"
         ));
+    }
+
+    #[test]
+    fn capture_loop_silent_acceleration_starts_after_parking_and_survives_recovery() {
+        assert!(!e2e_capture_loop_silent_phase_started(0));
+        assert!(e2e_capture_loop_silent_phase_started(1));
+        assert!(e2e_capture_loop_silent_phase_started(2));
     }
 
     #[test]

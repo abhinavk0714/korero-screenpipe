@@ -929,25 +929,25 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     // could prove sustained recovery.
     let threshold_secs = {
         #[cfg(debug_assertions)]
-        match std::env::var("SCREENPIPE_E2E_SEED").ok() {
-            Some(seeds)
-                if seeds
-                    .split(',')
-                    .any(|seed| seed.trim() == "capture-loop-silent-once") =>
-            {
+        {
+            if crate::event_driven_capture::e2e_capture_loop_silent_fault_started() {
                 4u64
+            } else {
+                match std::env::var("SCREENPIPE_E2E_SEED").ok() {
+                    // Cold loops wake on a five-second backstop. Eight seconds
+                    // keeps a healthy parked loop fresh while still
+                    // reproducing the pre-fix attempt-clock false stale
+                    // transition quickly.
+                    Some(seeds)
+                        if seeds
+                            .split(',')
+                            .any(|seed| seed.trim() == "focus-cold-heartbeat") =>
+                    {
+                        8u64
+                    }
+                    _ => 60u64,
+                }
             }
-            // Cold loops wake on a five-second backstop. Eight seconds keeps a
-            // healthy parked loop fresh while still reproducing the pre-fix
-            // attempt-clock false stale transition quickly.
-            Some(seeds)
-                if seeds
-                    .split(',')
-                    .any(|seed| seed.trim() == "focus-cold-heartbeat") =>
-            {
-                8u64
-            }
-            _ => 60u64,
         }
         #[cfg(not(debug_assertions))]
         60u64
