@@ -61,9 +61,12 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {
     getLocalApiConfig: vi.fn(async () => ({ key: "sp-test", port: 3030, auth_enabled: true })),
-    bunCheck: vi.fn(async () => ({
+    ensureMcpRuntime: vi.fn(async () => ({
       status: "ok",
-      data: { available: true, path: "/app/bun" },
+      data: {
+        command: "/app/bun",
+        args: ["/data/mcp-runtime/screenpipe-mcp-0.19.2.js"],
+      },
     })),
   },
 }));
@@ -113,6 +116,9 @@ describe("safe config IO", () => {
     expect(config.mcpServers.other.command).toBe("x");
     expect(config.theme).toBe("dark");
     expect(config.mcpServers.screenpipe.command).toBe("/app/bun");
+    expect(config.mcpServers.screenpipe.args).toEqual([
+      "/data/mcp-runtime/screenpipe-mcp-0.19.2.js",
+    ]);
     expect(config.mcpServers.screenpipe.env.SCREENPIPE_LOCAL_API_KEY).toBe("sp-test");
     expect(config.mcpServers.screenpipe.env.SCREENPIPE_MCP_CLIENT).toBe("cursor");
     expect(backupsOf(CURSOR)).toHaveLength(1);
@@ -233,6 +239,7 @@ describe("transactional connect / disconnect", () => {
     const mcp = await connectAiTool("cursor");
 
     expect(mcp.command).toBe("/app/bun");
+    expect(mcp.args).toEqual(["/data/mcp-runtime/screenpipe-mcp-0.19.2.js"]);
     expect(skillsMock.installExternalAgentSkills).toHaveBeenCalledWith("cursor");
     expect(skillsMock.removeExternalAgentSkills).not.toHaveBeenCalled();
     expect(JSON.parse(fsMock.files.get(CURSOR)!).mcpServers.screenpipe).toBeTruthy();
