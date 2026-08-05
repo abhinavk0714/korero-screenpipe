@@ -21,7 +21,7 @@ import {
   getLocalApiConfig,
   type LocalApiConfig,
 } from "../helpers/api-utils.js";
-import { invoke } from "../helpers/tauri.js";
+import { invoke, invokeOrThrow } from "../helpers/tauri.js";
 import {
   openHomeWindow,
   reloadAndWaitForHome,
@@ -83,6 +83,32 @@ async function waitForMeetingsApi(config: LocalApiConfig): Promise<void> {
       timeoutMsg: "isolated meetings API did not recover",
     },
   );
+}
+
+async function emitTranscript(
+  meetingId: number,
+  itemId: string,
+  deviceType: "input" | "output",
+  text: string,
+  finalSegment: boolean,
+  replace = true,
+): Promise<void> {
+  const event = finalSegment
+    ? "meeting-transcript-final"
+    : "meeting-transcript-delta";
+  await invokeOrThrow("plugin:event|emit", {
+    event,
+    payload: {
+      meeting_id: meetingId,
+      provider: "e2e",
+      model: "deterministic",
+      item_id: itemId,
+      device_name: `e2e-${deviceType}`,
+      device_type: deviceType,
+      ...(finalSegment ? { transcript: text } : { delta: text, replace }),
+      captured_at: new Date().toISOString(),
+    },
+  });
 }
 
 describe("meeting workspace tabs and responsive layout", function () {
@@ -155,10 +181,6 @@ describe("meeting workspace tabs and responsive layout", function () {
         ].join("\n"),
       }),
     });
-    await request(config, "/meetings/stop", {
-      method: "POST",
-      body: JSON.stringify({ id: meetingId }),
-    });
     const seeded = await request<Array<{ id: number }>>(
       config,
       "/meetings?limit=10",
@@ -168,6 +190,10 @@ describe("meeting workspace tabs and responsive layout", function () {
 
   after(async () => {
     if (!meetingId) return;
+    await request(config, "/meetings/stop", {
+      method: "POST",
+      body: JSON.stringify({ id: meetingId }),
+    }).catch(() => undefined);
     await request(config, `/meetings/${meetingId}`, { method: "DELETE" }).catch(
       () => undefined,
     );
@@ -207,10 +233,156 @@ describe("meeting workspace tabs and responsive layout", function () {
     expect(await notesTab.getAttribute("aria-selected")).toBe("true");
     expect(await editor.getText()).toContain(NOTE_MARKER);
     await transcriptTab.click();
-    await waitForTestId("meeting-transcript-surface", 10_000);
+    const transcriptSurface = await waitForTestId(
+      "meeting-transcript-surface",
+      10_000,
+    );
     expect(await transcriptTab.getAttribute("aria-selected")).toBe("true");
     expect(await editor.isExisting()).toBe(true);
     expect(await editor.isDisplayed()).toBe(false);
+
+    await emitTranscript(
+      meetingId,
+      "turn-01",
+      "output",
+      "The release should feel calm: one clear owner, one visible status, and no mystery after the meeting.",
+      true,
+    );
+    await emitTranscript(
+      meetingId,
+      "turn-02",
+      "output",
+      "The live transcript",
+      false,
+    );
+    const refiningRow = await $(
+      '[data-testid="transcript-row"][data-final="false"]',
+    );
+    await refiningRow.waitForExist({ timeout: t(5_000) });
+    const rowCountBeforeRefinement = (
+      await $$('[data-testid="transcript-row"]')
+    ).length;
+    await emitTranscript(
+      meetingId,
+      "turn-02",
+      "output",
+      " should settle in place as each phrase becomes certain.",
+      false,
+      false,
+    );
+    await browser.waitUntil(
+      async () =>
+        (await transcriptSurface.getText()).includes(
+          "The live transcript should settle in place",
+        ),
+      {
+        timeout: t(5_000),
+        timeoutMsg: "partial transcript did not refine in place",
+      },
+    );
+    expect((await $$('[data-testid="transcript-row"]')).length).toBe(
+      rowCountBeforeRefinement,
+    );
+    await emitTranscript(
+      meetingId,
+      "turn-02",
+      "output",
+      "The live transcript should settle in place as each phrase becomes certain.",
+      true,
+    );
+    await browser.waitUntil(
+      async () =>
+        (await $$('[data-testid="transcript-row"][data-final="false"]'))
+          .length === 0,
+      {
+        timeout: t(5_000),
+        timeoutMsg: "final transcript did not replace its provisional state",
+      },
+    );
+    await emitTranscript(
+      meetingId,
+      "turn-03",
+      "input",
+      "I will keep the decision and the follow-up visible together.",
+      true,
+    );
+
+    const additionalTurns: Array<{
+      id: string;
+      device: "input" | "output";
+      text: string;
+      final: boolean;
+    }> = [
+      {
+        id: "turn-04",
+        device: "output",
+        text: "Perfect. The transcript should read like a conversation, not a database export.",
+        final: true,
+      },
+      {
+        id: "turn-05",
+        device: "output",
+        text: "And the newest thought can stay visibly provisional while the words are still arriving",
+        final: false,
+      },
+      {
+        id: "turn-06",
+        device: "input",
+        text: "If I scroll up to check context, new words should never pull me away.",
+        final: true,
+      },
+      {
+        id: "turn-07",
+        device: "output",
+        text: "A small return-to-live control is enough. The reader stays in charge of the viewport.",
+        final: true,
+      },
+      {
+        id: "turn-08",
+        device: "input",
+        text: "Speaker changes should be obvious without repeating a heavy header above every sentence.",
+        final: true,
+      },
+      {
+        id: "turn-09",
+        device: "output",
+        text: "Soft grouping, steady spacing, and quiet timestamps make the stream easier to scan.",
+        final: true,
+      },
+      {
+        id: "turn-10",
+        device: "input",
+        text: "The same layout also needs to hold together in a narrow meeting window.",
+        final: true,
+      },
+      {
+        id: "turn-11",
+        device: "output",
+        text: "That gives us a transcript people can actually keep open while they take notes.",
+        final: true,
+      },
+      {
+        id: "turn-12",
+        device: "input",
+        text: "Great. I will leave this open and use it as the live record for the rest of the call.",
+        final: true,
+      },
+    ];
+    for (const turn of additionalTurns) {
+      await emitTranscript(
+        meetingId,
+        turn.id,
+        turn.device,
+        turn.text,
+        turn.final,
+      );
+    }
+
+    const pendingRow = await $(
+      '[data-testid="transcript-row"][data-final="false"]',
+    );
+    await pendingRow.waitForExist({ timeout: t(5_000) });
+    expect(await pendingRow.getText()).toContain("visibly provisional");
 
     await summaryTab.click();
     const summary = await waitForTestId("meeting-summary-surface", 10_000);
@@ -267,6 +439,40 @@ describe("meeting workspace tabs and responsive layout", function () {
     expect(await editor.isDisplayed()).toBe(true);
     expect(await editor.getText()).toContain(NOTE_MARKER);
     expect(await summaryTab.getAttribute("aria-selected")).toBe("false");
+    // Keep the hard geometry assertion at 640x560 above, then give the visual
+    // proof enough vertical room to show transcript grouping and uncertainty.
+    await setCssWindowSize(640, 800);
+    await transcriptTab.click();
+    await browser.waitUntil(
+      async () =>
+        (await transcriptTab.getAttribute("aria-selected")) === "true",
+      {
+        timeout: t(5_000),
+        timeoutMsg: "Transcript tab did not become selected for visual proof",
+      },
+    );
+    const transcriptScroller = await waitForTestId(
+      "meeting-transcript-scroll",
+      5_000,
+    );
+    await browser.pause(t(350));
+    await browser.execute((element: HTMLElement) => {
+      element.scrollTop = 0;
+      element.dispatchEvent(new Event("scroll"));
+    }, transcriptScroller);
+    await browser.waitUntil(
+      async () =>
+        ((await browser.execute(
+          (element: HTMLElement) => element.scrollTop,
+          transcriptScroller,
+        )) as number) <= 1,
+      {
+        timeout: t(5_000),
+        timeoutMsg: "transcript did not remain at the reader-selected position",
+      },
+    );
+    const followLive = await $('button[aria-label="follow live transcript"]');
+    await followLive.waitForDisplayed({ timeout: t(5_000) });
     await browser.pause(t(250));
 
     const screenshotPath = resolve(
@@ -275,5 +481,28 @@ describe("meeting workspace tabs and responsive layout", function () {
     );
     await browser.saveScreenshot(screenshotPath);
     console.log(`[visual] ${screenshotPath}`);
+
+    const readerScrollTop = (await browser.execute(
+      (element: HTMLElement) => element.scrollTop,
+      transcriptScroller,
+    )) as number;
+    await followLive.click();
+    await browser.waitUntil(
+      async () =>
+        ((await browser.execute(
+          (element: HTMLElement) => element.scrollTop,
+          transcriptScroller,
+        )) as number) >
+        readerScrollTop + 1,
+      {
+        timeout: t(5_000),
+        timeoutMsg:
+          "follow-live control did not advance toward the newest phrase",
+      },
+    );
+    await browser.waitUntil(async () => !(await followLive.isDisplayed()), {
+      timeout: t(5_000),
+      timeoutMsg: "follow-live control did not dismiss after resuming",
+    });
   });
 });

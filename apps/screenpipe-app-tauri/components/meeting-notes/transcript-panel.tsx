@@ -143,9 +143,11 @@ export interface SpeakerBlock {
   speakerId: number | null;
   speakerName: string;
   startMs: number;
+  endMs: number;
   text: string;
   segmentCount: number;
   source: "background" | "live";
+  final: boolean;
   // First chunk in the block — what SpeakerAssignPopover needs to play the
   // audio preview and call /speakers/reassign.
   firstAudioChunkId: number;
@@ -206,8 +208,9 @@ function groupBySpeaker(chunks: MeetingAudioChunk[]): SpeakerBlock[] {
       last && last.speakerId === speakerId && last.speakerName === speakerName;
     // Glue if same speaker AND within 30s of last segment — keeps long pauses
     // as paragraph breaks even when the same person is still talking.
-    if (sameSpeaker && ts - (last.startMs + last.text.length * 60) < 30_000) {
+    if (sameSpeaker && ts - last.endMs < 30_000) {
       last.text = `${last.text} ${text}`;
+      last.endMs = ts;
       last.segmentCount += 1;
     } else {
       out.push({
@@ -215,9 +218,11 @@ function groupBySpeaker(chunks: MeetingAudioChunk[]): SpeakerBlock[] {
         speakerId,
         speakerName,
         startMs: ts,
+        endMs: ts,
         text,
         segmentCount: 1,
         source: c.source ?? "background",
+        final: true,
         firstAudioChunkId: c.audioChunkId,
         firstAudioFilePath: c.audioFilePath,
       });
@@ -238,9 +243,11 @@ function liveBlockToSpeakerBlock(
     speakerId: null,
     speakerName: block.deviceType.toLowerCase() === "input" ? "me" : "speaker",
     startMs,
+    endMs: startMs,
     text,
     segmentCount: 1,
     source: "live",
+    final: block.final,
     firstAudioChunkId: 0,
     firstAudioFilePath: "",
   };
@@ -675,7 +682,13 @@ export function TranscriptPanel({
     const el = containerRef.current;
     if (!el) return;
     requestAnimationFrame(() => {
-      el.scrollTo({ top: el.scrollHeight, behavior });
+      const reducedMotion =
+        behavior === "smooth" &&
+        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      el.scrollTo({
+        top: el.scrollHeight,
+        behavior: reducedMotion ? "auto" : behavior,
+      });
       setIsFollowingLive(true);
       setHasUnseenLive(false);
     });
@@ -694,7 +707,7 @@ export function TranscriptPanel({
     if (!isOpen) return;
     setIsFollowingLive(true);
     setHasUnseenLive(false);
-  }, [isOpen, meeting.id, query]);
+  }, [isOpen, meeting.id]);
 
   useEffect(() => {
     if (searchOpen) {
@@ -940,7 +953,8 @@ export function TranscriptPanel({
         <div className="relative min-h-0 flex-1">
           <div
             ref={containerRef}
-            className="h-full overflow-y-auto [scrollbar-gutter:stable]"
+            data-testid="meeting-transcript-scroll"
+            className="h-full overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] [scroll-padding-block:24px]"
             style={{ contain: "layout paint" }}
             onScroll={handleTranscriptScroll}
           >
@@ -1012,11 +1026,18 @@ export const TranscriptRows = React.memo(function TranscriptRows({
   onSpeakerAssigned: () => void;
 }) {
   return (
-    <ol className="divide-y divide-border/50 pb-8">
-      {blocks.map((block) => (
+    <ol
+      className="space-y-0.5 px-4 pb-10 pt-3"
+      aria-label="meeting transcript"
+      aria-live="polite"
+      aria-relevant="additions text"
+    >
+      {blocks.map((block, index) => (
         <SpeakerParagraph
           key={block.key}
           block={block}
+          continuation={isSpeakerContinuation(blocks[index - 1], block)}
+          continues={isSpeakerContinuation(block, blocks[index + 1])}
           query={query}
           onSpeakerAssigned={onSpeakerAssigned}
         />
@@ -1027,62 +1048,115 @@ export const TranscriptRows = React.memo(function TranscriptRows({
 
 export const SpeakerParagraph = React.memo(function SpeakerParagraph({
   block,
+  continuation = false,
+  continues = false,
   query,
   onSpeakerAssigned,
 }: {
   block: SpeakerBlock;
+  continuation?: boolean;
+  continues?: boolean;
   query: string;
   onSpeakerAssigned: () => void;
 }) {
   const [showPlayer, setShowPlayer] = useState(false);
+  const isSelf = block.speakerName.trim().toLowerCase() === "me";
   return (
     <li
-      className="group px-4 py-2.5 hover:bg-muted/30 transition-colors"
+      className={cn("group", continuation ? "pt-0.5" : "pt-3")}
       style={{ contain: "layout paint" }}
+      data-testid="transcript-row"
+      data-final={block.final ? "true" : "false"}
     >
-      <div className="flex items-baseline gap-2 mb-1">
-        {/* Gate on chunk id, not file path: reassignment only needs a real
+      {!continuation && (
+        <div className="mb-1.5 flex items-baseline gap-2 px-1">
+          {/* Gate on chunk id, not file path: reassignment only needs a real
             audio_chunk_id. firstAudioFilePath can legitimately be empty
             (e.g. a background chunk with a corrupted file_path) without
             that blocking renaming — it's only used for playback preview. */}
-        {block.firstAudioChunkId > 0 ? (
-          <SpeakerAssignPopover
-            audioChunkId={block.firstAudioChunkId}
-            speakerId={block.speakerId ?? undefined}
-            speakerName={block.speakerName}
-            audioFilePath={block.firstAudioFilePath}
-            onAssigned={onSpeakerAssigned}
-          >
+          {block.firstAudioChunkId > 0 ? (
+            <SpeakerAssignPopover
+              audioChunkId={block.firstAudioChunkId}
+              speakerId={block.speakerId ?? undefined}
+              speakerName={block.speakerName}
+              audioFilePath={block.firstAudioFilePath}
+              onAssigned={onSpeakerAssigned}
+            >
+              <span
+                className={cn(
+                  "inline-flex cursor-pointer items-center gap-1 text-[11px] font-semibold tracking-tight hover:underline underline-offset-2",
+                  isSelf
+                    ? "text-sky-700 dark:text-sky-300"
+                    : "text-violet-700 dark:text-violet-300",
+                )}
+                title={
+                  block.speakerId != null
+                    ? `speaker #${block.speakerId} — click to rename or reassign`
+                    : "click to assign a speaker"
+                }
+              >
+                <User className="h-3 w-3 text-muted-foreground/70 self-center" />
+                <span data-testid="transcript-speaker">
+                  {block.speakerName}
+                </span>
+              </span>
+            </SpeakerAssignPopover>
+          ) : (
             <span
-              className="inline-flex items-center gap-1 text-[11px] font-medium tracking-tight text-foreground/80 hover:text-foreground hover:underline underline-offset-2 cursor-pointer"
-              title={
-                block.speakerId != null
-                  ? `speaker #${block.speakerId} — click to rename or reassign`
-                  : "click to assign a speaker"
-              }
+              className={cn(
+                "inline-flex items-center gap-1 text-[11px] font-semibold tracking-tight",
+                isSelf
+                  ? "text-sky-700 dark:text-sky-300"
+                  : "text-violet-700 dark:text-violet-300",
+              )}
             >
               <User className="h-3 w-3 text-muted-foreground/70 self-center" />
-              {block.speakerName}
+              <span data-testid="transcript-speaker">{block.speakerName}</span>
             </span>
-          </SpeakerAssignPopover>
-        ) : (
-          <span className="inline-flex items-center gap-1 text-[11px] font-medium tracking-tight text-foreground/80">
-            <User className="h-3 w-3 text-muted-foreground/70 self-center" />
-            {block.speakerName}
+          )}
+          <span
+            className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60"
+            title={transcriptTimestampFormatter.format(block.startMs)}
+          >
+            {formatClock(block.startMs)}
+          </span>
+        </div>
+      )}
+      <div
+        className={cn(
+          "relative w-fit max-w-full rounded-2xl px-3 py-2 shadow-[0_1px_0_rgb(0_0_0/0.03)] transition-colors",
+          isSelf ? "bg-sky-500/[0.09] dark:bg-sky-400/[0.11]" : "bg-muted/80",
+          continuation && "rounded-tl-md",
+          continues && "rounded-bl-md",
+          !block.final && "ring-1 ring-inset ring-foreground/5",
+          block.firstAudioFilePath && "pr-9",
+        )}
+        title={transcriptTimestampFormatter.format(block.startMs)}
+        data-testid="transcript-bubble"
+      >
+        <p
+          className={cn(
+            "whitespace-pre-wrap break-words text-[13px] font-medium leading-5",
+            block.final ? "text-foreground/90" : "text-foreground/60",
+          )}
+        >
+          <HighlightedText text={block.text} query={query} />
+        </p>
+        {!block.final && (
+          <span
+            className="absolute -right-1 -top-1 flex h-3 w-3 items-center justify-center rounded-full bg-background shadow-sm ring-1 ring-border"
+            title="transcribing partial text"
+            aria-label="transcribing partial text"
+          >
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-500 motion-reduce:animate-none" />
           </span>
         )}
-        <span
-          className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60"
-          title={transcriptTimestampFormatter.format(block.startMs)}
-        >
-          {formatClock(block.startMs)}
-        </span>
         {block.firstAudioFilePath && (
           <button
             type="button"
             onClick={() => setShowPlayer((value) => !value)}
             className={cn(
-              "ml-auto inline-flex h-5 w-5 shrink-0 items-center justify-center self-center transition-opacity",
+              "absolute right-2 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center transition-opacity",
               "text-muted-foreground hover:text-foreground",
               showPlayer
                 ? "opacity-100"
@@ -1100,17 +1174,29 @@ export const SpeakerParagraph = React.memo(function SpeakerParagraph({
           </button>
         )}
       </div>
-      <p className="text-xs leading-relaxed text-foreground/90 whitespace-pre-wrap break-words">
-        <HighlightedText text={block.text} query={query} />
-      </p>
       {showPlayer && block.firstAudioFilePath && (
-        <div className="mt-2">
+        <div className="mt-2 max-w-xl">
           <MediaComponent filePath={block.firstAudioFilePath} />
         </div>
       )}
     </li>
   );
 });
+
+const SPEAKER_RUN_MAX_GAP_MS = 30_000;
+
+export function isSpeakerContinuation(
+  previous: SpeakerBlock | undefined,
+  current: SpeakerBlock | undefined,
+): boolean {
+  if (!previous || !current) return false;
+  return (
+    previous.speakerId === current.speakerId &&
+    previous.speakerName === current.speakerName &&
+    current.startMs >= previous.endMs &&
+    current.startMs - previous.endMs <= SPEAKER_RUN_MAX_GAP_MS
+  );
+}
 
 /** Body text with case-insensitive `<mark>` runs over search matches. */
 function HighlightedText({ text, query }: { text: string; query: string }) {
