@@ -48,6 +48,10 @@ import {
   mimeFromName,
   type VideoExt,
 } from "@/lib/utils/feedback-attachments";
+import {
+  FEEDBACK_UPLOAD_COMPLETED_EVENT,
+  type FeedbackUploadCompleted,
+} from "@/lib/feedback-upload";
 
 // Read an image File and return a compressed JPEG data URL (max 1920px wide).
 // Shared by the file-picker, clipboard paste, and drag-drop entry points.
@@ -142,17 +146,6 @@ type VideoAttachment =
     };
 
 type SendPhase = "idle" | "sending" | "sent";
-
-export const FEEDBACK_UPLOAD_COMPLETED_EVENT = "feedback-upload-completed";
-
-export interface FeedbackUploadCompleted {
-  jobId: string;
-  status: "sent" | "failed";
-  message: string;
-  supportId: string | null;
-  screenshotUploaded: boolean;
-  videoUploaded: boolean;
-}
 
 export const ShareLogsButton = ({
   onComplete,
@@ -576,6 +569,7 @@ export const ShareLogsButton = ({
         identifier: settings.user?.id || machineId,
         reportType: settings.user?.id ? "user" : "machine",
         feedbackText,
+        includeDiagnostics: true,
         settingsJson,
         chatHistory: chatSection,
         consoleLog,

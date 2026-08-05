@@ -3005,7 +3005,11 @@ export type EnterpriseInstallMetadata = { install_source: string; update_manager
 export type ExcludedApp = { bundleId: string; name: string | null; icon: string | null }
 export type ExportEvent = { kind: "started"; jobId: string; request: ExportRequestInfo } | { kind: "completed"; jobId: string; request: ExportRequestInfo; summary: MeetingExportSummary } | { kind: "failed"; jobId: string; request: ExportRequestInfo; error: string }
 export type ExportRequestInfo = { meetingId: number | null; start: string | null; end: string | null; outputPath: string }
-export type FeedbackUploadRequest = { jobId: string; identifier: string; reportType: string; feedbackText: string; settingsJson: string; chatHistory: string; consoleLog: string; analyticsId: string | null; os: string; osVersion: string; appVersion: string; screenshotDataUrl: string | null; videoDataUrl: string | null; videoPath: string | null; videoExt: string | null }
+export type FeedbackUploadRequest = { jobId: string; identifier: string; reportType: string; feedbackText: string;
+/**
+ * Manual issue reports include diagnostics. Usage studies deliberately do not.
+ */
+includeDiagnostics: boolean; settingsJson: string; chatHistory: string; consoleLog: string; analyticsId: string | null; os: string; osVersion: string; appVersion: string; screenshotDataUrl: string | null; videoDataUrl: string | null; videoPath: string | null; videoExt: string | null }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: number; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 /**

@@ -161,4 +161,4 @@ Output these sections only:
 7. Product feedback: most valuable capability, biggest obstacle, and smallest likely improvement.
 8. Privacy check: confirm exactly, “I excluded raw content and identifying or sensitive details. The user must still review this output before sharing.”
 
-Do not send or share the result anywhere. If evidence is insufficient, say so rather than weakening these privacy rules.`;
+Do not send or share the result automatically. Return it only to the user for review; the user may explicitly choose to share the edited report. If evidence is insufficient, say so rather than weakening these privacy rules.`;

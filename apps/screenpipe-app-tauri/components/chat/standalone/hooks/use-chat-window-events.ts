@@ -10,10 +10,18 @@ import posthog from "posthog-js";
 import { localFetch } from "@/lib/api";
 import {
   type ChatLoadConversationPayload,
+  chatPrefillSendOptions,
   shouldHandleChatLoadConversationForWindow,
   shouldHandleChatPrefillForWindow,
 } from "@/lib/chat-utils";
-import type { ContentBlock, Message, OptimisticSteerPayload } from "@/lib/chat/types";
+import type {
+  ChatEntryCard,
+  ChatEntrySource,
+  ChatSendOptions,
+  ContentBlock,
+  Message,
+  OptimisticSteerPayload,
+} from "@/lib/chat/types";
 import { normalizeImageDataUrls } from "@/lib/chat/image-content";
 import type { ChatConversation } from "@/lib/hooks/use-settings";
 import type { AIPreset } from "@/lib/utils/tauri";
@@ -21,7 +29,7 @@ import { useChatStore } from "@/lib/stores/chat-store";
 import { useChatPrefillEvents } from "@/components/chat/standalone/hooks/use-chat-prefill-events";
 
 type SendMessageRef = React.MutableRefObject<
-  ((msg: string, displayLabel?: string, imageDataUrls?: string[]) => Promise<void>) | undefined
+  ((msg: string, displayLabel?: string, imageDataUrls?: string[], options?: ChatSendOptions) => Promise<void>) | undefined
 >;
 
 interface UsePipeGenerationCompletionOptions {
@@ -138,8 +146,10 @@ export function useChatPrefillListener({
       autoSend?: boolean;
       source?: string;
       targetWindow?: string;
+      entrySource?: ChatEntrySource;
+      entryCard?: ChatEntryCard;
     }>("chat-prefill", (event) => {
-      const { context, prompt, displayLabel, frameId, images, autoSend, source, targetWindow } = event.payload;
+      const { context, prompt, displayLabel, frameId, images, autoSend, source, targetWindow, entrySource, entryCard } = event.payload;
       const prefillImages = normalizeImageDataUrls(images);
 
       if (!shouldHandleChatPrefillForWindow({ targetWindow, autoSend }, getCurrentWindow().label)) return;
@@ -190,7 +200,12 @@ export function useChatPrefillListener({
             autoSendBypassRef.current = true;
             await new Promise((resolve) => setTimeout(resolve, 200));
             if (sendMessageRef.current) {
-              await sendMessageRef.current(fullMessage, visiblePrompt, prefillImages);
+              await sendMessageRef.current(
+                fullMessage,
+                visiblePrompt,
+                prefillImages,
+                chatPrefillSendOptions({ entrySource, entryCard }),
+              );
               setInput("");
               if (inputRef.current) inputRef.current.style.height = "auto";
             }

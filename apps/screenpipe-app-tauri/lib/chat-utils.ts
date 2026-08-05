@@ -121,8 +121,20 @@ export interface ChatPrefillData {
   images?: string[];
   autoSend?: boolean;
   source?: string;
+  /** Privacy-safe origin metadata for product-owned prompts. */
+  entrySource?: import("@/lib/chat/types").ChatEntrySource;
+  entryCard?: import("@/lib/chat/types").ChatEntryCard;
   /** Open the Home window chat instead of the Chat overlay. */
   useHomeChat?: boolean;
+}
+
+export function chatPrefillSendOptions(
+  data: Pick<ChatPrefillData, "entrySource" | "entryCard">,
+): import("@/lib/chat/types").ChatSendOptions {
+  return {
+    entrySource: data.entrySource,
+    entryCard: data.entryCard,
+  };
 }
 
 export type ChatTargetWindow = "home" | "chat";

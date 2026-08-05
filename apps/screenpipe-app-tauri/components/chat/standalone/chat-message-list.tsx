@@ -11,6 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
 import { CollapsedSteerWorkRow } from "@/components/chat/standalone/collapsed-steer-work-row";
 import { ChatResponseFeedback } from "@/components/chat/standalone/chat-response-feedback";
+import { UsageStudyShare } from "@/components/usage-study-share";
 import {
   chatResponseValueActionProperties,
   chatTelemetryContextForResponse,
@@ -245,6 +246,14 @@ export function ChatMessageList({
             const turnAggregatedCitations = citationPlan.aggregatedAfter.get(message.id);
             const messageHoverTime = formatMessageHoverTime(message.timestamp);
             const messageFullTime = formatMessageFullTime(message.timestamp);
+            const telemetryContext = message.role === "assistant"
+              ? chatTelemetryContextForResponse(visibleMessages, message.id)
+              : null;
+            const isCompletedUsageStudy =
+              telemetryContext?.entry_card === "usage_study" &&
+              telemetryContext.response_position === "initial" &&
+              !isActiveStreamingAssistantMessage &&
+              hasAssistantTextBody(message);
 
             return [
               <motion.div
@@ -394,6 +403,7 @@ export function ChatMessageList({
                       )}
                     </div>
                   )}
+                  {isCompletedUsageStudy ? <UsageStudyShare report={message.content} /> : null}
                   {!hideSupersededSteerBody && shouldShowMessageActionBar ? (
                     <>
                       {editingMessageId !== message.id && (
@@ -456,10 +466,7 @@ export function ChatMessageList({
                           {message.role === "assistant" && !hasFollowingSteeredAssistant && (
                             <ChatResponseFeedback
                               message={message}
-                              telemetryContext={chatTelemetryContextForResponse(
-                                visibleMessages,
-                                message.id,
-                              )}
+                              telemetryContext={telemetryContext!}
                             />
                           )}
                           {message.role === "assistant" && !isLoading && !hasFollowingSteeredAssistant && (

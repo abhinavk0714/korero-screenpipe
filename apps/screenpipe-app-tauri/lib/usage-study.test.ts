@@ -60,7 +60,7 @@ describe("usage study invitation", () => {
 
   it("keeps raw content and automatic sharing out of the prompt", () => {
     expect(USAGE_STUDY_PROMPT).toContain("Never reproduce");
-    expect(USAGE_STUDY_PROMPT).toContain("Do not send or share");
+    expect(USAGE_STUDY_PROMPT).toContain("Do not send or share the result automatically");
     expect(USAGE_STUDY_PROMPT).toContain("review this output before sharing");
   });
 

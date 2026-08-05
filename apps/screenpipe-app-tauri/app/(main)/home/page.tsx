@@ -82,6 +82,8 @@ import {
 import { PlanExpirationNotice } from "@/components/plan-expiration-notice";
 import type { AppUser } from "@/lib/app-entitlement";
 import { ONBOARDING_BRAIN_HANDOFF_EVENT } from "@/lib/live-views/onboarding-activation";
+import { UsageStudySidebarInvite } from "@/components/usage-study-sidebar-invite";
+import { USAGE_STUDY_PROMPT } from "@/lib/usage-study";
 
 type MainSection = "home" | "timeline" | "brain" | "pipes" | "connections" | "meetings" | "help";
 type ConnectionFocusRequest = {
@@ -1223,6 +1225,21 @@ function HomeContent() {
               />
 
               <UpdateBanner variant="sidebar" className="mb-2" />
+
+              <UsageStudySidebarInvite
+                onStart={async () => {
+                  setActiveSection("home");
+                  await emit("chat-prefill", {
+                    context: "",
+                    prompt: USAGE_STUDY_PROMPT,
+                    displayLabel: "screenpipe usage study",
+                    autoSend: true,
+                    targetWindow: "home",
+                    entrySource: "home_card",
+                    entryCard: "usage_study",
+                  });
+                }}
+              />
 
               {/* Remote surveys use this quiet, non-blocking slot when their
                   signed payload selects surface=sidebar. */}

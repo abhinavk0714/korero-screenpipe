@@ -39,6 +39,8 @@ pub struct FeedbackUploadRequest {
     pub identifier: String,
     pub report_type: String,
     pub feedback_text: String,
+    /// Manual issue reports include diagnostics. Usage studies deliberately do not.
+    pub include_diagnostics: bool,
     pub settings_json: String,
     pub chat_history: String,
     pub console_log: String,
@@ -146,6 +148,21 @@ fn validate_request(request: &FeedbackUploadRequest) -> Result<(), String> {
     }
     if !matches!(request.report_type.as_str(), "user" | "machine") {
         return Err("invalid feedback report type".to_string());
+    }
+    if !request.include_diagnostics
+        && (request.report_type != "machine"
+            || !request.settings_json.is_empty()
+            || !request.chat_history.is_empty()
+            || !request.console_log.is_empty()
+            || request.analytics_id.is_some()
+            || request.screenshot_data_url.is_some()
+            || request.video_data_url.is_some()
+            || request.video_path.is_some()
+            || request.video_ext.is_some())
+    {
+        return Err(
+            "privacy-safe feedback cannot include diagnostics or account metadata".to_string(),
+        );
     }
     if request.video_data_url.is_some() && request.video_path.is_some() {
         return Err("feedback video has multiple sources".to_string());
@@ -536,15 +553,18 @@ async fn run_feedback_upload(
 ) -> Result<UploadReceipt, String> {
     let screenshot = prepare_screenshot(request.screenshot_data_url.as_deref())?;
     let video = prepare_video(request)?;
-    let logs = collect_log_text(app).await;
-    let raw_bundle = format!(
-        "{}{}\n\n=== Browser Console Logs ===\n{}",
-        request.chat_history, logs, request.console_log
-    );
-    let redacted_logs =
+    let redacted_logs = if request.include_diagnostics {
+        let logs = collect_log_text(app).await;
+        let raw_bundle = format!(
+            "{}{}\n\n=== Browser Console Logs ===\n{}",
+            request.chat_history, logs, request.console_log
+        );
         crate::feedback_redact::redact_pii_for_feedback(raw_bundle, request.settings_json.clone())
             .await
-            .map_err(|_| "redaction failed".to_string())?;
+            .map_err(|_| "redaction failed".to_string())?
+    } else {
+        "usage study submitted without diagnostics".to_string()
+    };
 
     let client = Client::builder()
         .connect_timeout(Duration::from_secs(10))
@@ -631,6 +651,7 @@ mod tests {
             identifier: "machine-1".to_string(),
             report_type: "machine".to_string(),
             feedback_text: "the app stopped".to_string(),
+            include_diagnostics: true,
             settings_json: "{}".to_string(),
             chat_history: String::new(),
             console_log: String::new(),
@@ -677,6 +698,28 @@ mod tests {
         assert_eq!(
             validate_request(&input).unwrap_err(),
             "feedback video has multiple sources"
+        );
+    }
+
+    #[test]
+    fn privacy_safe_feedback_rejects_diagnostics_and_account_metadata() {
+        let mut input = request();
+        input.include_diagnostics = false;
+        input.settings_json.clear();
+        input.analytics_id = None;
+        assert!(validate_request(&input).is_ok());
+
+        input.chat_history = "private chat".to_string();
+        assert_eq!(
+            validate_request(&input).unwrap_err(),
+            "privacy-safe feedback cannot include diagnostics or account metadata"
+        );
+
+        input.chat_history.clear();
+        input.report_type = "user".to_string();
+        assert_eq!(
+            validate_request(&input).unwrap_err(),
+            "privacy-safe feedback cannot include diagnostics or account metadata"
         );
     }
 

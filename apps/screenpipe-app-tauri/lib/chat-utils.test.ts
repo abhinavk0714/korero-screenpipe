@@ -30,6 +30,7 @@ vi.mock("@/lib/utils/tauri", () => ({
 }));
 
 import {
+  chatPrefillSendOptions,
   clearSearchOpenedFromChatSurface,
   markSearchOpenedFromChatSurface,
   openChatConversationInCurrentChatSurface,
@@ -150,6 +151,15 @@ describe("chat-utils", () => {
 });
 
 describe("shouldHandleChatPrefillForWindow", () => {
+  it("preserves privacy-safe entry metadata for the usage-study response", () => {
+    expect(
+      chatPrefillSendOptions({
+        entrySource: "home_card",
+        entryCard: "usage_study",
+      }),
+    ).toEqual({ entrySource: "home_card", entryCard: "usage_study" });
+  });
+
   it("routes a targeted prefill to only its target window", () => {
     expect(shouldHandleChatPrefillForWindow({ targetWindow: "chat", autoSend: true }, "chat")).toBe(true);
     expect(shouldHandleChatPrefillForWindow({ targetWindow: "chat", autoSend: true }, "home")).toBe(false);
