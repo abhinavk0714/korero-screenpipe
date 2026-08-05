@@ -149,7 +149,8 @@ function toolCategory(toolName: unknown): string {
   const name = toolName.toLowerCase();
   if (/meeting|calendar/.test(name)) return "meetings";
   if (/browser|navigate|web|url/.test(name)) return "browser";
-  if (/search|query|find|screenpipe|timeline|activity/.test(name)) return "search";
+  if (/search|query|find|screenpipe|timeline|activity/.test(name))
+    return "search";
   if (/pipe|schedule|automation|trigger/.test(name)) return "automation";
   if (/gmail|email|slack|notion|connection/.test(name)) return "connections";
   if (/memory|remember/.test(name)) return "memory";
@@ -199,7 +200,11 @@ export function summarizeUsageStudyChats(
           steeredResponses += 1;
         }
         for (const block of blocks) {
-          if (!block || typeof block !== "object" || (block as any).type !== "tool") {
+          if (
+            !block ||
+            typeof block !== "object" ||
+            (block as any).type !== "tool"
+          ) {
             continue;
           }
           const toolCall = (block as any).toolCall;

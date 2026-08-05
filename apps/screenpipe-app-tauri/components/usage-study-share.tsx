@@ -124,7 +124,9 @@ export function UsageStudyShare({ report }: { report: string }) {
     } catch (cause) {
       activeJobIdRef.current = null;
       setPhase("failed");
-      setError(cause instanceof Error ? cause.message : "could not send the study");
+      setError(
+        cause instanceof Error ? cause.message : "could not send the study",
+      );
     }
   };
 
@@ -158,10 +160,10 @@ export function UsageStudyShare({ report }: { report: string }) {
               review usage study
             </DialogTitle>
             <DialogDescription className="text-xs leading-relaxed">
-              Only the edited text below, your app version, operating system,
-              a random device identifier, and a one-time study code will be
-              sent. The code lets the team connect this report to your
-              content-free product and MCP usage analytics in PostHog. No account, logs,
+              Only the edited text below, your app version, operating system, a
+              random device identifier, and a one-time study code will be sent.
+              The code lets the team connect this report to your content-free
+              product and MCP usage analytics in PostHog. No account, logs,
               recordings, screenshots, settings, console data, or chat history.
               The report is stored in screenpipe&apos;s support database and
               posted to the private team Discord.
