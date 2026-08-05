@@ -184,7 +184,7 @@ pub fn e2e_capture_loop_silent_fault_started() -> bool {
         )
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, test))]
 fn e2e_capture_loop_silent_phase_started(phase: u8) -> bool {
     phase != 0
 }
