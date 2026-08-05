@@ -41,6 +41,7 @@ interface TranscriptPanelProps {
   meeting: MeetingRecord;
   isOpen: boolean;
   onClose: () => void;
+  mode?: "drawer" | "surface";
   /** Refetch when the meeting is live so new chunks appear. */
   isLive: boolean;
   /** Incremented by the parent after a meeting-level retranscribe finishes. */
@@ -64,7 +65,10 @@ function clampPanelHeight(height: number): number {
     typeof window !== "undefined"
       ? Math.round(window.innerHeight * MAX_PANEL_HEIGHT_FRACTION)
       : 600;
-  return Math.max(MIN_PANEL_HEIGHT_PX, Math.min(height, Math.max(max, MIN_PANEL_HEIGHT_PX)));
+  return Math.max(
+    MIN_PANEL_HEIGHT_PX,
+    Math.min(height, Math.max(max, MIN_PANEL_HEIGHT_PX)),
+  );
 }
 
 function loadStoredPanelHeight(): number | null {
@@ -77,8 +81,7 @@ function loadStoredPanelHeight(): number | null {
 
 function isNearBottom(el: HTMLDivElement): boolean {
   return (
-    el.scrollHeight - el.scrollTop - el.clientHeight <=
-    AUTO_FOLLOW_THRESHOLD_PX
+    el.scrollHeight - el.scrollTop - el.clientHeight <= AUTO_FOLLOW_THRESHOLD_PX
   );
 }
 
@@ -183,8 +186,7 @@ function sortChunks(chunks: MeetingAudioChunk[]): MeetingAudioChunk[] {
 function compareBlocks(a: SpeakerBlock, b: SpeakerBlock): number {
   const byTime = a.startMs - b.startMs;
   if (byTime !== 0) return byTime;
-  const rank = (source: SpeakerBlock["source"]) =>
-    source === "live" ? 0 : 1;
+  const rank = (source: SpeakerBlock["source"]) => (source === "live" ? 0 : 1);
   const bySource = rank(a.source) - rank(b.source);
   if (bySource !== 0) return bySource;
   return a.key.localeCompare(b.key);
@@ -201,9 +203,7 @@ function groupBySpeaker(chunks: MeetingAudioChunk[]): SpeakerBlock[] {
     const speakerId = c.speakerId;
     const last = out[out.length - 1];
     const sameSpeaker =
-      last &&
-      last.speakerId === speakerId &&
-      last.speakerName === speakerName;
+      last && last.speakerId === speakerId && last.speakerName === speakerName;
     // Glue if same speaker AND within 30s of last segment — keeps long pauses
     // as paragraph breaks even when the same person is still talking.
     if (sameSpeaker && ts - (last.startMs + last.text.length * 60) < 30_000) {
@@ -288,6 +288,7 @@ export function TranscriptPanel({
   meeting,
   isOpen,
   onClose,
+  mode = "drawer",
   isLive,
   refreshKey = 0,
   headerActions,
@@ -325,7 +326,9 @@ export function TranscriptPanel({
     if (!state) return;
     // The drawer is docked above the control row and grows upward, so dragging
     // the grip up (smaller clientY) makes it taller.
-    setPanelHeight(clampPanelHeight(state.startHeight + (state.startY - e.clientY)));
+    setPanelHeight(
+      clampPanelHeight(state.startHeight + (state.startY - e.clientY)),
+    );
   }, []);
 
   const handleResizeEnd = useCallback(() => {
@@ -351,9 +354,7 @@ export function TranscriptPanel({
       // First drag from the default class height: measure the rendered panel so
       // resizing starts from where the eye sees it, not a guess.
       const startHeight =
-        panelHeight ??
-        panelRef.current?.getBoundingClientRect().height ??
-        360;
+        panelHeight ?? panelRef.current?.getBoundingClientRect().height ?? 360;
       resizeStateRef.current = { startY: e.clientY, startHeight };
       setIsResizing(true);
       window.addEventListener("pointermove", handleResizeMove);
@@ -378,11 +379,11 @@ export function TranscriptPanel({
       if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
       e.preventDefault();
       const base =
-        panelHeight ??
-        panelRef.current?.getBoundingClientRect().height ??
-        360;
+        panelHeight ?? panelRef.current?.getBoundingClientRect().height ?? 360;
       const step = e.shiftKey ? 40 : 16;
-      const next = clampPanelHeight(base + (e.key === "ArrowUp" ? step : -step));
+      const next = clampPanelHeight(
+        base + (e.key === "ArrowUp" ? step : -step),
+      );
       setPanelHeight(next);
       if (typeof window !== "undefined") {
         window.localStorage.setItem(PANEL_HEIGHT_STORAGE_KEY, String(next));
@@ -778,6 +779,7 @@ export function TranscriptPanel({
   // Honor the user-dragged height only once there's real content — the empty
   // state stays compact (108px) so it isn't a tall blank box.
   const useCustomHeight = isOpen && !compactEmptyState && panelHeight != null;
+  const isSurface = mode === "surface";
   const showSearch = displayBlocks.length > 0 || Boolean(query.trim());
   const showFollowButton =
     isLive && !query.trim() && hasTranscriptContent && !isFollowingLive;
@@ -799,28 +801,42 @@ export function TranscriptPanel({
           closes via the keyboard handler below. */}
       <div
         ref={panelRef}
+        id={isSurface ? "meeting-panel-transcript" : undefined}
+        role={isSurface ? "tabpanel" : undefined}
+        aria-labelledby={isSurface ? "meeting-tab-transcript" : undefined}
+        data-testid={isSurface ? "meeting-transcript-surface" : undefined}
         className={cn(
-          "mb-3 flex flex-col border border-border bg-background",
+          "flex min-h-0 flex-col bg-background",
+          isSurface ? "h-full" : "mb-3 border border-border",
           // No transition while dragging so height tracks the pointer 1:1.
-          !isResizing && "transition-all duration-200 ease-out",
+          !isSurface && !isResizing && "transition-all duration-200 ease-out",
           !isOpen && "hidden",
-          isOpen && compactEmptyState && "min-h-[108px] translate-y-0 opacity-100",
           isOpen &&
+            !isSurface &&
+            compactEmptyState &&
+            "min-h-[108px] translate-y-0 opacity-100",
+          isOpen &&
+            !isSurface &&
             !compactEmptyState &&
             !useCustomHeight &&
             "h-[min(42vh,360px)] min-h-[220px] translate-y-0 opacity-100",
           isOpen &&
+            !isSurface &&
             !compactEmptyState &&
             useCustomHeight &&
             "min-h-0 translate-y-0 opacity-100",
         )}
-        style={useCustomHeight ? { height: panelHeight ?? undefined } : undefined}
+        style={
+          !isSurface && useCustomHeight
+            ? { height: panelHeight ?? undefined }
+            : undefined
+        }
         aria-hidden={!isOpen}
         onKeyDown={(e) => {
           if (e.key === "Escape") onClose();
         }}
       >
-        {!compactEmptyState && (
+        {!isSurface && !compactEmptyState && (
           <div
             role="separator"
             aria-orientation="horizontal"
@@ -900,15 +916,17 @@ export function TranscriptPanel({
                 <Copy className="h-3.5 w-3.5" />
               )}
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onClose}
-              className="h-7 w-7 p-0"
-              title="close transcript"
-            >
-              <X className="h-3.5 w-3.5" />
-            </Button>
+            {!isSurface && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onClose}
+                className="h-7 w-7 p-0"
+                title="close transcript"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            )}
           </div>
         </header>
 
@@ -922,7 +940,7 @@ export function TranscriptPanel({
         <div className="relative min-h-0 flex-1">
           <div
             ref={containerRef}
-            className="h-full overflow-y-auto"
+            className="h-full overflow-y-auto [scrollbar-gutter:stable]"
             style={{ contain: "layout paint" }}
             onScroll={handleTranscriptScroll}
           >
