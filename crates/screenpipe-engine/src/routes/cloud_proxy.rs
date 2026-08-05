@@ -12,7 +12,7 @@
 use axum::{
     body::Body,
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{header::CONTENT_TYPE, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use std::sync::Arc;
@@ -20,29 +20,55 @@ use tracing::warn;
 
 use crate::server::AppState;
 
-const CLOUD_BASE_URL: &str = "https://api.screenpipe.com";
-
 pub async fn chat_completions(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     body: axum::body::Bytes,
+) -> Response {
+    proxy_hosted_ai(state, headers, body, "chat/completions").await
+}
+
+pub async fn web_search(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    proxy_hosted_ai(state, headers, body, "web-search").await
+}
+
+async fn proxy_hosted_ai(
+    state: Arc<AppState>,
+    incoming_headers: HeaderMap,
+    body: axum::body::Bytes,
+    upstream_path: &str,
 ) -> Response {
     let token = state.cloud_token.load();
     let Some(token) = (**token).clone().filter(|t| !t.is_empty()) else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            r#"{"error":"cloud_token_missing","message":"sign in to screenpipe to use cloud media analysis"}"#,
+            r#"{"error":"cloud_token_missing","message":"sign in to screenpipe to use hosted AI"}"#,
         )
             .into_response();
     };
 
-    let url = format!("{}/v1/chat/completions", CLOUD_BASE_URL);
+    let gateway = state.cloud_gateway_url.trim_end_matches('/');
+    let url = format!("{gateway}/{upstream_path}");
     let client = reqwest::Client::new();
     let mut request = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
         .body(body);
-    match screenpipe_core::device_check::session(&format!("{CLOUD_BASE_URL}/v1"), &token).await {
+    for name in [
+        "x-screenpipe-latency",
+        "x-session-affinity",
+        "x-screenpipe-session-id",
+    ] {
+        if let Some(value) = incoming_headers.get(name) {
+            request = request.header(name, value);
+        }
+    }
+    match screenpipe_core::device_check::session(gateway, &token).await {
         Ok(Some(session)) => {
             request = request.header(
                 screenpipe_core::device_check::DEVICE_SESSION_HEADER,
@@ -67,7 +93,7 @@ pub async fn chat_completions(
     let status = resp.status();
     let mut headers = HeaderMap::new();
     if let Some(ct) = resp.headers().get(reqwest::header::CONTENT_TYPE) {
-        headers.insert(axum::http::header::CONTENT_TYPE, ct.clone());
+        headers.insert(CONTENT_TYPE, ct.clone());
     }
     let stream = resp.bytes_stream();
     let body = Body::from_stream(stream);

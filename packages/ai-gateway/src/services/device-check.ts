@@ -17,6 +17,26 @@ const decoder = new TextDecoder();
 export type DevicePlatform = 'macos' | 'windows' | 'linux';
 export type DeviceAssurance = 'apple' | 'software';
 export type DeviceSessionStatus = 'unconfigured' | 'missing' | DeviceAssurance | 'invalid';
+export type DeviceSessionEnforcementMode = 'shadow' | 'enforce';
+export type DeviceSessionVerification = {
+	status: DeviceSessionStatus;
+	platform?: DevicePlatform;
+};
+
+const PROTECTED_ROUTES = new Set([
+	'POST /v1/chat/completions',
+	'POST /v1/web-search',
+	'POST /v1/listen',
+	'GET /v1/realtime',
+	'POST /v1/tinfoil/chat/completions',
+	'POST /v1/tinfoil/responses',
+	'POST /v1/voice/transcribe',
+	'POST /v1/voice/query',
+	'POST /v1/text-to-speech',
+	'POST /v1/voice/chat',
+	'POST /v1/messages',
+	'POST /anthropic/v1/messages',
+]);
 
 type AppleDeviceCheckConfig = {
 	keyId: string;
@@ -221,22 +241,22 @@ export async function issueDeviceSession(
 	};
 }
 
-export async function verifyDeviceSession(
+export async function verifyDeviceSessionDetails(
 	token: string | null,
 	userId: string,
 	env: Env,
 	nowSeconds = Math.floor(Date.now() / 1_000),
-): Promise<DeviceSessionStatus> {
+): Promise<DeviceSessionVerification> {
 	const sessionSecret = sessionSecretFromEnv(env);
-	if (!sessionSecret) return 'unconfigured';
-	if (!token) return 'missing';
+	if (!sessionSecret) return { status: 'unconfigured' };
+	if (!token) return { status: 'missing' };
 
 	try {
 		const [version, encoded, signatureText, extra] = token.split('.');
-		if (version !== SESSION_VERSION || !encoded || !signatureText || extra !== undefined) return 'invalid';
+		if (version !== SESSION_VERSION || !encoded || !signatureText || extra !== undefined) return { status: 'invalid' };
 		const signature = fromBase64Url(signatureText);
 		const verified = await crypto.subtle.verify('HMAC', await hmacKey(sessionSecret), signature, encoder.encode(encoded));
-		if (!verified) return 'invalid';
+		if (!verified) return { status: 'invalid' };
 
 		const payload = JSON.parse(decoder.decode(fromBase64Url(encoded))) as Partial<DeviceSessionPayload>;
 		if (
@@ -247,16 +267,27 @@ export async function verifyDeviceSession(
 			(payload.assurance !== 'apple' && payload.assurance !== 'software') ||
 			typeof payload.iat !== 'number' ||
 			typeof payload.exp !== 'number'
-		) return 'invalid';
-		if (payload.assurance === 'apple' && payload.platform !== 'macos') return 'invalid';
-		if (payload.iat > nowSeconds + MAX_CLOCK_SKEW_SECONDS || payload.exp <= nowSeconds) return 'invalid';
+		) return { status: 'invalid' };
+		if (payload.assurance === 'apple' && payload.platform !== 'macos') return { status: 'invalid' };
+		if (payload.iat > nowSeconds + MAX_CLOCK_SKEW_SECONDS || payload.exp <= nowSeconds) return { status: 'invalid' };
 		if (payload.exp > payload.iat + SESSION_TTL_SECONDS || payload.exp > nowSeconds + SESSION_TTL_SECONDS + MAX_CLOCK_SKEW_SECONDS) {
-			return 'invalid';
+			return { status: 'invalid' };
 		}
-		return payload.sub === (await subjectDigest(userId)) ? payload.assurance : 'invalid';
+		return payload.sub === (await subjectDigest(userId))
+			? { status: payload.assurance, platform: payload.platform }
+			: { status: 'invalid' };
 	} catch {
-		return 'invalid';
+		return { status: 'invalid' };
 	}
+}
+
+export async function verifyDeviceSession(
+	token: string | null,
+	userId: string,
+	env: Env,
+	nowSeconds = Math.floor(Date.now() / 1_000),
+): Promise<DeviceSessionStatus> {
+	return (await verifyDeviceSessionDetails(token, userId, env, nowSeconds)).status;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -267,6 +298,48 @@ function json(body: unknown, status = 200): Response {
 			'Cache-Control': 'no-store',
 		},
 	});
+}
+
+export function deviceSessionEnforcementMode(env: Env): DeviceSessionEnforcementMode {
+	return env.DEVICE_SESSION_ENFORCEMENT_MODE?.trim().toLowerCase() === 'enforce'
+		? 'enforce'
+		: 'shadow';
+}
+
+export function isDeviceSessionProtectedRoute(path: string, method: string): boolean {
+	return PROTECTED_ROUTES.has(`${method.toUpperCase()} ${path}`);
+}
+
+/**
+ * Enforce only after the explicit Worker rollout switch is enabled. Service
+ * identities remain the supported machine-to-machine path. `unconfigured`
+ * stays fail-open so a missing secret cannot take hosted AI down globally;
+ * deployment checks must require both bindings before enabling enforcement.
+ */
+export function deviceSessionAccessError(
+	request: Request,
+	auth: AuthResult,
+	env: Env,
+	status: DeviceSessionStatus,
+): Response | null {
+	const path = new URL(request.url).pathname;
+	if (
+		deviceSessionEnforcementMode(env) !== 'enforce'
+		|| !isDeviceSessionProtectedRoute(path, request.method)
+		|| auth.service === true
+		|| !auth.userId
+		|| auth.tier === 'anonymous'
+		|| status === 'unconfigured'
+		|| status === 'apple'
+		|| status === 'software'
+	) {
+		return null;
+	}
+
+	return json({
+		error: 'device_session_required',
+		message: 'This hosted-AI request needs a current screenpipe desktop session. Update or restart screenpipe and try again.',
+	}, 428);
 }
 
 export async function handleDeviceCheckSession(request: Request, env: Env, auth: AuthResult): Promise<Response> {

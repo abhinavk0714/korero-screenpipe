@@ -224,4 +224,14 @@ pub trait AgentExecutor: Send + Sync {
     fn screenpipe_api_url(&self) -> &str {
         pi::SCREENPIPE_API_URL
     }
+
+    /// Optional local `/v1` proxy that refreshes hosted credentials per request.
+    fn local_ai_proxy_url(&self) -> Option<String> {
+        None
+    }
+
+    /// Bearer for the local proxy, never the hosted cloud credential.
+    fn local_api_auth_key(&self) -> Option<&str> {
+        None
+    }
 }

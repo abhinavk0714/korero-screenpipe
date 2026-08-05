@@ -12,7 +12,7 @@ use std::mem::MaybeUninit;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::lookup_host;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use url::Url;
 
 use crate::transcription::deepgram::DeepgramTranscriptionConfig;
@@ -204,12 +204,20 @@ async fn attempt_deepgram_request(
 ) -> Result<Response, reqwest::Error> {
     let url = format!("{}?{}", config.endpoint, params);
     let authorization = config.authorization_header();
+    let device_session = match config.device_session().await {
+        Ok(session) => session,
+        Err(error) => {
+            warn!(%error, "hosted transcription device session unavailable");
+            None
+        }
+    };
 
     let client = deepgram_client()?;
     let first = send_deepgram_request(
         &client,
         &url,
         &authorization,
+        device_session.as_deref(),
         audio_data.clone(),
         content_type,
     )
@@ -223,8 +231,15 @@ async fn attempt_deepgram_request(
                 addrs.len()
             );
             let client = deepgram_client_with_resolved_addrs(&host, &addrs)?;
-            return send_deepgram_request(&client, &url, &authorization, audio_data, content_type)
-                .await;
+            return send_deepgram_request(
+                &client,
+                &url,
+                &authorization,
+                device_session.as_deref(),
+                audio_data,
+                content_type,
+            )
+            .await;
         }
     }
 
@@ -253,16 +268,22 @@ async fn send_deepgram_request(
     client: &Client,
     url: &str,
     authorization: &str,
+    device_session: Option<&str>,
     audio_data: Vec<u8>,
     content_type: &str,
 ) -> Result<Response, reqwest::Error> {
-    client
+    let mut request = client
         .post(url)
         .header("Content-Type", content_type)
         .header("Authorization", authorization)
-        .body(audio_data)
-        .send()
-        .await
+        .body(audio_data);
+    if let Some(session) = device_session {
+        request = request.header(
+            screenpipe_core::device_check::DEVICE_SESSION_HEADER,
+            session,
+        );
+    }
+    request.send().await
 }
 
 async fn ipv4_overrides(url: &str) -> Option<(String, Vec<SocketAddr>)> {

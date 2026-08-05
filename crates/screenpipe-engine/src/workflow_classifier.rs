@@ -277,9 +277,20 @@ async fn classify(
         }
     });
 
-    let mut request = client.post(format!("{}/v1/chat/completions", classifier_url));
+    let api_url = classifier_api_url(classifier_url);
+    let mut request = client.post(format!("{api_url}/chat/completions"));
     if !token.is_empty() {
         request = request.bearer_auth(token);
+        match screenpipe_core::device_check::session(&api_url, token).await {
+            Ok(Some(session)) => {
+                request = request.header(
+                    screenpipe_core::device_check::DEVICE_SESSION_HEADER,
+                    session,
+                );
+            }
+            Ok(None) => {}
+            Err(error) => warn!(%error, "workflow classifier device session unavailable"),
+        }
     }
     let response = request
         .json(&body)
@@ -310,6 +321,15 @@ async fn classify(
     };
 
     serde_json::from_str::<ClassifierResult>(clean).map_err(|e| format!("parse '{}': {}", clean, e))
+}
+
+fn classifier_api_url(classifier_url: &str) -> String {
+    let base = classifier_url.trim_end_matches('/');
+    if base.ends_with("/v1") {
+        base.to_string()
+    } else {
+        format!("{base}/v1")
+    }
 }
 
 fn hash_activities(activities: &[ActivityEntry]) -> u64 {
@@ -387,6 +407,18 @@ mod tests {
         assert_eq!(
             format_activities_for_classifier(&activities),
             "[09:15:22] Arc: LinkedIn\n[short-ts] Code: screenpipe"
+        );
+    }
+
+    #[test]
+    fn classifier_api_url_accepts_root_or_v1_base() {
+        assert_eq!(
+            classifier_api_url("https://api.screenpipe.com"),
+            "https://api.screenpipe.com/v1"
+        );
+        assert_eq!(
+            classifier_api_url("http://localhost:8080/v1/"),
+            "http://localhost:8080/v1"
         );
     }
 }

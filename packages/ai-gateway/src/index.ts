@@ -94,8 +94,10 @@ import {
 } from './services/background-limit-fallback';
 import {
 	DEVICE_SESSION_HEADER,
+	deviceSessionAccessError,
+	deviceSessionEnforcementMode,
 	handleDeviceCheckSession,
-	verifyDeviceSession,
+	verifyDeviceSessionDetails,
 } from './services/device-check';
 // import { handleTTSWebSocketUpgrade } from './handlers/voice-ws';
 
@@ -316,14 +318,19 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 		// Authenticate and get tier info for all other endpoints
 		const authResult = await validateAuth(request, env);
 		const usageTier = authResult.usageTier ?? authResult.tier;
-		const deviceSessionStatus = authResult.userId && authResult.service !== true
-			? await verifyDeviceSession(request.headers.get(DEVICE_SESSION_HEADER), authResult.userId, env)
-			: 'unconfigured';
+		const deviceSession = authResult.userId && authResult.service !== true
+			? await verifyDeviceSessionDetails(request.headers.get(DEVICE_SESSION_HEADER), authResult.userId, env)
+			: { status: 'unconfigured' as const };
 		console.log('auth result:', {
 			tier: authResult.tier,
 			usageTier,
 			deviceId: authResult.deviceId,
-			deviceSession: deviceSessionStatus,
+			deviceSession: {
+				...deviceSession,
+				mode: deviceSessionEnforcementMode(env),
+				path,
+				method: request.method,
+			},
 		});
 
 		// Check rate limit with tier info. Chat completions are checked inside
@@ -344,6 +351,14 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 		if (path === '/v1/device-check/session' && request.method === 'POST') {
 			return addCorsHeaders(await handleDeviceCheckSession(request, env, authResult));
 		}
+
+		const deviceSessionError = deviceSessionAccessError(
+			request,
+			authResult,
+			env,
+			deviceSession.status,
+		);
+		if (deviceSessionError) return addCorsHeaders(deviceSessionError);
 
 		// Usage status endpoint - returns current usage without incrementing
 		if (path === '/v1/usage' && request.method === 'GET') {

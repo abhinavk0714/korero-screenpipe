@@ -6,12 +6,16 @@ import { describe, expect, it } from 'bun:test';
 import type { AuthResult, Env } from '../types';
 import {
 	createAppleProviderToken,
+	deviceSessionAccessError,
+	deviceSessionEnforcementMode,
 	type DevicePlatform,
 	type DeviceProofRequest,
 	handleDeviceCheckSession,
 	issueDeviceSession,
+	isDeviceSessionProtectedRoute,
 	validateAppleDeviceToken,
 	verifyDeviceSession,
+	verifyDeviceSessionDetails,
 	verifyInstallationProof,
 } from './device-check';
 
@@ -83,6 +87,60 @@ function exchangeRequest(bearer: string, body: DeviceProofRequest): Request {
 }
 
 describe('DeviceCheck sessions', () => {
+	it('keeps costly routes in shadow mode until the explicit rollout switch is enabled', async () => {
+		const chat = new Request('https://api.screenpipe.com/v1/chat/completions', { method: 'POST' });
+		expect(deviceSessionEnforcementMode({} as Env)).toBe('shadow');
+		expect(deviceSessionAccessError(chat, userAuth, {} as Env, 'missing')).toBeNull();
+		expect(deviceSessionAccessError(
+			chat,
+			userAuth,
+			{ DEVICE_SESSION_ENFORCEMENT_MODE: 'enforce' } as Env,
+			'unconfigured',
+		)).toBeNull();
+	});
+
+	it('rejects missing or invalid user sessions in enforce mode but exempts service identities', async () => {
+		const env = { DEVICE_SESSION_ENFORCEMENT_MODE: 'enforce' } as Env;
+		for (const status of ['missing', 'invalid'] as const) {
+			const response = deviceSessionAccessError(
+				new Request('https://api.screenpipe.com/v1/chat/completions', { method: 'POST' }),
+				userAuth,
+				env,
+				status,
+			);
+			expect(response?.status).toBe(428);
+			expect(await response?.json()).toMatchObject({ error: 'device_session_required' });
+		}
+		expect(deviceSessionAccessError(
+			new Request('https://api.screenpipe.com/v1/chat/completions', { method: 'POST' }),
+			{ ...userAuth, service: true },
+			env,
+			'missing',
+		)).toBeNull();
+	});
+
+	it('protects every costly hosted-AI route while leaving metadata and exchange routes readable', () => {
+		for (const [method, path] of [
+			['POST', '/v1/chat/completions'],
+			['POST', '/v1/web-search'],
+			['POST', '/v1/listen'],
+			['GET', '/v1/realtime'],
+			['POST', '/v1/tinfoil/chat/completions'],
+			['POST', '/v1/tinfoil/responses'],
+			['POST', '/v1/voice/transcribe'],
+			['POST', '/v1/voice/query'],
+			['POST', '/v1/text-to-speech'],
+			['POST', '/v1/voice/chat'],
+			['POST', '/v1/messages'],
+			['POST', '/anthropic/v1/messages'],
+		] as const) {
+			expect(isDeviceSessionProtectedRoute(path, method)).toBe(true);
+		}
+		expect(isDeviceSessionProtectedRoute('/v1/usage', 'GET')).toBe(false);
+		expect(isDeviceSessionProtectedRoute('/v1/models', 'GET')).toBe(false);
+		expect(isDeviceSessionProtectedRoute('/v1/device-check/session', 'POST')).toBe(false);
+	});
+
 	it('keeps exchange disabled without server keys but still requires user auth', async () => {
 		const request = () => new Request('https://api.screenpipe.com/v1/device-check/session', { method: 'POST' });
 		expect((await handleDeviceCheckSession(request(), {} as Env, userAuth)).status).toBe(204);
@@ -97,6 +155,10 @@ describe('DeviceCheck sessions', () => {
 			1_000,
 		);
 		expect(await verifyDeviceSession(issued.token, 'user_a', sessionEnv, 1_100)).toBe('apple');
+		expect(await verifyDeviceSessionDetails(issued.token, 'user_a', sessionEnv, 1_100)).toEqual({
+			status: 'apple',
+			platform: 'macos',
+		});
 		expect(await verifyDeviceSession(issued.token, 'user_b', sessionEnv, 1_100)).toBe('invalid');
 		expect(await verifyDeviceSession(issued.token, 'user_a', sessionEnv, issued.expires_at)).toBe('invalid');
 	});

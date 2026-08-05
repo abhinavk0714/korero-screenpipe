@@ -366,6 +366,9 @@ pub struct PiExecutor {
     /// is also exported as a deprecated alias (one release) for old pipe.md
     /// files on disk. None = auth disabled.
     pub api_auth_key: Option<String>,
+    /// Local authenticated proxy port. When set, hosted Pi traffic stays on
+    /// localhost and the engine refreshes cloud/device credentials per request.
+    pub local_api_port: Option<u16>,
 }
 
 impl PiExecutor {
@@ -374,6 +377,7 @@ impl PiExecutor {
             user_token: Arc::new(ArcSwap::new(Arc::new(user_token))),
             api_url: SCREENPIPE_API_URL.to_string(),
             api_auth_key: None,
+            local_api_port: None,
         }
     }
 
@@ -387,6 +391,7 @@ impl PiExecutor {
             user_token,
             api_url: SCREENPIPE_API_URL.to_string(),
             api_auth_key: None,
+            local_api_port: None,
         }
     }
 
@@ -416,6 +421,16 @@ impl PiExecutor {
     pub fn with_api_auth_key(mut self, key: Option<String>) -> Self {
         self.api_auth_key = key.filter(|k| !k.is_empty());
         self
+    }
+
+    pub fn with_local_api_port(mut self, port: u16) -> Self {
+        self.local_api_port = Some(port);
+        self
+    }
+
+    fn local_ai_proxy_base_url(&self) -> Option<String> {
+        self.local_api_port
+            .map(|port| format!("http://localhost:{port}/v1"))
     }
 
     /// Override the hosted-AI base URL supplied by the app. Production callers
@@ -953,7 +968,7 @@ impl PiExecutor {
     fn ensure_web_search_extension_with_api_url(
         project_dir: &Path,
         provider: Option<&str>,
-        api_url: &str,
+        _api_url: &str,
     ) -> Result<()> {
         let ext_dir = project_dir.join(".pi").join("extensions");
         let ext_path = ext_dir.join("web-search.ts");
@@ -965,8 +980,7 @@ impl PiExecutor {
 
         if is_screenpipe_cloud {
             std::fs::create_dir_all(&ext_dir)?;
-            let ext_content = include_str!("../../assets/extensions/web-search.ts")
-                .replace(SCREENPIPE_API_URL, api_url);
+            let ext_content = include_str!("../../assets/extensions/web-search.ts");
             std::fs::write(&ext_path, ext_content)?;
             debug!("web-search extension installed at {:?}", ext_path);
         } else if ext_path.exists() {
@@ -994,6 +1008,8 @@ impl PiExecutor {
     pub async fn ensure_pi_config(
         user_token: Option<&str>,
         api_url: &str,
+        local_api_url: Option<&str>,
+        local_api_key: Option<&str>,
         provider: Option<&str>,
         model: Option<&str>,
         provider_url: Option<&str>,
@@ -1041,13 +1057,17 @@ impl PiExecutor {
             // names, so writing the literal string "SCREENPIPE_API_KEY" causes
             // tier=anonymous. Resolve from: argument > env var > `$` env-var
             // reference (last resort; resolves at pi runtime if the var appears).
-            let api_key_value = user_token
-                .map(|t| t.to_string())
-                .or_else(|| std::env::var("SCREENPIPE_API_KEY").ok())
-                .unwrap_or_else(|| "$SCREENPIPE_API_KEY".to_string());
+            let api_key_value = local_api_url
+                .map(|_| local_api_key.unwrap_or("screenpipe-local").to_string())
+                .unwrap_or_else(|| {
+                    user_token
+                        .map(|t| t.to_string())
+                        .or_else(|| std::env::var("SCREENPIPE_API_KEY").ok())
+                        .unwrap_or_else(|| "$SCREENPIPE_API_KEY".to_string())
+                });
             let api_key_value = api_key_value.as_str();
             let models = screenpipe_cloud_models(api_url, user_token).await;
-            let device_session = if api_key_value.starts_with('$') {
+            let device_session = if local_api_url.is_some() || api_key_value.starts_with('$') {
                 None
             } else {
                 match crate::device_check::session(api_url, api_key_value).await {
@@ -1070,7 +1090,7 @@ impl PiExecutor {
                 headers[crate::device_check::DEVICE_SESSION_HEADER] = json!(session);
             }
             let screenpipe_provider = json!({
-                "baseUrl": api_url,
+                "baseUrl": local_api_url.unwrap_or(api_url),
                 "api": "openai-completions",
                 "apiKey": api_key_value,
                 "authHeader": true,
@@ -1492,6 +1512,9 @@ impl PiExecutor {
             cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
             cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
         }
+        if let Some(port) = self.local_api_port {
+            cmd.env("SCREENPIPE_LOCAL_API_PORT", port.to_string());
+        }
 
         // Auto-auth the agent's `curl localhost:3030/...` calls via a bash
         // shim sourced from $BASH_ENV on every subshell. See bash_env.rs.
@@ -1640,6 +1663,9 @@ impl PiExecutor {
         if let Some(ref key) = self.api_auth_key {
             cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
             cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
+        }
+        if let Some(port) = self.local_api_port {
+            cmd.env("SCREENPIPE_LOCAL_API_PORT", port.to_string());
         }
 
         if let Some(ids) = mcp_server_allowlist {
@@ -1835,9 +1861,12 @@ impl AgentExecutor for PiExecutor {
         }
 
         let cloud_token = self.current_user_token();
+        let local_api_url = self.local_ai_proxy_base_url();
         Self::ensure_pi_config(
             cloud_token.as_deref(),
             &self.api_url,
+            local_api_url.as_deref(),
+            self.api_auth_key.as_deref(),
             provider,
             Some(&resolved_model),
             provider_url,
@@ -1899,6 +1928,8 @@ impl AgentExecutor for PiExecutor {
             Self::ensure_pi_config(
                 cloud_token.as_deref(),
                 &self.api_url,
+                local_api_url.as_deref(),
+                self.api_auth_key.as_deref(),
                 provider,
                 Some(&resolved_model),
                 provider_url,
@@ -1954,10 +1985,13 @@ impl AgentExecutor for PiExecutor {
         // Re-read after resolution: resolve_screenpipe_model may have refreshed
         // the token internally; use the current value for config + spawn.
         let cloud_token = self.current_user_token();
+        let local_api_url = self.local_ai_proxy_base_url();
 
         Self::ensure_pi_config(
             cloud_token.as_deref(),
             &self.api_url,
+            local_api_url.as_deref(),
+            self.api_auth_key.as_deref(),
             provider,
             Some(&resolved_model),
             provider_url,
@@ -2016,6 +2050,8 @@ impl AgentExecutor for PiExecutor {
             Self::ensure_pi_config(
                 cloud_token.as_deref(),
                 &self.api_url,
+                local_api_url.as_deref(),
+                self.api_auth_key.as_deref(),
                 provider,
                 Some(&resolved_model),
                 provider_url,
@@ -2192,6 +2228,14 @@ impl AgentExecutor for PiExecutor {
 
     fn screenpipe_api_url(&self) -> &str {
         &self.api_url
+    }
+
+    fn local_ai_proxy_url(&self) -> Option<String> {
+        self.local_ai_proxy_base_url()
+    }
+
+    fn local_api_auth_key(&self) -> Option<&str> {
+        self.api_auth_key.as_deref()
     }
 }
 
@@ -3862,7 +3906,7 @@ mod tests {
     }
 
     #[test]
-    fn web_search_extension_uses_executor_gateway_url() {
+    fn web_search_extension_uses_refreshing_local_proxy() {
         let dir = tempfile::tempdir().expect("tempdir");
         let api_url = "http://127.0.0.1:8787/v1";
 
@@ -3880,8 +3924,9 @@ mod tests {
                 .join("web-search.ts"),
         )
         .expect("read web-search extension");
-        assert!(content.contains("http://127.0.0.1:8787/v1/web-search"));
+        assert!(content.contains("http://localhost:${localPort}/v1/web-search"));
         assert!(!content.contains(SCREENPIPE_API_URL));
+        assert!(!content.contains("process.env.SCREENPIPE_API_KEY"));
     }
 
     #[test]
@@ -4724,6 +4769,8 @@ mod tests {
         PiExecutor::ensure_pi_config(
             None,
             SCREENPIPE_API_URL,
+            None,
+            None,
             Some("ollama"),
             Some("qwen3:8b"),
             Some("http://localhost:11434/v1"),

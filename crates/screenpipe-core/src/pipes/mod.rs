@@ -3319,9 +3319,12 @@ impl PipeManager {
         let mut pipe_token: Option<String> = None;
         if config.agent == "pi" {
             let cloud_token = executor.user_token();
+            let local_api_url = executor.local_ai_proxy_url();
             if let Err(e) = PiExecutor::ensure_pi_config(
                 cloud_token.as_deref(),
                 executor.screenpipe_api_url(),
+                local_api_url.as_deref(),
+                executor.local_api_auth_key(),
                 run_provider.as_deref(),
                 Some(&run_model),
                 run_provider_url.as_deref(),
@@ -3868,9 +3871,12 @@ impl PipeManager {
             // right entry before the agent subprocess starts.
             let mut pipe_token: Option<String> = None;
             if config.agent == "pi" {
+                let local_api_url = executor.local_ai_proxy_url();
                 if let Err(e) = PiExecutor::ensure_pi_config(
                     None,
                     executor.screenpipe_api_url(),
+                    local_api_url.as_deref(),
+                    executor.local_api_auth_key(),
                     run_provider.as_deref(),
                     Some(&run_model),
                     run_provider_url.as_deref(),
@@ -5421,9 +5427,12 @@ impl PipeManager {
                     let mut pipe_token: Option<String> = None;
                     if config.agent == "pi" {
                         let cloud_token = executor.user_token();
+                        let local_api_url = executor.local_ai_proxy_url();
                         if let Err(e) = PiExecutor::ensure_pi_config(
                             cloud_token.as_deref(),
                             executor.screenpipe_api_url(),
+                            local_api_url.as_deref(),
+                            executor.local_api_auth_key(),
                             provider.as_deref(),
                             Some(&model),
                             provider_url.as_deref(),

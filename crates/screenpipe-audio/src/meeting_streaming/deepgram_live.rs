@@ -116,6 +116,22 @@ async fn run_stream(
         USER_AGENT,
         HeaderValue::from_static("screenpipe-meeting-streaming-deepgram"),
     );
+    if config.provider == MeetingStreamingProvider::ScreenpipeCloud {
+        if let Some(api_url) = device_session_api_url(&config.endpoint) {
+            match screenpipe_core::device_check::session(&api_url, credential).await {
+                Ok(Some(session)) => {
+                    request.headers_mut().insert(
+                        screenpipe_core::device_check::DEVICE_SESSION_HEADER,
+                        HeaderValue::from_str(&session)?,
+                    );
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    warn!(%error, "live transcription device session unavailable");
+                }
+            }
+        }
+    }
 
     let (ws, _) = connect_websocket_with_ipv4_fallback(request)
         .await
@@ -205,6 +221,24 @@ async fn run_stream(
         device_name
     );
     Ok(())
+}
+
+fn device_session_api_url(endpoint: &str) -> Option<String> {
+    let mut url = Url::parse(endpoint).ok()?;
+    match url.scheme() {
+        "wss" => url.set_scheme("https").ok()?,
+        "ws" => url.set_scheme("http").ok()?,
+        _ => {}
+    }
+    let base_path = url
+        .path()
+        .trim_end_matches('/')
+        .strip_suffix("/realtime")?
+        .to_string();
+    url.set_path(&base_path);
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(url.to_string().trim_end_matches('/').to_string())
 }
 
 fn configure_live_query(url: &mut Url, config: &MeetingStreamingConfig) {
@@ -475,6 +509,18 @@ fn device_type_label(device_type: &DeviceType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn derives_device_session_exchange_from_realtime_endpoint() {
+        assert_eq!(
+            device_session_api_url("wss://api.screenpipe.com/v1/realtime?model=nova-3").as_deref(),
+            Some("https://api.screenpipe.com/v1")
+        );
+        assert_eq!(
+            device_session_api_url("ws://127.0.0.1:8787/v1/realtime").as_deref(),
+            Some("http://127.0.0.1:8787/v1")
+        );
+    }
 
     fn live_query(language: Option<&str>) -> String {
         let config = MeetingStreamingConfig {

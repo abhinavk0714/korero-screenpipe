@@ -37,14 +37,21 @@ export default function (pi: ExtensionAPI) {
         ],
       });
 
-      const apiKey = process.env.SCREENPIPE_API_KEY || "";
+      const localPort =
+        process.env.SCREENPIPE_LOCAL_API_PORT ||
+        process.env.SCREENPIPE_PORT ||
+        "3030";
+      const localKey =
+        process.env.SCREENPIPE_LOCAL_API_KEY ||
+        process.env.SCREENPIPE_API_AUTH_KEY ||
+        "";
       const response = await fetch(
-        "https://api.screenpipe.com/v1/web-search",
+        `http://localhost:${localPort}/v1/web-search`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
+            ...(localKey ? { Authorization: `Bearer ${localKey}` } : {}),
           },
           body: JSON.stringify({ query: params.query }),
           signal,

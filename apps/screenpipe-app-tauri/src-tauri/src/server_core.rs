@@ -543,6 +543,7 @@ impl ServerCore {
         server.manual_meeting = Some(manual_meeting.clone());
         server.api_auth = config.api_auth;
         server.api_auth_key = config.api_auth_key.clone();
+        server.cloud_gateway_url = ai_gateway_url.clone();
         server.enforce_free_plan_retention.store(
             config.enforce_free_plan_retention,
             std::sync::atomic::Ordering::SeqCst,
@@ -677,6 +678,7 @@ impl ServerCore {
                 cloud_token_handle.clone(),
             )
             .with_api_url(ai_gateway_url)
+            .with_local_api_port(config.port)
             .with_api_auth_key(config.api_auth_key.clone()),
         );
         let mut agent_executors: std::collections::HashMap<

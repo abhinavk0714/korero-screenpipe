@@ -1405,6 +1405,7 @@ async fn main() -> anyhow::Result<()> {
     let user_token = std::env::var("SCREENPIPE_API_KEY").ok();
     let pi_executor = std::sync::Arc::new(
         screenpipe_core::agents::pi::PiExecutor::new(user_token.clone())
+            .with_local_api_port(config.port)
             .with_api_auth_key(config.api_auth_key.clone()),
     );
 

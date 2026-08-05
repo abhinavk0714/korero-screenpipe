@@ -1456,9 +1456,7 @@ fn ensure_web_search_extension(
         std::fs::create_dir_all(&ext_dir)
             .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
 
-        let api_url = crate::config::screenpipe_ai_gateway_url()?;
-        let ext_content = include_str!("../assets/extensions/web-search.ts")
-            .replace(SCREENPIPE_API_URL, &api_url);
+        let ext_content = include_str!("../assets/extensions/web-search.ts");
         std::fs::write(&ext_path, ext_content)
             .map_err(|e| format!("Failed to write web-search extension: {}", e))?;
 
@@ -1719,23 +1717,27 @@ async fn build_models_json(
     user_token: Option<&str>,
     provider_config: Option<&PiProviderConfig>,
 ) -> serde_json::Value {
-    build_models_json_with_api_url(user_token, provider_config, SCREENPIPE_API_URL).await
+    build_models_json_with_api_url(user_token, provider_config, SCREENPIPE_API_URL, None, None).await
 }
 
 async fn build_models_json_with_api_url(
     user_token: Option<&str>,
     provider_config: Option<&PiProviderConfig>,
     api_url: &str,
+    local_api_url: Option<&str>,
+    local_api_key: Option<&str>,
 ) -> serde_json::Value {
     let mut providers_map = serde_json::Map::new();
 
     // Always add screenpipe cloud provider. A real token is inlined as a
     // literal; the logged-out fallback must use `$` env-var syntax (pi >= 0.80
     // treats bare names as literal keys).
-    let api_key_value = user_token.unwrap_or("$SCREENPIPE_API_KEY");
+    let api_key_value = local_api_url
+        .map(|_| local_api_key.unwrap_or("screenpipe-local"))
+        .unwrap_or_else(|| user_token.unwrap_or("$SCREENPIPE_API_KEY"));
     let models = screenpipe_cloud_models(api_url, user_token).await;
     let screenpipe_provider = json!({
-        "baseUrl": api_url,
+        "baseUrl": local_api_url.unwrap_or(api_url),
         "api": "openai-completions",
         "apiKey": api_key_value,
         "authHeader": true,
@@ -1871,6 +1873,7 @@ async fn build_models_json_with_api_url(
 
 /// Write pi's provider config (models.json + auth.json).
 async fn ensure_pi_config(
+    app: &tauri::AppHandle,
     user_token: Option<&str>,
     provider_config: Option<&PiProviderConfig>,
 ) -> Result<(), String> {
@@ -1879,19 +1882,16 @@ async fn ensure_pi_config(
         .map_err(|e| format!("Failed to create pi config dir: {}", e))?;
 
     let api_url = crate::config::screenpipe_ai_gateway_url()?;
-    let mut new_providers =
-        build_models_json_with_api_url(user_token, provider_config, &api_url).await;
-    if let Some(token) = user_token {
-        match screenpipe_core::device_check::session(&api_url, token).await {
-            Ok(Some(session)) => {
-                new_providers["providers"]["screenpipe"]["headers"]
-                    [screenpipe_core::device_check::DEVICE_SESSION_HEADER] =
-                    json!(session);
-            }
-            Ok(None) => {}
-            Err(error) => warn!("pi config: desktop identity session unavailable: {error}"),
-        }
-    }
+    let local_api = crate::recording::local_api_context_from_app(app);
+    let local_api_url = local_api.url("/v1");
+    let new_providers = build_models_json_with_api_url(
+        user_token,
+        provider_config,
+        &api_url,
+        Some(&local_api_url),
+        local_api.api_key.as_deref(),
+    )
+    .await;
 
     // Merge into existing models.json to avoid race conditions with concurrent pipes
     let models_path = config_dir.join("models.json");
@@ -2229,7 +2229,7 @@ pub async fn pi_start_inner(
         ensure_save_artifact_extension(&project_dir)?;
         ensure_live_views_extension(&project_dir)?;
         ensure_connection_gate_extension(&project_dir)?;
-        ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
+        ensure_pi_config(&app, user_token.as_deref(), provider_config.as_ref()).await?;
         if !extension_safe_mode {
             ensure_required_pi_extension_package().await?;
         }
@@ -5947,11 +5947,28 @@ error: InstallFailed extracting tarball"#;
     #[tokio::test]
     async fn test_build_models_json_uses_resolved_gateway_url() {
         let config =
-            build_models_json_with_api_url(None, None, "http://127.0.0.1:8787/v1").await;
+            build_models_json_with_api_url(None, None, "http://127.0.0.1:8787/v1", None, None)
+                .await;
         assert_eq!(
             config["providers"]["screenpipe"]["baseUrl"],
             "http://127.0.0.1:8787/v1"
         );
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_routes_screenpipe_provider_through_local_proxy() {
+        let config = build_models_json_with_api_url(
+            Some("cloud-token"),
+            None,
+            "http://127.0.0.1:8787/v1",
+            Some("http://localhost:3030/v1"),
+            Some("local-token"),
+        )
+        .await;
+        let provider = &config["providers"]["screenpipe"];
+        assert_eq!(provider["baseUrl"], "http://localhost:3030/v1");
+        assert_eq!(provider["apiKey"], "local-token");
+        assert_ne!(provider["apiKey"], "cloud-token");
     }
 
     #[tokio::test]

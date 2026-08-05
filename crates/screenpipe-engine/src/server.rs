@@ -232,6 +232,8 @@ pub struct AppState {
     /// this token — agent calls localhost/v1/chat/completions and the server
     /// signs the upstream request here. See routes/cloud_proxy.rs.
     pub cloud_token: Arc<ArcSwap<Option<String>>>,
+    /// Hosted-AI `/v1` base used by the local authenticated proxy.
+    pub cloud_gateway_url: String,
     /// Unified credential store for OAuth tokens, API keys, etc.
     pub secret_store: Option<Arc<screenpipe_secrets::SecretStore>>,
     /// Runtime control for the high-FPS screen-capture override. Shared
@@ -281,6 +283,8 @@ pub struct SCServer {
     pub api_auth_key: Option<String>,
     /// Cloud JWT for proxied /v1/chat/completions calls. See AppState::cloud_token.
     pub cloud_token: Arc<ArcSwap<Option<String>>>,
+    /// Hosted-AI `/v1` base used by the local authenticated proxy.
+    pub cloud_gateway_url: String,
     /// Unified credential store for OAuth tokens, API keys, etc.
     pub secret_store: Option<Arc<screenpipe_secrets::SecretStore>>,
     /// Background OAuth refresh scheduler. Owned here so its JoinHandle
@@ -401,6 +405,7 @@ impl SCServer {
             api_auth: false,
             api_auth_key: None,
             cloud_token: Arc::new(ArcSwap::new(Arc::new(None))),
+            cloud_gateway_url: screenpipe_core::agents::pi::SCREENPIPE_API_URL.to_string(),
             secret_store: None,
             oauth_refresher: None,
             external_memory_sync: None,
@@ -777,6 +782,7 @@ impl SCServer {
             api_auth: self.api_auth,
             api_auth_key: self.api_auth_key.clone(),
             cloud_token: self.cloud_token.clone(),
+            cloud_gateway_url: self.cloud_gateway_url.clone(),
             secret_store: self.secret_store.clone(),
             high_fps_controller: self.high_fps_controller.clone(),
             vision_manager: self.vision_manager.clone(),
@@ -1070,6 +1076,10 @@ impl SCServer {
                 "/v1/chat/completions",
                 axum::routing::post(crate::routes::cloud_proxy::chat_completions)
                     .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)), // 50MB
+            )
+            .route(
+                "/v1/web-search",
+                axum::routing::post(crate::routes::cloud_proxy::web_search),
             );
 
         // Pipe API routes (if pipe manager is available)

@@ -162,6 +162,8 @@ export interface Env {
 	APPLE_DEVICECHECK_ENVIRONMENT?: 'development' | 'production';
 	/** HMAC key for short-lived, account-bound device sessions. */
 	DEVICE_CHECK_SESSION_SECRET?: string;
+	/** `shadow` (default) records status; `enforce` rejects missing/invalid sessions on costly user routes. */
+	DEVICE_SESSION_ENFORCEMENT_MODE?: string;
 	OPENAI_REALTIME_TRANSCRIPTION_COST_PER_HOUR?: string;
 	ANTHROPIC_API_KEY: string;
 	DEEPGRAM_API_KEY: string;
