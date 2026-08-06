@@ -4782,6 +4782,12 @@ impl PipeManager {
         if !pipe_dir.exists() {
             return Err(anyhow!("pipe '{}' not found", name));
         }
+        if self.running.lock().await.contains_key(name) {
+            return Err(anyhow!(
+                "pipe '{}' is running; stop it before clearing remembered context",
+                name
+            ));
+        }
         delete_pi_sessions(&pipe_dir)?;
         info!("cleared history for pipe '{}'", name);
         Ok(())
@@ -7608,18 +7614,22 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Encode a working-directory path the same way Pi does for session storage.
-/// Pi uses the CWD as a key: `~/.pi/agent/sessions/<encoded-cwd>/`.
+/// Pi uses the CWD as a key: `<PI_CODING_AGENT_DIR>/sessions/<encoded-cwd>/`.
 /// The encoding wraps the path with `--` and replaces `/` (or `\`) with `-`.
 /// Example: `/Users/me/.screenpipe/pipes/foo/` → `--Users-me-.screenpipe-pipes-foo--`
 fn encode_pi_session_dir(working_dir: &Path) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    let sessions_base = home.join(".pi").join("agent").join("sessions");
+    let agent_dir = crate::agents::pi::pi_config_dir().ok()?;
+    Some(encode_pi_session_dir_from_base(working_dir, &agent_dir))
+}
+
+fn encode_pi_session_dir_from_base(working_dir: &Path, agent_dir: &Path) -> PathBuf {
+    let sessions_base = agent_dir.join("sessions");
     // Pi encodes: strip leading/trailing separators, replace all separators
     // with `-`, wrap with `--` prefix and `--` suffix
     let cwd_str = working_dir.to_string_lossy();
     let stripped = cwd_str.trim_matches(|c| c == '/' || c == '\\');
     let encoded = format!("--{}--", stripped.replace(['/', '\\'], "-"));
-    Some(sessions_base.join(encoded))
+    sessions_base.join(encoded)
 }
 
 /// Find the most recently modified Pi session file for a pipe's working directory.
@@ -10190,6 +10200,18 @@ mod tests {
             let dir_name = path.file_name().unwrap().to_str().unwrap();
             assert_eq!(dir_name, "--Users-me-.screenpipe-pipes-foo--");
         }
+    }
+
+    #[test]
+    fn test_encode_pi_session_dir_uses_isolated_agent_base() {
+        let result = encode_pi_session_dir_from_base(
+            Path::new("/Users/me/.screenpipe/pipes/foo"),
+            Path::new("/tmp/screenpipe-pi-agent"),
+        );
+        assert_eq!(
+            result,
+            Path::new("/tmp/screenpipe-pi-agent/sessions/--Users-me-.screenpipe-pipes-foo--"),
+        );
     }
 
     #[test]

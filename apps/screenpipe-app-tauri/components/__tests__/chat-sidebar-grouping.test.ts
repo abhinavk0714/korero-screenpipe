@@ -17,8 +17,10 @@ import {
 } from "@/lib/utils/chat-sidebar-grouping";
 import {
   buildPipeExecutionHistoryPage,
+  isPipeExecutionDeleted,
   isTerminalPipeExecutionStatus,
   pipeExecutionConversationId,
+  pipeExecutionDeletionKey,
   shouldReloadPipeExecutionHistory,
   uniquePipeExecutionConversations,
 } from "@/lib/pipe-execution-status";
@@ -97,6 +99,30 @@ describe("continued pipe chat inventory", () => {
         new Set(["pipe:daily-brief:continuous"]),
       ).map((execution) => execution.id),
     ).toEqual([10]);
+  });
+
+  it("lets a deleted continued chat return after the next execution", () => {
+    const deletedExecution = {
+      id: 12,
+      pipe_name: "daily-brief",
+      conversation_id: "pipe:daily-brief:continuous",
+    };
+    const nextExecution = { ...deletedExecution, id: 13 };
+    const tombstones = new Set([pipeExecutionDeletionKey(deletedExecution)]);
+
+    expect(isPipeExecutionDeleted(deletedExecution, tombstones)).toBe(true);
+    expect(isPipeExecutionDeleted(nextExecution, tombstones)).toBe(false);
+  });
+
+  it("keeps an isolated run deleted permanently", () => {
+    const execution = {
+      id: 12,
+      pipe_name: "daily-brief",
+      conversation_id: null,
+    };
+    const tombstones = new Set([pipeExecutionDeletionKey(execution)]);
+
+    expect(isPipeExecutionDeleted(execution, tombstones)).toBe(true);
   });
 });
 

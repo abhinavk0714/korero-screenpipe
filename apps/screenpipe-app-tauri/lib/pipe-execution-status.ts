@@ -16,6 +16,37 @@ export function pipeExecutionConversationId(
   return execution.conversation_id || `pipe:${execution.pipe_name}:${execution.id}`;
 }
 
+/**
+ * Deleting a per-run chat can tombstone its stable id forever because that id
+ * belongs to only one execution. A continued chat needs an execution-scoped
+ * tombstone so the row stays gone now but comes back after a genuinely new run.
+ */
+export function pipeExecutionDeletionKey(
+  execution: PipeExecutionChatIdentity,
+): string {
+  const conversationId = pipeExecutionConversationId(execution);
+  return execution.conversation_id
+    ? `${conversationId}@${execution.id}`
+    : conversationId;
+}
+
+export function pipeConversationDeletionKey(
+  conversationId: string,
+  executionId?: number,
+): string | undefined {
+  if (!conversationId.startsWith("pipe:")) return undefined;
+  return conversationId.endsWith(":continuous") && executionId != null
+    ? `${conversationId}@${executionId}`
+    : conversationId;
+}
+
+export function isPipeExecutionDeleted(
+  execution: PipeExecutionChatIdentity,
+  deletedKeys: ReadonlySet<string>,
+): boolean {
+  return deletedKeys.has(pipeExecutionDeletionKey(execution));
+}
+
 /** Keep the newest execution for each visible chat identity. */
 export function uniquePipeExecutionConversations<
   T extends PipeExecutionChatIdentity,
