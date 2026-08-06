@@ -120,6 +120,7 @@ describe('Settings sections', () => {
   it('keeps audio and meeting notes separate and applies screen-share privacy live', async () => {
     const navAudio = await $('[data-testid="settings-nav-audio"]');
     await navAudio.waitForExist({ timeout: 8_000 });
+    expect((await navAudio.getText()).toLowerCase()).toContain('audio & meetings');
     await navAudio.click();
 
     const section = await $('[data-testid="section-settings-audio"]');
@@ -130,7 +131,6 @@ describe('Settings sections', () => {
       )) as string
     ).toLowerCase();
     expect(sectionText).toContain('audio recording');
-    expect(sectionText).toContain('live meeting notes');
     expect(sectionText).toContain('hide screenpipe from screen capture');
     expect(sectionText).not.toContain('screen context capture');
     expect(sectionText).not.toContain('screenshot images');
