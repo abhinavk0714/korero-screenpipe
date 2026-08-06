@@ -600,17 +600,19 @@ export function BrainOverview({
     () => [...pipes].sort((a, b) => a.config.name.localeCompare(b.config.name)),
     [pipes],
   );
-  const enabledPipes = useMemo(
-    () => installedPipes.filter((pipe) => pipe.config.enabled),
-    [installedPipes],
-  );
   const installedPipeNames = useMemo(
     () => new Set(installedPipes.map((pipe) => pipe.config.name)),
     [installedPipes],
   );
-  const enabledPipeNames = useMemo(
-    () => new Set(enabledPipes.map((pipe) => pipe.config.name)),
-    [enabledPipes],
+  const pipeEnabledByName = useMemo(
+    () =>
+      new Map(
+        installedPipes.map((pipe) => [
+          pipe.config.name,
+          pipe.config.enabled,
+        ]),
+      ),
+    [installedPipes],
   );
   const aiPresets = useMemo(
     () => (settings.aiPresets ?? []) as AIPreset[],
@@ -1042,11 +1044,7 @@ export function BrainOverview({
         ),
       );
       const disabledPipeNames = pipeNames.filter(
-        (pipeName) =>
-          installedPipeNames.has(pipeName) && !enabledPipeNames.has(pipeName),
-      );
-      const runnablePipeNames = pipeNames.filter(
-        (pipeName) => !disabledPipeNames.includes(pipeName),
+        (pipeName) => pipeEnabledByName.get(pipeName) === false,
       );
       const analyticsProperties = {
         ...liveViewAnalyticsProperties(targetView, views.length),
@@ -1081,7 +1079,45 @@ export function BrainOverview({
         total: boundSlots.length,
       });
 
-      const runFailures: string[] = [];
+      const failures: string[] = [];
+      const enableFailures = new Set<string>();
+      await Promise.all(
+        disabledPipeNames.map(async (pipeName) => {
+          try {
+            const response = await localFetch(
+              `/pipes/${encodeURIComponent(pipeName)}/enable`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ enabled: true }),
+              },
+            );
+            const body = (await response.json().catch(() => ({}))) as {
+              error?: string;
+              success?: boolean;
+            };
+            if (!response.ok || body.error || body.success === false) {
+              throw new Error(body.error || `HTTP ${response.status}`);
+            }
+          } catch (enableError) {
+            enableFailures.add(pipeName);
+            failures.push(
+              `${pipeName}: failed to enable${
+                enableError instanceof Error && enableError.message
+                  ? ` (${enableError.message})`
+                  : ""
+              }`,
+            );
+          }
+        }),
+      );
+      if (disabledPipeNames.length > 0) {
+        await refetchPipes();
+      }
+
+      const runnablePipeNames = pipeNames.filter(
+        (pipeName) => !enableFailures.has(pipeName),
+      );
       await Promise.all(
         runnablePipeNames.map(async (pipeName) => {
           try {
@@ -1115,7 +1151,7 @@ export function BrainOverview({
               throw new Error(body.error || `HTTP ${response.status}`);
             }
           } catch (runError) {
-            runFailures.push(
+            failures.push(
               `${pipeName}: ${
                 runError instanceof Error ? runError.message : String(runError)
               }`,
@@ -1124,36 +1160,22 @@ export function BrainOverview({
         }),
       );
 
-      const startFailureCount = disabledPipeNames.length + runFailures.length;
-      const disabledPipeMessage =
-        disabledPipeNames.length > 0
-          ? `${disabledPipeNames.join(", ")} ${
-              disabledPipeNames.length === 1 ? "is" : "are"
-            } disabled. Enable ${
-              disabledPipeNames.length === 1 ? "it" : "them"
-            } in Pipes to refresh this Live View.`
-          : null;
-      const failureMessage = [
-        disabledPipeMessage,
-        runFailures.length > 0
-          ? `Could not start ${runFailures.join(", ")}`
-          : null,
-      ]
-        .filter((message): message is string => Boolean(message))
-        .join(" ");
       setDataRefresh((current) =>
         current && current.startedAt === startedAt
           ? {
               ...current,
               status:
-                startFailureCount === pipeNames.length ? "error" : "running",
-              startFailureCount,
-              message: failureMessage || undefined,
+                failures.length === pipeNames.length ? "error" : "running",
+              startFailureCount: failures.length,
+              message:
+                failures.length > 0
+                  ? `Could not start ${failures.join(", ")}`
+                  : undefined,
             }
           : current,
       );
     },
-    [enabledPipeNames, installedPipeNames, views.length],
+    [pipeEnabledByName, refetchPipes, views.length],
   );
 
   useEffect(() => {
@@ -1544,7 +1566,7 @@ export function BrainOverview({
           selectedAiPreset.provider === "screenpipe-cloud"
             ? (settings.user?.token ?? null)
             : null,
-        pipes: enabledPipes.map((pipe) => ({
+        pipes: installedPipes.map((pipe) => ({
           name: pipe.config.name,
           description:
             typeof pipe.config.config?.description === "string"
@@ -2838,7 +2860,7 @@ export function BrainOverview({
         draft={draft}
         saving={saving}
         componentOptions={COMPONENTS}
-        pipeNames={enabledPipes.map((pipe) => pipe.config.name)}
+        pipeNames={installedPipes.map((pipe) => pipe.config.name)}
         onChange={setDraft}
         onCancel={() => {
           setDraft(null);

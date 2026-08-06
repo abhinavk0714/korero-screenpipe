@@ -849,7 +849,7 @@ describe("BrainOverview", () => {
     expect(JSON.stringify(properties)).not.toContain("private failure detail");
   });
 
-  it("does not run a disabled Pipe when refreshing a Live View", async () => {
+  it("enables a disabled Pipe before refreshing a Live View", async () => {
     mocks.pipes[0].config.enabled = false;
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",
@@ -859,8 +859,44 @@ describe("BrainOverview", () => {
 
     fireEvent.click(await screen.findByTestId("overview-refresh-data"));
 
+    await waitFor(() =>
+      expect(
+        mocks.localFetch.mock.calls.some(
+          ([path]) => path === "/pipes/daily-summary/run",
+        ),
+      ).toBe(true),
+    );
+    const pipeRequests = mocks.localFetch.mock.calls.filter(([path]) =>
+      String(path).startsWith("/pipes/daily-summary/"),
+    );
+    expect(pipeRequests.map(([path]) => path)).toEqual([
+      "/pipes/daily-summary/enable",
+      "/pipes/daily-summary/run",
+    ]);
+    expect(JSON.parse(pipeRequests[0][1].body)).toEqual({ enabled: true });
+    expect(mocks.refetchPipes).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not run a disabled Pipe when enabling it fails", async () => {
+    mocks.pipes[0].config.enabled = false;
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.localFetch.mockImplementation(async (path: string) => ({
+      ok: !path.endsWith("/enable"),
+      status: path.endsWith("/enable") ? 500 : 200,
+      json: async () =>
+        path.endsWith("/enable")
+          ? { error: "permission denied" }
+          : { success: true },
+    }));
+    render(<BrainOverview />);
+
+    fireEvent.click(await screen.findByTestId("overview-refresh-data"));
+
     expect(await screen.findByTestId("live-view-data-status")).toHaveTextContent(
-      "daily-summary is disabled. Enable it in Pipes to refresh this Live View.",
+      "Could not start daily-summary: failed to enable (permission denied)",
     );
     expect(
       mocks.localFetch.mock.calls.some(
@@ -1939,7 +1975,7 @@ describe("BrainOverview", () => {
     );
   });
 
-  it("offers only enabled Pipes to Live View generation", async () => {
+  it("offers disabled installed Pipes to Live View generation", async () => {
     mocks.pipes.push({
       config: {
         name: "disabled-summary",
@@ -1980,12 +2016,13 @@ describe("BrainOverview", () => {
     await waitFor(() => expect(mocks.generateLiveViewWithPi).toHaveBeenCalled());
     expect(mocks.generateLiveViewWithPi).toHaveBeenCalledWith(
       expect.objectContaining({
-        pipes: [expect.objectContaining({ name: "daily-summary" })],
+        pipes: expect.arrayContaining([
+          expect.objectContaining({ name: "daily-summary" }),
+          expect.objectContaining({ name: "disabled-summary" }),
+        ]),
       }),
     );
-    expect(
-      JSON.stringify(mocks.generateLiveViewWithPi.mock.calls[0][0].pipes),
-    ).not.toContain("disabled-summary");
+    expect(mocks.generateLiveViewWithPi.mock.calls[0][0].pipes).toHaveLength(2);
   });
 
   it("shows proposed Blocks on an empty Canvas before acceptance", async () => {
