@@ -124,7 +124,11 @@ describe('Settings sections', () => {
 
     const section = await $('[data-testid="section-settings-audio"]');
     await section.waitForExist({ timeout: 8_000 });
-    const sectionText = (await section.getText()).toLowerCase();
+    const sectionText = (
+      (await browser.execute(
+        () => document.querySelector('[data-testid="section-settings-audio"]')?.textContent ?? '',
+      )) as string
+    ).toLowerCase();
     expect(sectionText).toContain('audio recording');
     expect(sectionText).toContain('live meeting notes');
     expect(sectionText).toContain('hide screenpipe from screen capture');
