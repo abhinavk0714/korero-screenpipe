@@ -4,7 +4,7 @@
 "use client";
 
 import * as React from "react";
-import { Check, Clock, Copy, GitBranch, MoreHorizontal, Pencil, RefreshCw } from "lucide-react";
+import { Check, Clock, Copy, GitBranch, LayoutDashboard, MoreHorizontal, Pencil, RefreshCw } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import posthog from "posthog-js";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -34,6 +34,11 @@ import type { ContentBlock, Message } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
 import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
+import { ChatLiveViewPanel } from "@/components/chat/standalone/chat-live-view-panel";
+import {
+  getChatLiveViewSource,
+  type ChatLiveViewControls,
+} from "@/lib/live-views/chat-live-view";
 
 function messageDate(timestamp: number): Date | null {
   const date = new Date(timestamp);
@@ -94,6 +99,7 @@ export interface ChatMessageListProps {
   onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
   onAskUserReply?: (reply: string, displayLabel: string) => Promise<void> | void;
   suppressSourceFooters?: boolean;
+  chatLiveView?: ChatLiveViewControls;
 }
 
 export function ChatMessageList({
@@ -133,6 +139,7 @@ export function ChatMessageList({
   onDismissConnectionAction,
   onAskUserReply,
   suppressSourceFooters = false,
+  chatLiveView,
 }: ChatMessageListProps) {
   return (
     <>
@@ -162,6 +169,11 @@ export function ChatMessageList({
           const activeAssistantMessageId =
             activeSourceFooterMessageId ??
             (lastVisibleAssistantId === lastAssistantId ? lastVisibleAssistantId : undefined);
+          const latestLiveViewEligibleMessageId =
+            lastVisibleAssistantId &&
+            getChatLiveViewSource(visibleMessages, lastVisibleAssistantId)
+              ? lastVisibleAssistantId
+              : undefined;
 
           // Find parent assistant IDs whose steered child is currently streaming.
           // Walk backwards from the active streaming assistant to find the
@@ -241,6 +253,16 @@ export function ChatMessageList({
             }
             const hasFollowingSteeredAssistant = Boolean(
               nextSameSegmentAssistant && isSteeredAssistantMessage(nextSameSegmentAssistant)
+            );
+            const canSaveAsLiveView = Boolean(
+              chatLiveView &&
+                !hasFollowingSteeredAssistant &&
+                getChatLiveViewSource(visibleMessages, message.id),
+            );
+            const emphasizeLiveViewAction = Boolean(
+              canSaveAsLiveView &&
+                (message.id === latestLiveViewEligibleMessageId ||
+                  chatLiveView?.draft?.messageId === message.id),
             );
             const turnAggregatedCitations = citationPlan.aggregatedAfter.get(message.id);
             const messageHoverTime = formatMessageHoverTime(message.timestamp);
@@ -399,7 +421,10 @@ export function ChatMessageList({
                       {editingMessageId !== message.id && (
                         <div
                           className={cn(
-                            "flex items-center gap-0.5 mt-1 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100 transition-all duration-200",
+                            "flex items-center gap-0.5 mt-1 transition-all duration-200",
+                            emphasizeLiveViewAction
+                              ? "opacity-100"
+                              : "opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100",
                             message.role === "assistant" ? "self-start" : "self-end"
                           )}
                         >
@@ -439,6 +464,21 @@ export function ChatMessageList({
                               <Copy className="h-3 w-3" />
                             )}
                           </button>
+                          {canSaveAsLiveView && chatLiveView ? (
+                            <button
+                              type="button"
+                              data-testid="chat-save-as-live-view"
+                              aria-expanded={
+                                chatLiveView.draft?.messageId === message.id
+                              }
+                              onClick={() => chatLiveView.openForMessage(message.id)}
+                              className="ml-1 flex h-7 items-center gap-1.5 border border-[#4A6B00] px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#4A6B00] hover:bg-[#C7FF3E]/15 dark:border-[#C7FF3E] dark:text-[#C7FF3E]"
+                              title="Turn this query into a Live View"
+                            >
+                              <LayoutDashboard className="h-3 w-3" />
+                              SAVE AS LIVE VIEW
+                            </button>
+                          ) : null}
                           {canEditMessage && (
                             <button
                               type="button"
@@ -519,6 +559,12 @@ export function ChatMessageList({
                           )}
                         </div>
                       )}
+                      {chatLiveView ? (
+                        <ChatLiveViewPanel
+                          messageId={message.id}
+                          controls={chatLiveView}
+                        />
+                      ) : null}
                     </>
                   ) : null}
                 </div>
