@@ -619,12 +619,11 @@ export async function searchConversations(
   const limit = normalizeLimit(options.limit ?? CHAT_SEARCH_RESULT_LIMIT);
   const offset = Math.max(0, Math.floor(options.offset ?? 0));
   if (limit === 0) return [];
-  // Bound the body scan to the most-recent N conversations. Entries are sorted
-  // newest-first, so this searches recent chats and caps a rare/no-match query
-  // at N file reads instead of all 15k+ (each a Tauri IPC round-trip that froze
-  // the modal). Older conversations are intentionally not body-searched here.
+  // Search the complete local history, not only the recent-chat window. The
+  // history view is explicitly a recall surface, so an older matching thread
+  // must remain discoverable. Keep the result count bounded to protect the UI.
   const allEntries = await orderedConversationEntries(dir);
-  const entries = allEntries.slice(0, CHAT_CONTENT_SEARCH_SCAN_LIMIT);
+  const entries = allEntries;
   const candidates: ConversationDedupCandidate[] = [];
   let skipped = 0;
 
