@@ -23,6 +23,7 @@ export type ChatTelemetryContext = {
 
 const SAFE_ENTRY_CARDS = new Set<ChatEntryCard>([
   "automate_my_work",
+  "contextual_suggestion",
   "day_recap",
   "other_builtin",
   "custom",

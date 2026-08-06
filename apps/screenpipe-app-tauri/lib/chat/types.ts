@@ -8,6 +8,7 @@ export type ChatEntrySource = "home_card" | "normal_chat";
 
 export type ChatEntryCard =
   | "automate_my_work"
+  | "contextual_suggestion"
   | "day_recap"
   | "other_builtin"
   | "custom"

@@ -169,7 +169,13 @@ export function StandaloneChat({
   const isFullscreen = useIsFullscreen();
   const { items: appItems, isLoading: appsLoading, refresh: refreshAppItems } = useSqlAutocomplete("app");
   const { items: tagItems, isLoading: tagsLoading, refresh: refreshTagItems } = useTagAutocomplete();
-  const { suggestions: autoSuggestions, refreshing: suggestionsRefreshing, forceRefresh: refreshSuggestions } = useAutoSuggestions();
+  const {
+    suggestions: autoSuggestions,
+    mode: suggestionMode,
+    loading: suggestionsLoading,
+    refreshing: suggestionsRefreshing,
+    forceRefresh: refreshSuggestions,
+  } = useAutoSuggestions();
   const {
     pipes,
     templatePipes,
@@ -229,6 +235,21 @@ export function StandaloneChat({
     setChipScrollTop,
     clearConnectionChip,
   } = useChatComposerShell();
+  const pendingContextualHomeSuggestionRef = useRef(false);
+  const fillContextualHomeSuggestion = useCallback(
+    (text: string) => {
+      pendingContextualHomeSuggestionRef.current = true;
+      setInput(text);
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.setSelectionRange(text.length, text.length);
+      });
+    },
+    [inputRef, setInput],
+  );
+  useEffect(() => {
+    if (!input.trim()) pendingContextualHomeSuggestionRef.current = false;
+  }, [input]);
   useTryInChatEvent({
     startNewRef: tryInChatStartNewRef,
     setConnectionChip,
@@ -1147,6 +1168,26 @@ export function StandaloneChat({
     turnIntentLedgerRef,
   });
 
+  const sendComposerMessage = useCallback(
+    (message: string, displayLabel?: string) => {
+      const cameFromContextualHomeSuggestion =
+        pendingContextualHomeSuggestionRef.current;
+      pendingContextualHomeSuggestionRef.current = false;
+      return sendMessage(
+        message,
+        displayLabel,
+        undefined,
+        cameFromContextualHomeSuggestion
+          ? {
+              entrySource: "home_card",
+              entryCard: "contextual_suggestion",
+            }
+          : undefined,
+      );
+    },
+    [sendMessage],
+  );
+
   // E2E-only: expose the stop action so specs can end a turn and drive sends
   // back-to-back without the Pi subprocess staying busy. Render assignment (the
   // repo's preferred pattern over mirror effects); harmless no-op in production.
@@ -1669,7 +1710,7 @@ export function StandaloneChat({
     isKnownConnectionId: (id) => INTEGRATION_ICON_KEYS.has(id),
     handlePastedFiles,
     attachPastedText,
-    sendMessage,
+    sendMessage: sendComposerMessage,
     steerMessage,
     steerQueuedPrompt,
   });
@@ -1983,8 +2024,13 @@ export function StandaloneChat({
           await commands.showWindow({ Home: { page: "pipes" } });
         }}
         summaryCardsProps={{
-          onSendMessage: (message, displayLabel, entrySource, entryCard) =>
-            sendMessage(message, displayLabel, undefined, { entrySource, entryCard }),
+          onSendMessage: (message, displayLabel, entrySource, entryCard) => {
+            pendingContextualHomeSuggestionRef.current = false;
+            return sendMessage(message, displayLabel, undefined, {
+              entrySource,
+              entryCard,
+            });
+          },
           customTemplates,
           onSaveCustomTemplate: saveCustomTemplate,
           onUpdateCustomTemplate: updateCustomTemplate,
@@ -2007,6 +2053,14 @@ export function StandaloneChat({
               enabled: pipe.config.enabled,
               schedule: pipe.config.schedule,
             })),
+        }}
+        homeStarterProps={{
+          suggestions: connectionAwareSuggestions,
+          activityMode: suggestionMode,
+          isLoading: suggestionsLoading,
+          isRefreshing: suggestionsRefreshing,
+          onFillSuggestion: fillContextualHomeSuggestion,
+          onRefresh: refreshVisibleSuggestions,
         }}
         messageListProps={messageListProps}
         isUserScrolledUp={isUserScrolledUp}
