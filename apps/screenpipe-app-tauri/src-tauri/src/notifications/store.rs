@@ -304,8 +304,13 @@ mod tests {
         assert_eq!(persisted.len(), 1);
         assert_eq!(persisted[0].id, "durable");
 
-        let missing_parent = temp.path().join("missing").join("notifications.json");
-        assert!(write_all_to(&missing_parent, &entries).is_err());
+        // `write_atomic_full` intentionally creates missing directories, so
+        // use a regular file as the parent to exercise a deterministic write
+        // failure on every platform.
+        let non_directory_parent = temp.path().join("not-a-directory");
+        std::fs::write(&non_directory_parent, "blocker").unwrap();
+        let unwritable = non_directory_parent.join("notifications.json");
+        assert!(write_all_to(&unwritable, &entries).is_err());
     }
 
     #[test]
