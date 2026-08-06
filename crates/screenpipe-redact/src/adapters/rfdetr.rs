@@ -439,22 +439,9 @@ mod imp {
             // whichever pass presents a given string at the trained scale
             // catches it.
             //
-            // 2×2 with ~20% overlap, so a PII string sitting on a seam is
-            // still wholly contained in at least one tile.
-            let (tw, th) = (orig_w / 2, orig_h / 2);
-            let (ox, oy) = (tw / 5, th / 5);
-            let mut all: Vec<ImageRegion> = self.infer_window(&img, 0, 0, orig_w, orig_h)?;
-            for gy in 0..2u32 {
-                for gx in 0..2u32 {
-                    let x0 = (gx * tw).saturating_sub(ox);
-                    let y0 = (gy * th).saturating_sub(oy);
-                    let x1 = ((gx + 1) * tw + ox).min(orig_w);
-                    let y1 = ((gy + 1) * th + oy).min(orig_h);
-                    if x1 <= x0 || y1 <= y0 {
-                        continue;
-                    }
-                    all.extend(self.infer_window(&img, x0, y0, x1 - x0, y1 - y0)?);
-                }
+            let mut all: Vec<ImageRegion> = Vec::new();
+            for (x, y, w, h) in inference_windows(orig_w, orig_h) {
+                all.extend(self.infer_window(&img, x, y, w, h)?);
             }
             Ok(suppress_overlaps(all))
         }
@@ -574,6 +561,36 @@ mod imp {
         }
     }
 
+    /// Windows to run the model over, as `(x, y, w, h)` in frame pixels.
+    ///
+    /// **The first entry is always the whole frame.** That is the invariant
+    /// this function exists to make testable, because getting it wrong is
+    /// silent and expensive: an earlier revision returned only the 4 tiles,
+    /// which reads as a harmless optimisation (fewer passes, and real-frame
+    /// recall is identical) but collapses the planted harness from 95.7 % to
+    /// 56.1 % — the model has a narrow trained scale band, and content already
+    /// inside it is magnified OUT of band by the tile zoom.
+    ///
+    /// Tiles are 2×2 with ~20 % overlap so a PII string on a seam is still
+    /// wholly inside at least one tile.
+    pub(super) fn inference_windows(w: u32, h: u32) -> Vec<(u32, u32, u32, u32)> {
+        let mut out = vec![(0, 0, w, h)];
+        let (tw, th) = (w / 2, h / 2);
+        let (ox, oy) = (tw / 5, th / 5);
+        for gy in 0..2u32 {
+            for gx in 0..2u32 {
+                let x0 = (gx * tw).saturating_sub(ox);
+                let y0 = (gy * th).saturating_sub(oy);
+                let x1 = ((gx + 1) * tw + ox).min(w);
+                let y1 = ((gy + 1) * th + oy).min(h);
+                if x1 > x0 && y1 > y0 {
+                    out.push((x0, y0, x1 - x0, y1 - y0));
+                }
+            }
+        }
+        out
+    }
+
     /// Greedy IoU suppression across tiles.
     ///
     /// Tiles overlap by design, so the same string is often detected twice —
@@ -688,33 +705,58 @@ impl ImageRedactor for RfdetrRedactor {
 mod tests {
     use super::*;
 
+    /// Tiling must ADD to the whole-frame pass, never replace it.
+    ///
+    /// Dropping the whole-frame pass looks like a free optimisation — one
+    /// fewer forward pass, and real-frame recall does not move — but it
+    /// collapses the planted harness from 95.7 % to 56.1 %, because content
+    /// already at the trained scale is magnified out of band by the tile
+    /// zoom. This test is the guard for that regression.
+    #[cfg(feature = "onnx-cpu")]
+    #[test]
+    fn whole_frame_pass_is_never_dropped() {
+        for (w, h) in [(1512u32, 948u32), (1920, 1080), (2560, 1440), (1023, 767)] {
+            let wins = imp::inference_windows(w, h);
+            assert_eq!(wins.len(), 5, "{w}x{h}: expect whole frame + 4 tiles");
+            assert_eq!(
+                wins[0],
+                (0, 0, w, h),
+                "{w}x{h}: first window MUST be the whole frame"
+            );
+        }
+    }
+
     /// The 2×2 grid must cover every pixel of the frame. A gap between
     /// tiles would be a blind spot where PII is never even looked at,
     /// which is a silent privacy failure rather than a visible bug.
+    #[cfg(feature = "onnx-cpu")]
     #[test]
     fn tiles_cover_the_whole_frame() {
         for (w, h) in [(1512u32, 948u32), (1920, 1080), (2560, 1440), (1023, 767)] {
-            let (tw, th) = (w / 2, h / 2);
-            let (ox, oy) = (tw / 5, th / 5);
-            let mut spans_x: Vec<(u32, u32)> = Vec::new();
-            let mut spans_y: Vec<(u32, u32)> = Vec::new();
-            for g in 0..2u32 {
-                spans_x.push(((g * tw).saturating_sub(ox), ((g + 1) * tw + ox).min(w)));
-                spans_y.push(((g * th).saturating_sub(oy), ((g + 1) * th + oy).min(h)));
+            let tiles = &imp::inference_windows(w, h)[1..];
+            assert_eq!(tiles.len(), 4);
+            // Every pixel must fall inside at least one tile.
+            for (px, py) in [
+                (0u32, 0u32),
+                (w - 1, 0),
+                (0, h - 1),
+                (w - 1, h - 1),
+                (w / 2, h / 2),
+                (w / 2, 0),
+                (0, h / 2),
+            ] {
+                assert!(
+                    tiles
+                        .iter()
+                        .any(|&(x, y, tw, th)| px >= x && px < x + tw && py >= y && py < y + th),
+                    "{w}x{h}: pixel ({px},{py}) is covered by no tile — blind spot"
+                );
             }
-            // Tile 0 starts at 0, tile 1 ends at the edge, and they overlap.
-            assert_eq!(spans_x[0].0, 0, "{w}x{h}: x must start at 0");
-            assert_eq!(spans_y[0].0, 0, "{w}x{h}: y must start at 0");
-            assert_eq!(spans_x[1].1, w, "{w}x{h}: x must reach the right edge");
-            assert_eq!(spans_y[1].1, h, "{w}x{h}: y must reach the bottom edge");
-            assert!(
-                spans_x[1].0 < spans_x[0].1,
-                "{w}x{h}: horizontal gap between tiles"
-            );
-            assert!(
-                spans_y[1].0 < spans_y[0].1,
-                "{w}x{h}: vertical gap between tiles"
-            );
+            // And the tiles must overlap, so a string on a seam is whole
+            // inside at least one of them.
+            let (x0, _, w0, _) = tiles[0];
+            let (x1, ..) = tiles[1];
+            assert!(x1 < x0 + w0, "{w}x{h}: tiles do not overlap horizontally");
         }
     }
 
