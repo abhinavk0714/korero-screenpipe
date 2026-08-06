@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 97
-- Declared test blocks: 263
-- Weighted coverage points: 202.7
+- Mapped specs: 98
+- Declared test blocks: 266
+- Weighted coverage points: 205.7
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -20,7 +20,7 @@ can execute more runtime cases than this number shows.
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
 | windows | 76 | 230 | 187.2 | 15 | 78 | 91% |
-| macos | 93 | 226 | 173.5 | 17 | 80 | 89% |
+| macos | 94 | 229 | 176.5 | 17 | 80 | 89% |
 | linux | 66 | 190 | 157.0 | 14 | 73 | 88% |
 
 ## Runtime Results
@@ -37,17 +37,17 @@ pass/fail/skip counts.
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
 | billing | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts |
 | capture-ocr | 2 specs / 16 tests / 6.4 pts | 7 specs / 11 tests / 4.4 pts | 1 specs / 3 tests / 1.2 pts |
-| chat-ai | 23 specs / 37 tests / 28.1 pts | 31 specs / 51 tests / 34.7 pts | 22 specs / 36 tests / 27.6 pts |
+| chat-ai | 23 specs / 37 tests / 28.1 pts | 32 specs / 54 tests / 37.7 pts | 22 specs / 36 tests / 27.6 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 20 specs / 104 tests / 86.8 pts | 23 specs / 83 tests / 69.4 pts | 16 specs / 75 tests / 66.2 pts |
+| local-api | 20 specs / 104 tests / 86.8 pts | 24 specs / 86 tests / 72.4 pts | 16 specs / 75 tests / 66.2 pts |
 | notifications | 4 specs / 25 tests / 16.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
 | onboarding | 4 specs / 10 tests / 7.6 pts | 5 specs / 11 tests / 8.0 pts | 4 specs / 10 tests / 7.6 pts |
 | os-integration | 6 specs / 18 tests / 17.1 pts | 11 specs / 13 tests / 6.7 pts | 1 specs / 1 tests / 1.0 pts |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
-| pipes | 6 specs / 18 tests / 18.0 pts | 6 specs / 18 tests / 18.0 pts | 6 specs / 18 tests / 18.0 pts |
-| real-ui-e2e | 53 specs / 147 tests / 120.0 pts | 61 specs / 141 tests / 114.1 pts | 49 specs / 125 tests / 106.4 pts |
+| pipes | 6 specs / 18 tests / 18.0 pts | 7 specs / 21 tests / 21.0 pts | 6 specs / 18 tests / 18.0 pts |
+| real-ui-e2e | 53 specs / 147 tests / 120.0 pts | 62 specs / 144 tests / 117.1 pts | 49 specs / 125 tests / 106.4 pts |
 | settings | 14 specs / 37 tests / 34.0 pts | 16 specs / 32 tests / 27.7 pts | 13 specs / 29 tests / 26.0 pts |
-| storage-privacy | 9 specs / 39 tests / 30.3 pts | 8 specs / 20 tests / 19.1 pts | 6 specs / 18 tests / 17.1 pts |
+| storage-privacy | 9 specs / 39 tests / 30.3 pts | 9 specs / 23 tests / 22.1 pts | 6 specs / 18 tests / 17.1 pts |
 | tauri-command | 13 specs / 22 tests / 15.3 pts | 17 specs / 27 tests / 18.2 pts | 12 specs / 21 tests / 14.3 pts |
 | window-lifecycle | 18 specs / 62 tests / 52.6 pts | 18 specs / 43 tests / 31.0 pts | 13 specs / 38 tests / 29.5 pts |
 
@@ -163,6 +163,7 @@ pass/fail/skip counts.
 | owned-browser.spec.ts | windows, macos | os-integration, window-lifecycle | owned-browser, window-lifecycle | low | smoke | command | 1 | Embedded agent browser hides safely without an attached child. |
 | permission-recovery.spec.ts | macos | os-integration, real-ui-e2e, window-lifecycle | permission-recovery, window-lifecycle | high | conditional | real-user-flow | 2 | macOS-only recovery window for missing TCC permissions. |
 | pi-extensions.spec.ts | windows, macos, linux | real-ui-e2e, settings | connections, pi-extensions, agent-extensions | medium | strong | real-user-flow | 1 | Opens Home -> Connections, opens Pi extensions, verifies catalog and warning copy, filters package search, and captures a screenshot. Read-only smoke: does not install packages. |
+| pipe-continuous-chat.spec.ts | macos | pipes, chat-ai, real-ui-e2e, local-api, storage-privacy | pipes, chat | high | strong | real-user-flow | 3 | Three native desktop journeys cover failed-save rollback and retry, stable one-chat continuity across two real Pipe runs with prior model context, and confirmed reset followed by a clean third run. |
 | pipes-mcp-connections.spec.ts | windows, macos, linux | pipes, real-ui-e2e, local-api | pipes, connections | high | strong | real-user-flow | 3 | Seeds a custom MCP server, installs a local pipe, selects the MCP server from the pipe connection picker, and verifies the mcp:<id> allowlist persists. |
 | pipes.spec.ts | windows, macos, linux | pipes, real-ui-e2e, local-api | pipes | high | strong | real-user-flow | 8 | Pipes discover, install failure, connection modal, install, list, play, and stop. |
 | privacy-api-auth-enforcement.spec.ts | windows, macos, linux | settings, local-api, storage-privacy | settings-privacy-api-auth, local-api-auth, restart-flow | high | conditional | mixed | 1 | Opt-in restart smoke toggles API auth and verifies backend behavior. |
