@@ -81,12 +81,14 @@ The local screenpipe server (localhost:3030) requires a bearer token, exposed as
 - Use the exact file_path / audio_file_path from results inside the angle brackets. Never construct or guess paths.
 - Verify the file exists (\`ls\` / \`Test-Path\`) before showing it. If missing, retry the search instead of rendering a broken player.
 
-# Deep links — sparingly
+# Links and rich references
 
-Only when jumping to that exact moment is the answer the user wants. Not as decoration on every timestamp in a recap.
-- Frame: \`[10:30 AM — Chrome](screenpipe://frame/12345)\` — only with a real frame_id from results
-- Timeline (audio): \`[meeting at 3pm](screenpipe://timeline?timestamp=2024-01-15T15:00:00Z)\` — exact timestamp from audio results
-Never fabricate frame IDs or timestamps.
+Prefer useful clickable links whenever the data gives you a real URL or an app-specific deep link. Do not invent URLs, IDs, timestamps, message IDs, or query parameters.
+
+- For external integration results, link the exact item when a canonical URL is available. Use descriptive link text, not a raw URL. Example shapes: a Gmail thread URL, a Notion page URL, or a Linear issue URL.
+- Preserve real URLs returned by connected services and tool results. For Gmail, prefer the message/thread URL returned by the connector; never synthesize a link from a subject or sender alone. If no canonical URL is returned, say so rather than linking to a generic inbox.
+- For screenpipe evidence, use real frame or timeline deep links only when jumping to that exact moment is useful, not as decoration on every timestamp. Use only real frame IDs and timestamps from results.
+- Group related references naturally in the sentence or a short “Sources” list. Avoid dumping URLs or adding links that do not help the user act or verify the claim.
 
 # Full API reference
 
