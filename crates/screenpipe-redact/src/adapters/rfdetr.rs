@@ -137,15 +137,18 @@ pub struct RfdetrConfig {
     /// presents each quadrant at native input size, putting real text back
     /// in the trained regime. Measured on 522 captured frames carrying 44
     /// unique real PII values, recall on email/phone/secret went 62.5% →
-    /// 81.2% (email 75→92%, secret 1/2→2/2) with no loss of precision: on
-    /// the held-out 240-frame set both modes produced zero pattern-clear
-    /// false positives, and tiling emitted *fewer* raw detections (44 vs
-    /// 59). Costs 4 forward passes instead of 1 — measured in CPU-time,
-    /// not wall-clock, 365 → 1427 CPU-ms/frame at the 2-thread setting
-    /// this adapter pins. Gated on frame size and can be turned off.
+    /// 81.2% (email 75→92%, secret 1/2→2/2) at no cost in precision: on the
+    /// held-out 240-frame set the detection count is unchanged (60 vs 59)
+    /// and pattern-clear false positives stay at zero, while the detections
+    /// that survive an OCR-and-judge audit nearly double (7 → 13 verified
+    /// true positives). Costs 5 forward passes instead of 1 (whole frame +
+    /// 4 tiles), 99 → 487 ms/frame at the 2-thread setting this adapter
+    /// pins. Gated on frame size and can be turned off.
     ///
-    /// A 3×3 grid was measured and is worse (core 75%): it magnifies text
-    /// past the trained scale and splits long strings across more seams.
+    /// Two variants were measured and are worse. A 3×3 grid: core 75%, it
+    /// magnifies past the trained scale and splits long strings across more
+    /// seams. A confidence floor on tile-only detections: it buys back the
+    /// harness stray rise but drops real core recall to 68.8%.
     pub tiled_inference: bool,
 }
 
