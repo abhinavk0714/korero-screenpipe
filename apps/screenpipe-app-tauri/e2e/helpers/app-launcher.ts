@@ -20,6 +20,10 @@ export const WEBDRIVER_PORT = Number(
  *  developer's running production screenpipe app (which holds 11435). The
  *  Rust binary reads `SCREENPIPE_FOCUS_PORT` from env when this differs. */
 const FOCUS_PORT = Number(process.env.SCREENPIPE_FOCUS_PORT ?? '11436');
+/** Local Core API port — keep E2E away from the developer's production :3030.
+ *  The Rust server reads `SCREENPIPE_PORT`, and specs discover the matching
+ *  runtime value through `get_local_api_config`. */
+export const LOCAL_API_PORT = Number(process.env.SCREENPIPE_PORT ?? '11437');
 
 /** Kill any process listening on a port. No-op if none. */
 function killPort(port: number): void {
@@ -264,6 +268,7 @@ export function getAppPid(): number | null {
 export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof spawn> | null> {
   killPort(port);
   killPort(FOCUS_PORT);
+  killPort(LOCAL_API_PORT);
 
   const appPath = getAppPath();
   if (!existsSync(appPath)) {
@@ -308,6 +313,7 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
       SCREENPIPE_DATA_DIR: E2E_DATA_DIR,
       SCREENPIPE_E2E_SEED: E2E_SEED_FLAGS,
       SCREENPIPE_FOCUS_PORT: String(FOCUS_PORT),
+      SCREENPIPE_PORT: String(LOCAL_API_PORT),
       TAURI_WEBDRIVER_PORT: String(port),
       ...(backgroundAiToolsEnabled
         ? {
