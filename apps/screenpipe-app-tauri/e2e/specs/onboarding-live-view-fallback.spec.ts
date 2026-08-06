@@ -107,11 +107,13 @@ async function readFirstDashboard(): Promise<BrainView | null> {
 }
 
 describe("onboarding Live View fallback", () => {
-  before(async () => {
+  before(async function () {
+    this.timeout(t(240_000));
     await waitForAppReady();
   });
 
-  it("still saves a bound dashboard when the AI planner fails", async () => {
+  it("still saves a bound dashboard when the AI planner fails", async function () {
+    this.timeout(t(240_000));
     // Start at the engine slide so the app seeds its own default AI preset the
     // way a real first run does, then advances into the goal picker.
     await invokeOrThrow("set_onboarding_step", { step: "engine" });
@@ -119,15 +121,30 @@ describe("onboarding Live View fallback", () => {
     await browser.pause(1_500);
     await installNetworkBoundary();
 
-    const goalCard = await $(t("onboarding-goal-work_memory"));
-    await goalCard.waitForDisplayed({
-      timeout: 90_000,
-      timeoutMsg: "goal picker never rendered",
-    });
+    const goalCard = await $('[data-testid="onboarding-goal-work_memory"]');
+    try {
+      await goalCard.waitForDisplayed({
+        timeout: t(90_000),
+        timeoutMsg: "goal picker never rendered",
+      });
+    } catch (error) {
+      // Report what the onboarding window actually shows, so a navigation or
+      // seeding regression is diagnosable from CI output alone.
+      const rendered = await browser.execute(() => ({
+        url: globalThis.location?.href ?? "unknown",
+        testids: Array.from(
+          document.querySelectorAll("[data-testid]"),
+        ).map((node) => node.getAttribute("data-testid")),
+        heading: document.querySelector("h1,h2")?.textContent?.trim() ?? null,
+      }));
+      throw new Error(
+        `goal picker never rendered. onboarding showed: ${JSON.stringify(rendered)}`,
+      );
+    }
     await goalCard.click();
 
-    const buildButton = await $(t("onboarding-build-live-view"));
-    await buildButton.waitForEnabled({ timeout: 15_000 });
+    const buildButton = await $('[data-testid="onboarding-build-live-view"]');
+    await buildButton.waitForEnabled({ timeout: t(15_000) });
     await buildButton.click();
 
     // The build must finish rather than dead-end on the planner failure.
@@ -137,7 +154,7 @@ describe("onboarding Live View fallback", () => {
         return Boolean(view && view.slots.length > 0);
       },
       {
-        timeout: 120_000,
+        timeout: t(120_000),
         interval: 1_000,
         timeoutMsg:
           "first-dashboard never gained slots after the AI planner failed",
