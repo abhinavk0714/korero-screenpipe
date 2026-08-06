@@ -600,9 +600,17 @@ export function BrainOverview({
     () => [...pipes].sort((a, b) => a.config.name.localeCompare(b.config.name)),
     [pipes],
   );
+  const enabledPipes = useMemo(
+    () => installedPipes.filter((pipe) => pipe.config.enabled),
+    [installedPipes],
+  );
   const installedPipeNames = useMemo(
     () => new Set(installedPipes.map((pipe) => pipe.config.name)),
     [installedPipes],
+  );
+  const enabledPipeNames = useMemo(
+    () => new Set(enabledPipes.map((pipe) => pipe.config.name)),
+    [enabledPipes],
   );
   const aiPresets = useMemo(
     () => (settings.aiPresets ?? []) as AIPreset[],
@@ -1033,6 +1041,13 @@ export function BrainOverview({
             .filter((name): name is string => Boolean(name)),
         ),
       );
+      const disabledPipeNames = pipeNames.filter(
+        (pipeName) =>
+          installedPipeNames.has(pipeName) && !enabledPipeNames.has(pipeName),
+      );
+      const runnablePipeNames = pipeNames.filter(
+        (pipeName) => !disabledPipeNames.includes(pipeName),
+      );
       const analyticsProperties = {
         ...liveViewAnalyticsProperties(targetView, views.length),
         trigger,
@@ -1066,9 +1081,9 @@ export function BrainOverview({
         total: boundSlots.length,
       });
 
-      const failures: string[] = [];
+      const runFailures: string[] = [];
       await Promise.all(
-        pipeNames.map(async (pipeName) => {
+        runnablePipeNames.map(async (pipeName) => {
           try {
             const response = await localFetch(
               `/pipes/${encodeURIComponent(pipeName)}/run`,
@@ -1100,7 +1115,7 @@ export function BrainOverview({
               throw new Error(body.error || `HTTP ${response.status}`);
             }
           } catch (runError) {
-            failures.push(
+            runFailures.push(
               `${pipeName}: ${
                 runError instanceof Error ? runError.message : String(runError)
               }`,
@@ -1109,22 +1124,36 @@ export function BrainOverview({
         }),
       );
 
+      const startFailureCount = disabledPipeNames.length + runFailures.length;
+      const disabledPipeMessage =
+        disabledPipeNames.length > 0
+          ? `${disabledPipeNames.join(", ")} ${
+              disabledPipeNames.length === 1 ? "is" : "are"
+            } disabled. Enable ${
+              disabledPipeNames.length === 1 ? "it" : "them"
+            } in Pipes to refresh this Live View.`
+          : null;
+      const failureMessage = [
+        disabledPipeMessage,
+        runFailures.length > 0
+          ? `Could not start ${runFailures.join(", ")}`
+          : null,
+      ]
+        .filter((message): message is string => Boolean(message))
+        .join(" ");
       setDataRefresh((current) =>
         current && current.startedAt === startedAt
           ? {
               ...current,
               status:
-                failures.length === pipeNames.length ? "error" : "running",
-              startFailureCount: failures.length,
-              message:
-                failures.length > 0
-                  ? `Could not start ${failures.join(", ")}`
-                  : undefined,
+                startFailureCount === pipeNames.length ? "error" : "running",
+              startFailureCount,
+              message: failureMessage || undefined,
             }
           : current,
       );
     },
-    [views.length],
+    [enabledPipeNames, installedPipeNames, views.length],
   );
 
   useEffect(() => {
@@ -1515,7 +1544,7 @@ export function BrainOverview({
           selectedAiPreset.provider === "screenpipe-cloud"
             ? (settings.user?.token ?? null)
             : null,
-        pipes: installedPipes.map((pipe) => ({
+        pipes: enabledPipes.map((pipe) => ({
           name: pipe.config.name,
           description:
             typeof pipe.config.config?.description === "string"
@@ -2809,7 +2838,7 @@ export function BrainOverview({
         draft={draft}
         saving={saving}
         componentOptions={COMPONENTS}
-        pipeNames={installedPipes.map((pipe) => pipe.config.name)}
+        pipeNames={enabledPipes.map((pipe) => pipe.config.name)}
         onChange={setDraft}
         onCancel={() => {
           setDraft(null);

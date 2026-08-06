@@ -30,6 +30,16 @@ const mocks = vi.hoisted(() => ({
   toast: vi.fn(),
   refetchPipes: vi.fn(),
   capture: vi.fn(),
+  pipes: [] as Array<{
+    config: {
+      name: string;
+      schedule: string;
+      enabled: boolean;
+      config: Record<string, unknown>;
+    };
+    prompt_body: string;
+    is_running: boolean;
+  }>,
   usageState: null as any,
   openBusinessUpgradeSurface: vi.fn(),
 }));
@@ -75,18 +85,7 @@ vi.mock("@/lib/api", () => ({
 }));
 vi.mock("@/lib/hooks/use-pipes", () => ({
   usePipes: () => ({
-    pipes: [
-      {
-        config: {
-          name: "daily-summary",
-          schedule: "daily",
-          enabled: true,
-          config: {},
-        },
-        prompt_body: "summarize",
-        is_running: false,
-      },
-    ],
+    pipes: mocks.pipes,
     refetch: mocks.refetchPipes,
   }),
 }));
@@ -348,6 +347,18 @@ const processMapTemplate = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.pipes = [
+    {
+      config: {
+        name: "daily-summary",
+        schedule: "daily",
+        enabled: true,
+        config: {},
+      },
+      prompt_body: "summarize",
+      is_running: false,
+    },
+  ];
   mocks.usageState = null;
   mocks.openBusinessUpgradeSurface.mockResolvedValue(undefined);
   Object.defineProperty(window, "localStorage", {
@@ -836,6 +847,34 @@ describe("BrainOverview", () => {
     )?.[1];
     expect(JSON.stringify(properties)).not.toContain("daily-summary");
     expect(JSON.stringify(properties)).not.toContain("private failure detail");
+  });
+
+  it("does not run a disabled Pipe when refreshing a Live View", async () => {
+    mocks.pipes[0].config.enabled = false;
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    render(<BrainOverview />);
+
+    fireEvent.click(await screen.findByTestId("overview-refresh-data"));
+
+    expect(await screen.findByTestId("live-view-data-status")).toHaveTextContent(
+      "daily-summary is disabled. Enable it in Pipes to refresh this Live View.",
+    );
+    expect(
+      mocks.localFetch.mock.calls.some(
+        ([path]) => path === "/pipes/daily-summary/run",
+      ),
+    ).toBe(false);
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "live_view_refresh_completed",
+      expect.objectContaining({
+        status: "error",
+        requested_pipe_count: 1,
+        pipe_start_failure_count: 1,
+      }),
+    );
   });
 
   it("keeps primary controls visible and moves setup actions into More", async () => {
@@ -1898,6 +1937,55 @@ describe("BrainOverview", () => {
         slots: [expect.objectContaining({ title: "Focus time" })],
       }),
     );
+  });
+
+  it("offers only enabled Pipes to Live View generation", async () => {
+    mocks.pipes.push({
+      config: {
+        name: "disabled-summary",
+        schedule: "daily",
+        enabled: false,
+        config: {},
+      },
+      prompt_body: "summarize archived work",
+      is_running: false,
+    });
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.generateLiveViewWithPi.mockResolvedValue({
+      title: populatedView.title,
+      timeRange: populatedView.timeRange,
+      periodPolicy: populatedView.periodPolicy,
+      note: "Kept the current Block.",
+      blocks: [
+        {
+          id: "focus-time",
+          title: "Focus time",
+          intent: "Calculate focused work time",
+          component: "metric.v1",
+          width: 6,
+          pipeName: "daily-summary",
+        },
+      ],
+    });
+    render(<BrainOverview />);
+
+    fireEvent.change(await screen.findByTestId("live-view-ai-prompt"), {
+      target: { value: "keep this focused on active work" },
+    });
+    fireEvent.click(screen.getByTestId("live-view-ai-generate"));
+
+    await waitFor(() => expect(mocks.generateLiveViewWithPi).toHaveBeenCalled());
+    expect(mocks.generateLiveViewWithPi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pipes: [expect.objectContaining({ name: "daily-summary" })],
+      }),
+    );
+    expect(
+      JSON.stringify(mocks.generateLiveViewWithPi.mock.calls[0][0].pipes),
+    ).not.toContain("disabled-summary");
   });
 
   it("shows proposed Blocks on an empty Canvas before acceptance", async () => {
