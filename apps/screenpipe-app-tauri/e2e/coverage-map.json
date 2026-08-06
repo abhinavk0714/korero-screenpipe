@@ -1404,27 +1404,6 @@
       "notes": "A due H1 activation runs its real Pipe, sends one visible prompt through the app-control notification server, and remains exactly-once across repeated scheduler ticks."
     },
     {
-      "spec": "onboarding-live-view-fallback.spec.ts",
-      "platforms": [
-        "windows",
-        "macos",
-        "linux"
-      ],
-      "layers": [
-        "onboarding",
-        "live-views",
-        "real-ui-e2e"
-      ],
-      "features": [
-        "onboarding",
-        "live-views"
-      ],
-      "criticality": "high",
-      "confidence": "strong",
-      "ux": "real-user-flow",
-      "notes": "Drives the real first-dashboard slide with the AI planner failing and proves onboarding still saves a dashboard whose slots are all bound to scheduled tasks."
-    },
-    {
       "spec": "onboarding-redirect.spec.ts",
       "platforms": [
         "windows",
