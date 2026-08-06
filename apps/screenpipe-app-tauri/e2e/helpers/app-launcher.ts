@@ -24,6 +24,9 @@ const FOCUS_PORT = Number(process.env.SCREENPIPE_FOCUS_PORT ?? '11436');
  *  The Rust server reads `SCREENPIPE_PORT`, and specs discover the matching
  *  runtime value through `get_local_api_config`. */
 export const LOCAL_API_PORT = Number(process.env.SCREENPIPE_PORT ?? '11437');
+// WebdriverIO workers inherit the parent environment. Keep their API probes
+// aligned with the isolated app child even when the caller omitted an override.
+process.env.SCREENPIPE_PORT ??= String(LOCAL_API_PORT);
 
 /** Kill any process listening on a port. No-op if none. */
 function killPort(port: number): void {
