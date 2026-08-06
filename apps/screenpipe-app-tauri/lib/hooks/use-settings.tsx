@@ -65,7 +65,18 @@ export type AIProviderType =
 	| "custom"
 	| "embedded"
 	| "screenpipe-cloud"
+	| "acp"
 	| "pi";
+
+export type AcpAgentPresetConfig = {
+	/** Stable adapter id from the ACP registry, or "custom". */
+	id: string;
+	/** Only needed for custom/local adapters. Curated adapters are resolved by id. */
+	command?: string;
+	args?: string[];
+	/** Empty values mean "inherit this variable from the app environment". */
+	env?: Record<string, string>;
+};
 
 export type EmbeddedLLMConfig = {
 	enabled: boolean;
@@ -97,6 +108,10 @@ export type AIPreset = {
 	  }
 	| {
 			provider: "screenpipe-cloud";
+	  }
+	| {
+			provider: "acp";
+			acpAgent: AcpAgentPresetConfig;
 	  }
 	| {
 			provider: "anthropic";
@@ -147,6 +162,7 @@ export interface ChatMessage {
 	interruptedBySteer?: boolean;
 	steeredResponse?: boolean;
 	stoppedByUser?: boolean;
+	interruptedByQuit?: boolean;
 	/** Wall-clock work duration for coalesced assistant messages (pipe
 	 *  runs). Used by the chat renderer as a fallback when no thinking
 	 *  blocks contributed a duration, so the work-group can still show
@@ -234,6 +250,10 @@ export interface ChatConversation {
 	 *  the model selection when switching between chats. Persisted to disk
 	 *  so the selection survives app restart. */
 	presetId?: string;
+	/** The last live ACP session id for this conversation. Persisted so a
+	 *  reopen after the agent process is gone can reattach to that session
+	 *  (session/resume) instead of starting fresh. */
+	acpSessionId?: string;
 }
 
 export interface ChatHistoryStore {
@@ -332,6 +352,9 @@ export type Settings = SettingsStore & {
 	powerMode?: "auto" | "performance" | "battery_saver";
 	/** Show restart notifications when audio/vision capture stalls (default: false for now) */
 	showRestartNotifications?: boolean;
+	/** Hide screenpipe windows from screenshots and screen-sharing viewers while
+	 * keeping them visible locally. Defaults on. */
+	hideAppInScreenShare?: boolean;
 	/** Pause all screen capture when a DRM-protected streaming app (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware Horizon) is focused — they blank their windows during screen recording */
 	pauseOnDrmContent?: boolean;
 	/** Skip clipboard capture in the UI recorder (events + content). Defaults to true (clipboard capture OFF) — passwords / API keys often pass through the clipboard, so it's opt-in. */
@@ -776,6 +799,7 @@ let DEFAULT_SETTINGS: Settings = {
 			},
 			overlayMode: "fullscreen",
 			showOverlayInScreenRecording: false,
+			hideAppInScreenShare: true,
 			disableTimeline: false,
 			firstRunGuideDone: false,
 			videoQuality: "balanced",
