@@ -7617,9 +7617,33 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 /// Pi uses the CWD as a key: `<PI_CODING_AGENT_DIR>/sessions/<encoded-cwd>/`.
 /// The encoding wraps the path with `--` and replaces `/` (or `\`) with `-`.
 /// Example: `/Users/me/.screenpipe/pipes/foo/` → `--Users-me-.screenpipe-pipes-foo--`
+#[cfg(test)]
 fn encode_pi_session_dir(working_dir: &Path) -> Option<PathBuf> {
     let agent_dir = crate::agents::pi::pi_config_dir().ok()?;
     Some(encode_pi_session_dir_from_base(working_dir, &agent_dir))
+}
+
+fn encode_pi_session_dirs(working_dir: &Path) -> Option<Vec<PathBuf>> {
+    let agent_dir = crate::agents::pi::pi_config_dir().ok()?;
+    Some(encode_pi_session_dirs_from_base(working_dir, &agent_dir))
+}
+
+fn encode_pi_session_dirs_from_base(working_dir: &Path, agent_dir: &Path) -> Vec<PathBuf> {
+    let lexical = encode_pi_session_dir_from_base(working_dir, agent_dir);
+    let mut session_dirs = vec![lexical.clone()];
+
+    // Pi keys sessions by process.cwd(), which resolves filesystem aliases on
+    // macOS (notably /tmp -> /private/tmp). Keep the lexical candidate too so
+    // sessions created by older Pi versions or non-canonical launch paths are
+    // still discoverable and resettable.
+    if let Ok(canonical_working_dir) = working_dir.canonicalize() {
+        let canonical = encode_pi_session_dir_from_base(&canonical_working_dir, agent_dir);
+        if canonical != lexical {
+            session_dirs.push(canonical);
+        }
+    }
+
+    session_dirs
 }
 
 fn encode_pi_session_dir_from_base(working_dir: &Path, agent_dir: &Path) -> PathBuf {
@@ -7634,12 +7658,10 @@ fn encode_pi_session_dir_from_base(working_dir: &Path, agent_dir: &Path) -> Path
 
 /// Find the most recently modified Pi session file for a pipe's working directory.
 pub fn find_latest_pi_session(pipe_dir: &Path) -> Option<PathBuf> {
-    let session_dir = encode_pi_session_dir(pipe_dir)?;
-    if !session_dir.exists() {
-        return None;
-    }
-    std::fs::read_dir(&session_dir)
-        .ok()?
+    encode_pi_session_dirs(pipe_dir)?
+        .into_iter()
+        .filter_map(|session_dir| std::fs::read_dir(session_dir).ok())
+        .flatten()
         .filter_map(|e| e.ok())
         .filter(|e| {
             e.path()
@@ -7653,11 +7675,13 @@ pub fn find_latest_pi_session(pipe_dir: &Path) -> Option<PathBuf> {
 
 /// Delete all Pi session files for a pipe's working directory.
 pub fn delete_pi_sessions(pipe_dir: &Path) -> Result<()> {
-    let session_dir = encode_pi_session_dir(pipe_dir)
+    let session_dirs = encode_pi_session_dirs(pipe_dir)
         .ok_or_else(|| anyhow!("could not determine Pi session directory"))?;
-    if session_dir.exists() {
-        std::fs::remove_dir_all(&session_dir)?;
-        info!("deleted Pi sessions at {:?}", session_dir);
+    for session_dir in session_dirs {
+        if session_dir.exists() {
+            std::fs::remove_dir_all(&session_dir)?;
+            info!("deleted Pi sessions at {:?}", session_dir);
+        }
     }
     Ok(())
 }
@@ -10212,6 +10236,30 @@ mod tests {
             result,
             Path::new("/tmp/screenpipe-pi-agent/sessions/--Users-me-.screenpipe-pipes-foo--"),
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_encode_pi_session_dirs_include_canonical_working_dir() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let real_root = temp.path().join("private-tmp");
+        let real_pipe = real_root.join("pipes").join("daily-brief");
+        std::fs::create_dir_all(&real_pipe).unwrap();
+        let alias_root = temp.path().join("tmp");
+        symlink(&real_root, &alias_root).unwrap();
+        let alias_pipe = alias_root.join("pipes").join("daily-brief");
+        let agent_dir = temp.path().join("pi-agent");
+
+        let candidates = encode_pi_session_dirs_from_base(&alias_pipe, &agent_dir);
+
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates.contains(&encode_pi_session_dir_from_base(&alias_pipe, &agent_dir)));
+        assert!(candidates.contains(&encode_pi_session_dir_from_base(
+            &real_pipe.canonicalize().unwrap(),
+            &agent_dir,
+        )));
     }
 
     #[test]
