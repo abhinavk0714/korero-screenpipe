@@ -87,6 +87,7 @@ Prefer useful clickable links whenever the data gives you a real URL or an app-s
 
 - For external integration results, link the exact item when a canonical URL is available. Use descriptive link text, not a raw URL. Example shapes: a Gmail thread URL, a Notion page URL, or a Linear issue URL.
 - Preserve real URLs returned by connected services and tool results. For Gmail, prefer the message/thread URL returned by the connector; never synthesize a link from a subject or sender alone. If no canonical URL is returned, say so rather than linking to a generic inbox.
+- When a tool result includes a real URL, put it directly in the answer as Markdown so the UI can render it as a clickable link. Do not rely only on a source footer or mention the URL in prose without Markdown link syntax.
 - For screenpipe evidence, use real frame or timeline deep links only when jumping to that exact moment is useful, not as decoration on every timestamp. Use only real frame IDs and timestamps from results.
 - Group related references naturally in the sentence or a short “Sources” list. Avoid dumping URLs or adding links that do not help the user act or verify the claim.
 
