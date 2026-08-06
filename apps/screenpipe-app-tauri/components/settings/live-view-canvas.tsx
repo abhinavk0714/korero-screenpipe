@@ -161,6 +161,12 @@ export function interpolateCanvasFocusViewport(
   };
 }
 
+export function isTrustedCanvasMove(
+  event: MouseEvent | TouchEvent | null,
+): boolean {
+  return event?.isTrusted === true;
+}
+
 function sameSelection(left: string[], right: string[]): boolean {
   if (left.length !== right.length) return false;
   const rightIds = new Set(right);
@@ -1320,14 +1326,14 @@ export function LiveViewCanvas({
 
   const handleMoveStart = useCallback(
     (event: MouseEvent | TouchEvent | null) => {
-      if (event) cancelFocusAnimation();
+      if (isTrustedCanvasMove(event)) cancelFocusAnimation();
     },
     [cancelFocusAnimation],
   );
 
   const handleMoveEnd = useCallback(
     (event: MouseEvent | TouchEvent | null, viewport: Viewport) => {
-      if (!event) return;
+      if (!isTrustedCanvasMove(event)) return;
       const current = latestDocumentRef.current;
       applyDocument({ ...current, viewport }, true);
     },

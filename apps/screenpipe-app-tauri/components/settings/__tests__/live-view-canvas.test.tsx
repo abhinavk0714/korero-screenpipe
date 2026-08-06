@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   interpolateCanvasFocusViewport,
+  isTrustedCanvasMove,
   LiveViewCanvas,
 } from "../live-view-canvas";
 import { createCanvasDocument } from "@/lib/live-views/canvas-layout";
@@ -169,6 +170,12 @@ describe("LiveViewCanvas", () => {
     expect(interpolateCanvasFocusViewport(from, to, 1)).toEqual(to);
     expect(interpolateCanvasFocusViewport(from, to, 2)).toEqual(to);
     expect(interpolateCanvasFocusViewport(from, to, 0.01, true)).toEqual(to);
+  });
+
+  it("cancels focus only for real user-driven Canvas movement", () => {
+    expect(isTrustedCanvasMove(null)).toBe(false);
+    expect(isTrustedCanvasMove({ isTrusted: false } as MouseEvent)).toBe(false);
+    expect(isTrustedCanvasMove({ isTrusted: true } as MouseEvent)).toBe(true);
   });
 
   it("focuses a proposal that is added after its focus request", async () => {
@@ -365,7 +372,7 @@ describe("LiveViewCanvas", () => {
     expect(onPersist).not.toHaveBeenCalled();
   });
 
-  it("ignores React Flow's delayed move-end callback after unmount", async () => {
+  it("ignores React Flow's untrusted move callbacks", async () => {
     const onChange = vi.fn();
     const result = render(
       <React.StrictMode>
@@ -387,13 +394,13 @@ describe("LiveViewCanvas", () => {
       deltaX: 24,
       deltaY: 24,
     });
-    await waitFor(() => expect(onChange).toHaveBeenCalled());
-    const callsBeforeUnmount = onChange.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onChange).not.toHaveBeenCalled();
 
     result.unmount();
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    expect(onChange).toHaveBeenCalledTimes(callsBeforeUnmount);
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("resizes a Block from its current size on the first drag", async () => {
