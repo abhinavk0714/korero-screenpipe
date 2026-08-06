@@ -842,7 +842,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Four native desktop journeys cover failed-save rollback and retry, stable one-chat continuity across real Pipe runs, a human follow-up carried into the next scheduled run, and confirmed reset followed by a clean run without prior scheduled or human context."
+      "notes": "Five native desktop journeys cover failed-save rollback and retry, stable one-chat continuity across real Pipe runs, a human follow-up carried into the next scheduled run, explicit pause/resume behavior with a read-only old chat, reset rejection during an active human reply, and a confirmed clean run without prior scheduled or human context."
     },
     {
       "spec": "pipes.spec.ts",

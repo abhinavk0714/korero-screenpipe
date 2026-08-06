@@ -1136,6 +1136,10 @@ pub struct PipeStatus {
     pub last_run: Option<DateTime<Utc>>,
     pub last_success: Option<bool>,
     pub is_running: bool,
+    /// Whether Pi has durable context for this Pipe's working directory.
+    /// This exposes presence only, never session contents.
+    #[serde(default)]
+    pub has_saved_context: bool,
     /// True only when this pipe's name and contents exactly match a pipe
     /// bundled with the app. Any user edit makes this false.
     #[serde(default)]
@@ -2784,6 +2788,8 @@ impl PipeManager {
                         last_run: last_log.map(|l| l.finished_at),
                         last_success: last_log.map(|l| l.success),
                         is_running: running.contains_key(name),
+                        has_saved_context: find_latest_pi_session(&self.pipes_dir.join(name))
+                            .is_some(),
                         is_bundled_builtin,
                         prompt_body: body.clone(),
                         raw_content: raw.clone(),
@@ -2960,6 +2966,7 @@ impl PipeManager {
                     last_run: last_log.map(|l| l.finished_at),
                     last_success: last_log.map(|l| l.success),
                     is_running: running.contains_key(name),
+                    has_saved_context: find_latest_pi_session(&self.pipes_dir.join(name)).is_some(),
                     is_bundled_builtin,
                     prompt_body: body.clone(),
                     raw_content: raw.clone(),
@@ -10169,6 +10176,7 @@ mod tests {
             last_run: None,
             last_success: None,
             is_running: false,
+            has_saved_context: false,
             is_bundled_builtin: false,
             prompt_body: String::new(),
             raw_content: String::new(),
@@ -10183,6 +10191,7 @@ mod tests {
         assert!(json.contains("\"current_execution_id\":99"));
         assert!(json.contains("\"consecutive_failures\":5"));
         assert!(json.contains("\"is_bundled_builtin\":false"));
+        assert!(json.contains("\"has_saved_context\":false"));
     }
 
     // -- truncate_string ----------------------------------------------------

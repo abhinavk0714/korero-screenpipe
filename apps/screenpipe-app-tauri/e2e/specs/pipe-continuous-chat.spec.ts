@@ -33,6 +33,9 @@ const SECOND_REPLY = "e2e second continued result";
 const HUMAN_PROMPT = "remember that the human prefers concise updates";
 const HUMAN_REPLY = "e2e human follow-up acknowledged";
 const THIRD_REPLY = "e2e scheduled result after human follow-up";
+const RESUMED_REPLY = "e2e result after memory resumed";
+const BUSY_PROMPT = "hold this reply while reset is attempted";
+const BUSY_REPLY = "e2e active reply completed without losing context";
 const FRESH_REPLY = "e2e fresh result";
 const piConversation = new PiConversationHarness(CONVERSATION_ID);
 
@@ -137,6 +140,26 @@ async function openPipeAdvanced(): Promise<void> {
 async function readPipeHistorySetting(): Promise<boolean> {
   const response = await apiRequest("GET", `/pipes/${encodeURIComponent(PIPE_NAME)}`);
   return Boolean(response.json?.data?.config?.history);
+}
+
+async function openContinuousChat(): Promise<void> {
+  await openHomeWindow();
+  const scheduledSection = await $('[data-testid="sidebar-section-scheduled"]');
+  await scheduledSection.waitForExist({ timeout: t(15_000) });
+  if ((await scheduledSection.getAttribute("aria-expanded")) !== "true") {
+    await scheduledSection.click();
+  }
+  const group = await $(`[data-testid="pipe-group-pipe:${PIPE_NAME}"]`);
+  await group.waitForExist({ timeout: t(15_000) });
+  const groupButton = await group.$("button");
+  if ((await groupButton.getAttribute("aria-expanded")) !== "true") {
+    await groupButton.click();
+  }
+  const row = await $(`[data-testid="chat-row-${CONVERSATION_ID}"]`);
+  await row.waitForExist({ timeout: t(15_000) });
+  const rows = await $$(`[data-testid="chat-row-${CONVERSATION_ID}"]`);
+  expect(rows).toHaveLength(1);
+  await row.$("button").click();
 }
 
 async function startRun(): Promise<number> {
@@ -324,23 +347,7 @@ describe("Pipes: continue in one chat", function () {
     expect(JSON.stringify(piConversation.requestAt(1))).toContain(FIRST_REPLY);
     expect(combined.pipeContext?.executionId).toBe(secondId);
 
-    await openHomeWindow();
-    const scheduledSection = await $('[data-testid="sidebar-section-scheduled"]');
-    await scheduledSection.waitForExist({ timeout: t(15_000) });
-    if ((await scheduledSection.getAttribute("aria-expanded")) !== "true") {
-      await scheduledSection.click();
-    }
-    const group = await $(`[data-testid="pipe-group-pipe:${PIPE_NAME}"]`);
-    await group.waitForExist({ timeout: t(15_000) });
-    const groupButton = await group.$("button");
-    if ((await groupButton.getAttribute("aria-expanded")) !== "true") {
-      await groupButton.click();
-    }
-    const row = await $(`[data-testid="chat-row-${CONVERSATION_ID}"]`);
-    await row.waitForExist({ timeout: t(15_000) });
-    const rows = await $$(`[data-testid="chat-row-${CONVERSATION_ID}"]`);
-    expect(rows).toHaveLength(1);
-    await row.$("button").click();
+    await openContinuousChat();
 
     await browser.waitUntil(
       async () => {
@@ -405,7 +412,84 @@ describe("Pipes: continue in one chat", function () {
     expect(third.conversation_id).toBe(CONVERSATION_ID);
   });
 
-  it("can clear remembered context and starts the next run without old messages", async () => {
+  it("makes paused memory explicit and resumes the saved context only when re-enabled", async () => {
+    await openPipeAdvanced();
+    const historySwitch = await $(`[data-testid="pipe-history-switch-${PIPE_NAME}"]`);
+    await historySwitch.waitForExist({ timeout: t(10_000) });
+    await historySwitch.click();
+    await browser.waitUntil(async () => (await readPipeHistorySetting()) === false, {
+      timeout: t(10_000),
+      interval: 200,
+      timeoutMsg: "one-chat memory did not turn off",
+    });
+
+    const description = await $(`#pipe-history-description-${PIPE_NAME}`);
+    expect((await description.getText()).toLowerCase()).toContain(
+      "stays saved and resumes",
+    );
+    const clearSaved = await $(`[data-testid="pipe-history-reset-${PIPE_NAME}"]`);
+    expect((await clearSaved.getText()).toLowerCase()).toContain(
+      "clear saved one-chat context",
+    );
+
+    await openContinuousChat();
+    const state = await $('[data-testid="pipe-continuous-chat-state"]');
+    await browser.waitUntil(
+      async () => (await state.getText()).toLowerCase().includes("memory paused"),
+      {
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "paused memory was not visible in the shared chat",
+      },
+    );
+    expect((await state.getText()).toLowerCase()).toContain(
+      "saved context stays here",
+    );
+    const composer = await $("form textarea");
+    expect(await composer.isEnabled()).toBe(false);
+    expect((await composer.getAttribute("placeholder"))?.toLowerCase()).toContain(
+      "continue in one chat is off",
+    );
+
+    await openPipeAdvanced();
+    const pausedSwitch = await $(`[data-testid="pipe-history-switch-${PIPE_NAME}"]`);
+    await pausedSwitch.click();
+    await browser.waitUntil(async () => (await readPipeHistorySetting()) === true, {
+      timeout: t(10_000),
+      interval: 200,
+      timeoutMsg: "one-chat memory did not turn back on",
+    });
+    await openContinuousChat();
+    const resumedState = await $('[data-testid="pipe-continuous-chat-state"]');
+    await browser.waitUntil(
+      async () => (await resumedState.getText()).toLowerCase().includes("one chat"),
+      {
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "resumed memory state was not visible in the shared chat",
+      },
+    );
+    expect(await $("form textarea").isEnabled()).toBe(true);
+
+    piConversation.setTextResponse(RESUMED_REPLY);
+    const resumedId = await startRun();
+    await piConversation.waitForRequestCount(5, "scheduled run after memory resumed");
+    const resumed = await waitForExecution(resumedId);
+    const resumedRequest = JSON.stringify(piConversation.requestAt(4));
+    expect(resumedRequest).toContain(FIRST_REPLY);
+    expect(resumedRequest).toContain(HUMAN_PROMPT);
+    expect(resumedRequest).toContain(THIRD_REPLY);
+    expect(resumed.conversation_id).toBe(CONVERSATION_ID);
+    await waitForChatFile([RESUMED_REPLY]);
+  });
+
+  it("blocks reset during a human reply, then starts the next run without old messages", async () => {
+    await openContinuousChat();
+    piConversation.setTextResponse(BUSY_REPLY);
+    piConversation.setResponseDelay(15_000);
+    await submitComposer(BUSY_PROMPT);
+    await piConversation.waitForRequestCount(6, "human reply during reset attempt");
+
     await openPipeAdvanced();
     const row = await $(`[data-testid="pipe-row-${PIPE_NAME}"]`);
     const startFresh = await row.$(`[data-testid="pipe-history-reset-${PIPE_NAME}"]`);
@@ -414,6 +498,21 @@ describe("Pipes: continue in one chat", function () {
 
     const confirm = await $('[data-testid="pipe-history-reset-confirm"]');
     await confirm.waitForExist({ timeout: t(10_000) });
+    await confirm.click();
+    await browser.waitUntil(
+      async () => (await row.getText()).toLowerCase().includes("context was not cleared"),
+      {
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "reset did not reject the active human reply",
+      },
+    );
+    expect(JSON.stringify(JSON.parse(readFileSync(CHAT_FILE, "utf8")))).toContain(
+      RESUMED_REPLY,
+    );
+
+    await waitForChatFile([BUSY_PROMPT, BUSY_REPLY]);
+    piConversation.setResponseDelay(0);
     await confirm.click();
     await browser.waitUntil(
       async () => (await row.getText()).toLowerCase().includes("context cleared"),
@@ -426,19 +525,31 @@ describe("Pipes: continue in one chat", function () {
 
     piConversation.setTextResponse(FRESH_REPLY);
     const freshId = await startRun();
-    await piConversation.waitForRequestCount(5, "fresh continued pipe run");
+    await piConversation.waitForRequestCount(7, "fresh continued pipe run");
     const fresh = await waitForExecution(freshId);
     await waitForChatFile(
       [FRESH_REPLY],
-      [FIRST_REPLY, SECOND_REPLY, HUMAN_PROMPT, HUMAN_REPLY, THIRD_REPLY],
+      [
+        FIRST_REPLY,
+        SECOND_REPLY,
+        HUMAN_PROMPT,
+        HUMAN_REPLY,
+        THIRD_REPLY,
+        RESUMED_REPLY,
+        BUSY_PROMPT,
+        BUSY_REPLY,
+      ],
     );
 
-    const freshRequest = JSON.stringify(piConversation.requestAt(4));
+    const freshRequest = JSON.stringify(piConversation.requestAt(6));
     expect(freshRequest).not.toContain(FIRST_REPLY);
     expect(freshRequest).not.toContain(SECOND_REPLY);
     expect(freshRequest).not.toContain(HUMAN_PROMPT);
     expect(freshRequest).not.toContain(HUMAN_REPLY);
     expect(freshRequest).not.toContain(THIRD_REPLY);
+    expect(freshRequest).not.toContain(RESUMED_REPLY);
+    expect(freshRequest).not.toContain(BUSY_PROMPT);
+    expect(freshRequest).not.toContain(BUSY_REPLY);
     expect(fresh.conversation_id).toBe(CONVERSATION_ID);
   });
 });
