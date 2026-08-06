@@ -30,6 +30,9 @@ const CHAT_FILE = join(
 );
 const FIRST_REPLY = "e2e first remembered result";
 const SECOND_REPLY = "e2e second continued result";
+const HUMAN_PROMPT = "remember that the human prefers concise updates";
+const HUMAN_REPLY = "e2e human follow-up acknowledged";
+const THIRD_REPLY = "e2e scheduled result after human follow-up";
 const FRESH_REPLY = "e2e fresh result";
 const piConversation = new PiConversationHarness(CONVERSATION_ID);
 
@@ -207,6 +210,19 @@ async function waitForChatFile(
   return conversation;
 }
 
+async function submitComposer(text: string): Promise<void> {
+  const composer = await $("form textarea");
+  await composer.waitForDisplayed({ timeout: t(10_000) });
+  await composer.click();
+  await composer.setValue(text);
+  await browser.execute(() => {
+    document
+      .querySelector("form textarea")
+      ?.closest("form")
+      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+}
+
 describe("Pipes: continue in one chat", function () {
   this.timeout(180_000);
 
@@ -341,6 +357,54 @@ describe("Pipes: continue in one chat", function () {
     expect(existsSync(screenshot)).toBe(true);
   });
 
+  it("carries a human follow-up into the next scheduled run", async () => {
+    piConversation.setTextResponse(HUMAN_REPLY);
+    await submitComposer(HUMAN_PROMPT);
+    await piConversation.waitForRequestCount(3, "human follow-up in continued Pipe chat");
+    await waitForChatFile([FIRST_REPLY, SECOND_REPLY, HUMAN_PROMPT, HUMAN_REPLY]);
+    expect(JSON.stringify(piConversation.requestAt(2))).toContain(FIRST_REPLY);
+    expect(JSON.stringify(piConversation.requestAt(2))).toContain(SECOND_REPLY);
+
+    piConversation.setTextResponse(THIRD_REPLY);
+    piConversation.setResponseDelay(2_500);
+    const thirdId = await startRun();
+    await piConversation.waitForRequestCount(4, "scheduled run after human follow-up");
+    const composer = await $("form textarea");
+    await browser.waitUntil(
+      async () =>
+        !(await composer.isEnabled()) &&
+        (await composer.getAttribute("placeholder"))?.includes(
+          "Reply after this run finishes",
+        ),
+      {
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "composer stayed interactive during a scheduled Pipe run",
+      },
+    );
+    const stopButton = await $('form button[title="stop"]');
+    expect(await stopButton.isEnabled()).toBe(true);
+    const third = await waitForExecution(thirdId);
+    piConversation.setResponseDelay(0);
+    await browser.waitUntil(async () => composer.isEnabled(), {
+      timeout: t(10_000),
+      interval: 100,
+      timeoutMsg: "composer did not recover after the scheduled Pipe run",
+    });
+    await waitForChatFile([
+      FIRST_REPLY,
+      SECOND_REPLY,
+      HUMAN_PROMPT,
+      HUMAN_REPLY,
+      THIRD_REPLY,
+    ]);
+
+    const thirdRequest = JSON.stringify(piConversation.requestAt(3));
+    expect(thirdRequest).toContain(HUMAN_PROMPT);
+    expect(thirdRequest).toContain(HUMAN_REPLY);
+    expect(third.conversation_id).toBe(CONVERSATION_ID);
+  });
+
   it("can clear remembered context and starts the next run without old messages", async () => {
     await openPipeAdvanced();
     const row = await $(`[data-testid="pipe-row-${PIPE_NAME}"]`);
@@ -362,13 +426,19 @@ describe("Pipes: continue in one chat", function () {
 
     piConversation.setTextResponse(FRESH_REPLY);
     const freshId = await startRun();
-    await piConversation.waitForRequestCount(3, "fresh continued pipe run");
+    await piConversation.waitForRequestCount(5, "fresh continued pipe run");
     const fresh = await waitForExecution(freshId);
-    await waitForChatFile([FRESH_REPLY], [FIRST_REPLY, SECOND_REPLY]);
+    await waitForChatFile(
+      [FRESH_REPLY],
+      [FIRST_REPLY, SECOND_REPLY, HUMAN_PROMPT, HUMAN_REPLY, THIRD_REPLY],
+    );
 
-    const thirdRequest = JSON.stringify(piConversation.requestAt(2));
-    expect(thirdRequest).not.toContain(FIRST_REPLY);
-    expect(thirdRequest).not.toContain(SECOND_REPLY);
+    const freshRequest = JSON.stringify(piConversation.requestAt(4));
+    expect(freshRequest).not.toContain(FIRST_REPLY);
+    expect(freshRequest).not.toContain(SECOND_REPLY);
+    expect(freshRequest).not.toContain(HUMAN_PROMPT);
+    expect(freshRequest).not.toContain(HUMAN_REPLY);
+    expect(freshRequest).not.toContain(THIRD_REPLY);
     expect(fresh.conversation_id).toBe(CONVERSATION_ID);
   });
 });

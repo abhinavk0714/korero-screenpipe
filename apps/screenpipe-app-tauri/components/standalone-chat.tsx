@@ -885,6 +885,10 @@ export function StandaloneChat({
     piStoppedIntentionallyRef,
     piPresetSwitchPromiseRef,
   });
+  const canSendChatMessage = canChat && !activePipeExecution;
+  const composerDisabledReason = activePipeExecution
+    ? `${activePipeExecution.name} is running. Reply after this run finishes.`
+    : disabledReason;
 
   useChatPanelEffects({
     inputRef,
@@ -930,7 +934,7 @@ export function StandaloneChat({
     autoSendBypassRef,
     setConversationId,
     buildProviderConfig,
-    canChat,
+    canChat: canSendChatMessage,
     cancelStreamingMessageRender,
     consumePendingAttachments,
     currentQueueSessionId,
@@ -1472,8 +1476,8 @@ export function StandaloneChat({
           sectionRef: inputSectionRef,
           inputRef,
           value: input,
-          disabledReason,
-          canChat: Boolean(canChat),
+          disabledReason: composerDisabledReason,
+          canChat: Boolean(canSendChatMessage),
           isLoading,
           isStreaming,
           isEmbedded,

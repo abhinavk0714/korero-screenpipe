@@ -2138,7 +2138,7 @@ pub type OnPipeRunComplete =
 /// Synchronous scheduler launch guard. Returning `Some(reason)` skips the run.
 pub type SchedulerRunGuard = Arc<dyn Fn() -> Option<String> + Send + Sync>;
 
-/// Callback fired for each stdout line from a running pipe.
+/// Callback fired for each lifecycle event and stdout line from a running pipe.
 /// Args: (pipe_name, execution_id, continues_chat, line)
 pub type OnPipeOutputLine = Arc<dyn Fn(&str, i64, bool, &str) + Send + Sync>;
 
@@ -2150,6 +2150,24 @@ pub fn pipe_conversation_id(pipe_name: &str, execution_id: i64, continues_chat: 
     } else {
         format!("pipe:{pipe_name}:{execution_id}")
     }
+}
+
+fn emit_pipe_start(
+    on_output: Option<&OnPipeOutputLine>,
+    pipe_name: &str,
+    execution_id: i64,
+    continues_chat: bool,
+    started_at: DateTime<Utc>,
+) {
+    let Some(callback) = on_output else {
+        return;
+    };
+    let event = serde_json::json!({
+        "type": "pipe_start",
+        "started_at": started_at.to_rfc3339(),
+    })
+    .to_string();
+    callback(pipe_name, execution_id, continues_chat, &event);
 }
 
 /// Async predicate: given a pipe's required connections, return the
@@ -3389,6 +3407,13 @@ impl PipeManager {
         if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
             let _ = store.set_execution_running(id, None).await;
         }
+        emit_pipe_start(
+            self.on_output_line.as_ref(),
+            &pipe_name,
+            exec_id.unwrap_or(0),
+            history_enabled,
+            Utc::now(),
+        );
 
         let shared_pid_for_kill = shared_pid.clone();
 
@@ -3947,6 +3972,13 @@ impl PipeManager {
             if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
                 let _ = store.set_execution_running(id, None).await;
             }
+            emit_pipe_start(
+                self.on_output_line.as_ref(),
+                name,
+                exec_id.unwrap_or(0),
+                history_enabled,
+                started_at,
+            );
 
             spawn_pid_watcher(
                 self.running.clone(),
@@ -5727,6 +5759,13 @@ impl PipeManager {
                         );
 
                         let started_at = Utc::now();
+                        emit_pipe_start(
+                            on_output.as_ref(),
+                            &pipe_name,
+                            exec_id.unwrap_or(0),
+                            history_enabled,
+                            started_at,
+                        );
                         let timeout_duration = std::time::Duration::from_secs(pipe_timeout);
                         let was_cancelled =
                             || stop_requested.load(std::sync::atomic::Ordering::SeqCst);
@@ -10298,6 +10337,33 @@ mod tests {
             pipe_conversation_id("daily-brief", 7, false),
             pipe_conversation_id("daily-brief", 8, false)
         );
+    }
+
+    #[test]
+    fn test_pipe_start_callback_emits_lifecycle_event() {
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_for_callback = captured.clone();
+        let callback: OnPipeOutputLine =
+            Arc::new(move |pipe_name, execution_id, continues_chat, line| {
+                captured_for_callback.lock().unwrap().push((
+                    pipe_name.to_string(),
+                    execution_id,
+                    continues_chat,
+                    line.to_string(),
+                ));
+            });
+        let started_at = Utc.with_ymd_and_hms(2026, 8, 5, 12, 0, 0).unwrap();
+
+        emit_pipe_start(Some(&callback), "daily-brief", 42, true, started_at);
+
+        let events = captured.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "daily-brief");
+        assert_eq!(events[0].1, 42);
+        assert!(events[0].2);
+        let event: serde_json::Value = serde_json::from_str(&events[0].3).unwrap();
+        assert_eq!(event["type"], "pipe_start");
+        assert_eq!(event["started_at"], "2026-08-05T12:00:00+00:00");
     }
 
     #[test]

@@ -30,7 +30,7 @@
 import { useEffect, useMemo } from "react";
 import { create } from "zustand";
 import { localFetch } from "@/lib/api";
-import { mountAgentEventBus, registerDefault, type Unregister } from "@/lib/events/bus";
+import { mountAgentEventBus, registerObserver, type Unregister } from "@/lib/events/bus";
 import { parsePipeSessionId } from "@/lib/events/types";
 
 export interface RunningPipe {
@@ -200,7 +200,10 @@ async function mountRunningPipesTracker(): Promise<void> {
     return;
   }
 
-  const localUnregister = registerDefault((envelope) => {
+  // Running state is independent of which chat owns foreground rendering.
+  // Observe Pipe events so an open continued chat cannot hide its lifecycle
+  // from the sidebar and other consumers.
+  const localUnregister = registerObserver((envelope) => {
     if (envelope.source !== "pipe") return;
     const parsed = parsePipeSessionId(envelope.sessionId);
     if (!parsed) return;
