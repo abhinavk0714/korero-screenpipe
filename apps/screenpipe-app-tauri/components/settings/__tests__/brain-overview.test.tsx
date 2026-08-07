@@ -848,7 +848,7 @@ describe("BrainOverview", () => {
     );
     expect(screen.getByTestId("overview-time-range")).toHaveAttribute(
       "title",
-      expect.stringMatching(/^Latest update: /),
+      expect.stringMatching(/^Updated /),
     );
     expect(screen.getByTestId("overview-refresh-data").className).toContain(
       "w-9",
@@ -1037,7 +1037,7 @@ describe("BrainOverview", () => {
     );
   });
 
-  it("keeps only the latest update in the time-range tooltip", async () => {
+  it("reports the stalest block, not just the freshest one", async () => {
     const oldValue = populatedView.slots[0].value!;
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",
@@ -1068,13 +1068,126 @@ describe("BrainOverview", () => {
     });
     render(<BrainOverview />);
 
-    const timeRange = await screen.findByTestId("overview-time-range");
-    expect(timeRange).toHaveAttribute(
+    // A dashboard is only as fresh as its stalest Block. Reporting the newest
+    // timestamp alone made a dashboard with much older and still-empty Blocks
+    // read as current.
+    const freshness = await screen.findByTestId("overview-freshness");
+    expect(freshness.textContent).toMatch(/^Updated /);
+    expect(freshness.textContent).toContain("oldest");
+    expect(freshness.textContent).toContain("1 waiting");
+    expect(screen.getByTestId("overview-time-range")).toHaveAttribute(
       "title",
-      expect.stringMatching(/^Latest update: /),
+      freshness.textContent,
     );
-    expect(timeRange.getAttribute("title")).not.toContain("oldest");
-    expect(screen.queryByTestId("overview-data-status")).toBeNull();
+  });
+
+  it("resumes a paused source before refreshing it, and says it was stalled", async () => {
+    const calls: Array<{ path: string; body: unknown }> = [];
+    let enabled = false;
+    mocks.localFetch.mockImplementation(async (path: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      calls.push({ path, body });
+      if (path === "/pipes") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [
+              {
+                config: {
+                  name: "daily-summary",
+                  enabled,
+                  schedule: "every 1h",
+                },
+              },
+            ],
+          }),
+        };
+      }
+      if (path.endsWith("/enable")) enabled = true;
+      return { ok: true, status: 200, json: async () => ({ success: true }) };
+    });
+
+    render(<BrainOverview />);
+
+    // A disabled source never runs on schedule, so the Block is frozen at the
+    // last click even though it shows a normal-looking value.
+    await waitFor(() =>
+      expect(screen.getByTestId("overview-stalled-sources").textContent).toContain(
+        "1 source",
+      ),
+    );
+
+    fireEvent.click(await screen.findByTestId("overview-refresh-data"));
+
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.path === "/pipes/daily-summary/enable" &&
+            (call.body as { enabled?: boolean })?.enabled === true,
+        ),
+      ).toBe(true),
+    );
+    const enableIndex = calls.findIndex((call) => call.path.endsWith("/enable"));
+    const runIndex = calls.findIndex((call) => call.path.endsWith("/run"));
+    expect(enableIndex).toBeGreaterThanOrEqual(0);
+    expect(runIndex).toBeGreaterThan(enableIndex);
+    await waitFor(() =>
+      expect(screen.queryByTestId("overview-stalled-sources")).toBeNull(),
+    );
+  });
+
+  it("leaves an already-scheduled source alone on refresh", async () => {
+    const calls: string[] = [];
+    mocks.localFetch.mockImplementation(async (path: string) => {
+      calls.push(path);
+      if (path === "/pipes") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [
+              {
+                config: {
+                  name: "daily-summary",
+                  enabled: true,
+                  schedule: "every 1h",
+                },
+              },
+            ],
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true }) };
+    });
+
+    render(<BrainOverview />);
+    await waitFor(() => expect(calls).toContain("/pipes"));
+    expect(screen.queryByTestId("overview-stalled-sources")).toBeNull();
+
+    fireEvent.click(await screen.findByTestId("overview-refresh-data"));
+
+    await waitFor(() =>
+      expect(calls.some((path) => path.endsWith("/run"))).toBe(true),
+    );
+    expect(calls.some((path) => path.endsWith("/enable"))).toBe(false);
+  });
+
+  it("omits the freshness line until a block is actually connected", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [
+        {
+          ...populatedView,
+          slots: [{ ...populatedView.slots[0], binding: null, value: null }],
+        },
+      ],
+    });
+    render(<BrainOverview />);
+
+    await screen.findByTestId("brain-overview-scroll");
+    expect(screen.queryByTestId("overview-freshness")).toBeNull();
   });
 
   it("keeps vertical scrolling on the dashboard while dense tables can scroll sideways", async () => {
