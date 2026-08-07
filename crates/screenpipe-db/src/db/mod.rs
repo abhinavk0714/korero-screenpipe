@@ -448,6 +448,10 @@ mod maintenance;
 mod meetings;
 mod memories;
 mod outputs;
+mod people;
+pub use people::{
+    Person, PersonConfidence, PersonEvidence, PersonHandle, PersonResolution, PersonTarget,
+};
 mod search;
 mod semantic;
 mod setup;
