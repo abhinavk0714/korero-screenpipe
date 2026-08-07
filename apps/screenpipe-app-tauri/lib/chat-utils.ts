@@ -584,6 +584,13 @@ export interface ComposerSkillReference {
   path: string;
 }
 
+export interface ComposerChatReference {
+  id: string;
+  title: string;
+  /** Absolute path of the conversation file, so the agent can open it. */
+  path: string;
+}
+
 export interface ComposerMentionContext {
   timeRanges: ComposerTimeRangeContext[];
   contentType: string | null;
@@ -591,14 +598,28 @@ export interface ComposerMentionContext {
   speakerName: string | null;
   tagNames: string[];
   skills: ComposerSkillReference[];
+  chats: ComposerChatReference[];
 }
 
 export interface NormalizeComposerMentionsOptions extends ParseMentionsOptions {
   /** Installed skills, used to turn a bare `$name` into a loadable path. */
   skills?: ComposerSkillReference[];
+  /** Conversations referenced by `@chat:<id>`, resolved to title + path. */
+  chats?: ComposerChatReference[];
 }
 
 const SKILL_MENTION_PATTERN = /(^|\s)\$([\w:.-]+)/g;
+export const CHAT_MENTION_PATTERN = /(^|\s)@chat:([\w-]+)/g;
+
+/** Conversation ids referenced by `@chat:<id>` tokens, in order of appearance. */
+export function findChatMentionIds(input: string): string[] {
+  const ids: string[] = [];
+  for (const match of input.matchAll(CHAT_MENTION_PATTERN)) {
+    const id = match[2];
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
 
 function emptyMentionContext(): ComposerMentionContext {
   return {
@@ -608,6 +629,7 @@ function emptyMentionContext(): ComposerMentionContext {
     speakerName: null,
     tagNames: [],
     skills: [],
+    chats: [],
   };
 }
 
@@ -662,6 +684,21 @@ export function normalizeComposerMentionsForModel(
     );
   }
 
+  // `@chat:<id>` is a reference, not a filter: it points at a conversation the
+  // agent may open. Referenced ids the caller could not resolve stay in the
+  // sentence so the user still sees that they asked for something.
+  const referencedChats = options?.chats ?? [];
+  const chats: ComposerChatReference[] = [];
+  cleanedInput = cleanedInput.replace(
+    CHAT_MENTION_PATTERN,
+    (match, leading: string, id: string) => {
+      const chat = referencedChats.find((candidate) => candidate.id === id);
+      if (!chat) return match;
+      if (!chats.some((existing) => existing.id === chat.id)) chats.push(chat);
+      return leading;
+    },
+  );
+
   const context: ComposerMentionContext = {
     timeRanges,
     contentType: parsed.contentType,
@@ -669,6 +706,7 @@ export function normalizeComposerMentionsForModel(
     speakerName: parsed.speakerName,
     tagNames: parsed.tagNames,
     skills,
+    chats,
   };
 
   const hasResolvedMention =
@@ -677,7 +715,8 @@ export function normalizeComposerMentionsForModel(
     Boolean(parsed.appName) ||
     Boolean(parsed.speakerName) ||
     parsed.tagNames.length > 0 ||
-    skills.length > 0;
+    skills.length > 0 ||
+    chats.length > 0;
 
   if (!hasResolvedMention) {
     return { modelInput: input, context: emptyMentionContext() };
@@ -699,8 +738,21 @@ export function normalizeComposerMentionsForModel(
   for (const [index, skill] of skills.entries()) {
     lines.push(`skill_${index + 1}:`, `  name: ${skill.name}`, `  path: ${skill.path}`);
   }
+  for (const [index, chat] of chats.entries()) {
+    lines.push(
+      `referenced_chat_${index + 1}:`,
+      `  title: ${chat.title}`,
+      `  id: ${chat.id}`,
+      `  path: ${chat.path}`,
+    );
+  }
   if (skills.length > 0) {
     lines.push("Load each listed skill from its path before answering.");
+  }
+  if (chats.length > 0) {
+    lines.push(
+      "Read a referenced chat from its path only if this question needs it; it may or may not be related.",
+    );
   }
 
   return {
@@ -933,7 +985,18 @@ export function parseMentions(input: string, options?: ParseMentionsOptions): Pa
 export interface MentionSuggestion {
   tag: string;
   description: string;
-  category: "chat" | "skill" | "range" | "time" | "content" | "app" | "speaker" | "tag";
+  category:
+    | "command"
+    | "chat"
+    | "skill"
+    | "range"
+    | "time"
+    | "content"
+    | "app"
+    | "speaker"
+    | "tag";
+  /** Set on `command` suggestions; identifies the action to run on select. */
+  commandId?: ComposerCommandId;
   label?: string;
   appName?: string;
   conversationId?: string;
@@ -1093,11 +1156,65 @@ function formatTagAutocompleteDescription(item: AppAutocompleteItem) {
   return pluralize(item.count, "use");
 }
 
-export type MentionTrigger = "@" | "#" | "$" | "~";
+/**
+ * Composer slash commands. Every id maps to an action the chat surface already
+ * exposes through a button or shortcut; `/` is a keyboard-first way to reach
+ * them without leaving the composer, the same role it plays in Claude Code and
+ * Codex. Nothing here invents new behavior.
+ */
+export type ComposerCommandId =
+  | "new-chat"
+  | "stop"
+  | "inspector"
+  | "pipes"
+  | "clear-filters";
+
+export const COMPOSER_COMMAND_SUGGESTIONS: MentionSuggestion[] = [
+  {
+    tag: "/new",
+    description: "start a new chat",
+    category: "command",
+    commandId: "new-chat",
+  },
+  {
+    tag: "/stop",
+    description: "stop the current response",
+    category: "command",
+    commandId: "stop",
+  },
+  {
+    tag: "/clear",
+    description: "clear the composer and its filters",
+    category: "command",
+    commandId: "clear-filters",
+  },
+  {
+    tag: "/inspector",
+    description: "toggle sources and outputs",
+    category: "command",
+    commandId: "inspector",
+  },
+  {
+    tag: "/pipes",
+    description: "open the pipes page",
+    category: "command",
+    commandId: "pipes",
+  },
+];
+
+export type MentionTrigger = "@" | "#" | "$" | "~" | "/";
 
 export function findComposerMention(
   textBeforeCursor: string,
 ): { trigger: MentionTrigger; filter: string } | null {
+  // `/` opens the command list only at the very start of an empty-prefix
+  // composer. Codex allows it after any whitespace, but screenpipe prompts are
+  // full of paths, dates and URLs, so anchoring to the start is the only way to
+  // keep "summarize 03/04" from turning into a command palette.
+  const commandMatch = textBeforeCursor.match(/^\/([\w-]*)$/);
+  if (commandMatch) {
+    return { trigger: "/", filter: commandMatch[1] };
+  }
   const match =
     textBeforeCursor.match(/([@#$])([\w:.-]*)$/) ??
     textBeforeCursor.match(/(~)([^~@#$]*)$/);
@@ -1140,6 +1257,10 @@ export function filterMentionSuggestions({
     suggestion.tag.toLowerCase().includes(filter) ||
     suggestion.label?.toLowerCase().includes(filter) ||
     suggestion.description.toLowerCase().includes(filter);
+
+  if (mentionTrigger === "/") {
+    return COMPOSER_COMMAND_SUGGESTIONS.filter(matchesFilter);
+  }
 
   if (mentionTrigger === "#") {
     if (!filter) return tagMentionSuggestions;

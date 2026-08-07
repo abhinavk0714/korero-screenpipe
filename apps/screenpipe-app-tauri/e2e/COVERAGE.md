@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 100
-- Declared test blocks: 284
-- Weighted coverage points: 218.9
+- Mapped specs: 101
+- Declared test blocks: 287
+- Weighted coverage points: 221.0
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 78 | 246 | 198.4 | 15 | 86 | 91% |
-| macos | 96 | 247 | 189.7 | 17 | 88 | 90% |
-| linux | 68 | 206 | 168.2 | 14 | 81 | 88% |
+| windows | 79 | 249 | 200.5 | 15 | 86 | 91% |
+| macos | 97 | 250 | 191.8 | 17 | 88 | 90% |
+| linux | 69 | 209 | 170.3 | 14 | 81 | 88% |
 
 ## Runtime Results
 
@@ -37,7 +37,7 @@ pass/fail/skip counts.
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
 | billing | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts |
 | capture-ocr | 2 specs / 16 tests / 6.4 pts | 7 specs / 11 tests / 4.4 pts | 1 specs / 3 tests / 1.2 pts |
-| chat-ai | 24 specs / 48 tests / 35.5 pts | 33 specs / 67 tests / 47.1 pts | 23 specs / 47 tests / 35.0 pts |
+| chat-ai | 25 specs / 51 tests / 37.6 pts | 34 specs / 70 tests / 49.2 pts | 24 specs / 50 tests / 37.1 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
 | local-api | 21 specs / 106 tests / 88.8 pts | 25 specs / 90 tests / 76.4 pts | 17 specs / 77 tests / 68.2 pts |
 | notifications | 4 specs / 25 tests / 16.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
@@ -45,7 +45,7 @@ pass/fail/skip counts.
 | os-integration | 7 specs / 29 tests / 24.8 pts | 12 specs / 24 tests / 14.4 pts | 2 specs / 12 tests / 8.7 pts |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
 | pipes | 6 specs / 19 tests / 19.0 pts | 7 specs / 24 tests / 24.0 pts | 6 specs / 19 tests / 19.0 pts |
-| real-ui-e2e | 53 specs / 151 tests / 122.8 pts | 62 specs / 150 tests / 121.9 pts | 49 specs / 129 tests / 109.2 pts |
+| real-ui-e2e | 54 specs / 154 tests / 124.9 pts | 63 specs / 153 tests / 124.0 pts | 50 specs / 132 tests / 111.3 pts |
 | settings | 14 specs / 38 tests / 35.0 pts | 16 specs / 33 tests / 28.7 pts | 13 specs / 30 tests / 27.0 pts |
 | storage-privacy | 9 specs / 40 tests / 31.3 pts | 9 specs / 26 tests / 25.1 pts | 6 specs / 19 tests / 18.1 pts |
 | tauri-command | 14 specs / 33 tests / 23.0 pts | 18 specs / 38 tests / 25.9 pts | 13 specs / 32 tests / 22.0 pts |
@@ -71,8 +71,8 @@ pass/fail/skip counts.
 | Audio device health | audio-device | covered (strong; windows-system-integration, windows-core-recording) | weak (conditional; meetings-only-audio-lifecycle, audio-fallback) | gap |
 | Meetings-only audio device ownership | audio-device, local-api, real-ui-e2e | weak (conditional; meetings-only-audio-lifecycle) | weak (conditional; meetings-only-audio-lifecycle) | - |
 | Window lifecycle, focus, and dedupe | window-lifecycle | covered (strong; windows-system-integration, window-lifecycle) | covered (strong; window-lifecycle, viewer-deeplink) | covered (strong; window-lifecycle, viewer-deeplink) |
-| Meeting note creation and editing | real-ui-e2e | covered (strong; windows-user-journey, meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click, meeting-workspace-tabs) | covered (strong; meeting-note-bottom-click, meeting-workspace-tabs) |
-| Pipes discover, install, and play | pipes | covered (strong; pipes, brain-overview) | covered (strong; pipes, pipe-continuous-chat) | covered (strong; pipes, brain-overview) |
+| Meeting note creation and editing | real-ui-e2e | covered (strong; windows-user-journey, meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click, meeting-summary-recovery) | covered (strong; meeting-note-bottom-click, meeting-summary-recovery) |
+| Pipes discover, install, and play | pipes | covered (strong; pipes, brain-overview) | covered (strong; pipes, brain-overview) | covered (strong; pipes, brain-overview) |
 | Chat window, composer, and streaming state | chat-ai | covered (strong; acp-backend, chat-sidebar-groups) | covered (strong; acp-backend, chat-sidebar-groups) | covered (strong; acp-backend, chat-sidebar-groups) |
 | Tray/search window behavior | window-lifecycle | covered (strong; window-lifecycle, tray-search) | covered (strong; window-lifecycle, tray-search) | covered (strong; window-lifecycle, tray-search) |
 | Native tray recording status refresh | os-integration | covered (strong; tray-recording-status) | - | - |
@@ -89,7 +89,7 @@ pass/fail/skip counts.
 
 ## Execution Integrity
 
-- Specs that claim coverage but contain zero executable test blocks: zzz-browser-state-chat-switch.spec.ts, zz-owned-browser-background-nav.spec.ts, zzz-owned-browser-headless.spec.ts. They assert nothing and no longer count toward any critical feature.
+- Specs that claim coverage but contain zero executable test blocks: zz-owned-browser-background-nav.spec.ts, zzz-browser-state-chat-switch.spec.ts, zzz-owned-browser-headless.spec.ts. They assert nothing and no longer count toward any critical feature.
 - Declared coverage below is NOT reconciled against execution: no runtime results
   were supplied. Specs can self-skip on hosted runners (no display, vision off,
   recording disabled) and still read as covered. Run `e2e:coverage:runtime` (or pass
@@ -113,6 +113,7 @@ pass/fail/skip counts.
 | capture-stall-recovery.spec.ts | macos | capture-ocr, local-api, os-integration, real-ui-e2e | app-launch, capture-ocr, health, recording-health-alerts | high | conditional | mixed | 3 | Opt-in macOS full-stack lane proves all selected user-paused monitors remain an intentional disabled/normal state and resume cleanly, bounds a wedged SCK frame worker, proves the privacy-gated CoreGraphics fallback, reproduces a status-Running capture loop going silent, verifies stale and the failure pill, independent per-monitor stall detection with a VisionManager restart and resumed terminal capture progress, same-process UI recovery, and bounded id-based SCK lookup retry. |
 | chat-ask-user-tool-card.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-tools, pi-ask-user | medium | partial | mixed | 1 | Synthetic assistant tool block renders the Pi ask_user dropdown and sends the selected answer through the normal chat reply path. |
 | chat-automation-card-duplicate.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-sidebar-dedupe | medium | partial | real-user-flow | 1 | Home automation card clicks must create exactly one persisted conversation per card, guarding the #4719 duplicate-row path. |
+| chat-composer-commands-and-chat-mentions.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-drafts, chat-context | medium | strong | real-user-flow | 3 | Leading-slash command list (and its date/path anchor), plus picking a chat from the @ list inserting an @chat: reference instead of navigating away from the draft. |
 | chat-composer-isolation.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-drafts | medium | partial | mixed | 1 | Composer draft isolation across conversations. |
 | chat-connections-context-duplicate.spec.ts | windows, macos | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | QUARANTINED (#4689): connections-context wrapper stripping regression. The synthetic background-router event path never persists deterministically on Linux/macOS CI; re-enable once it drives a deterministic persisted session. |
 | chat-cost-limit-upgrade.spec.ts | macos | chat-ai, real-ui-e2e, tauri-command | chat | high | strong | real-user-flow | 1 | A local provider returns the gateway's structured daily-limit rejection for a Business account; the request crosses the real Pi and foreground-event path, then the UI shows usage-limit copy and a targeted Business Max billing action. |

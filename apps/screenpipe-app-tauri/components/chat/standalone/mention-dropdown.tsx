@@ -25,7 +25,7 @@ export function MentionDropdown({
         transition={{ duration: 0.1 }}
         className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border shadow-lg overflow-hidden z-50 max-h-[240px] overflow-y-auto"
       >
-        {["chat", "skill", "range", "time", "content", "app", "tag", "speaker"].map((category) => {
+        {["command", "chat", "skill", "range", "time", "content", "app", "tag", "speaker"].map((category) => {
           const items = mentions.suggestions.filter(
             (suggestion) => suggestion.category === category,
           );
@@ -33,8 +33,10 @@ export function MentionDropdown({
           return (
             <div key={category}>
               <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50">
-                {category === "chat"
-                  ? "recent chats"
+                {category === "command"
+                  ? "commands"
+                  : category === "chat"
+                  ? "reference a chat"
                   : category === "skill"
                     ? "installed skills"
                     : category === "range"
@@ -53,7 +55,7 @@ export function MentionDropdown({
                 const globalIndex = mentions.suggestions.indexOf(suggestion);
                 return (
                   <button
-                    key={suggestion.conversationId ?? suggestion.tag}
+                    key={suggestion.conversationId ?? `${suggestion.category}:${suggestion.tag}`}
                     type="button"
                     onClick={() => mentions.onInsertMention(suggestion.tag)}
                     className={cn(

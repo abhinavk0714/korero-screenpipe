@@ -109,6 +109,16 @@ function conversationFilename(id: string): string {
   return `${id.replace(/[<>:"/\\|?*]/g, "_")}.json`;
 }
 
+/**
+ * Absolute path of a conversation on disk. Used by `@chat:<id>` mentions so the
+ * agent gets a handle it can open, the same way Codex hands the model a real fs
+ * path instead of a bare title.
+ */
+export async function conversationFilePath(id: string): Promise<string> {
+  const dir = await getChatsDir();
+  return `${dir}/${conversationFilename(id)}`;
+}
+
 // One-time user-visible alert when persisting chat history fails. Saves
 // failed silently for weeks when a relocated data dir fell outside the
 // webview fs scope (#5306) — the only trace was a console-level unhandled

@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type * as React from "react";
 import {
+  COMPOSER_COMMAND_SUGGESTIONS,
   buildChatMentionSuggestions,
   buildSkillMentionSuggestions,
   buildTagMentionSuggestions,
@@ -15,6 +16,7 @@ import {
   resolvePinnedMentionIndex,
   TIME_RANGE_MENTION_SUGGESTIONS,
   type MentionSuggestion as ChatMentionSuggestion,
+  type ComposerCommandId,
   type MentionTrigger,
 } from "@/lib/chat-utils";
 import { localFetch } from "@/lib/api";
@@ -52,7 +54,7 @@ interface UseChatMentionsOptions {
   atMentionSuggestions: MentionSuggestion[];
   tagMentionSuggestions: MentionSuggestion[];
   allTagMentionSuggestions: MentionSuggestion[];
-  onOpenConversation: (conversationId: string) => void | Promise<void>;
+  onRunCommand: (commandId: ComposerCommandId) => void | Promise<void>;
 }
 
 export function useChatMentions({
@@ -65,7 +67,7 @@ export function useChatMentions({
   atMentionSuggestions,
   tagMentionSuggestions,
   allTagMentionSuggestions,
-  onOpenConversation,
+  onRunCommand,
 }: UseChatMentionsOptions) {
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
@@ -631,14 +633,20 @@ export function useChatMentions({
   }, [hasConnectionChip, setChipScrollTop, setInput]);
 
   const insertMention = useCallback((tag: string) => {
-    const chatSuggestion = recentChatSuggestions.find(
-      (suggestion) => suggestion.tag === tag && suggestion.conversationId,
+    // A slash command is an action, not text: run it and leave the composer
+    // empty. Everything else is inserted as a token, including a chat
+    // reference — picking a chat from `@` used to navigate away and abandon
+    // the half-typed message, which is the opposite of mentioning it.
+    const command = COMPOSER_COMMAND_SUGGESTIONS.find(
+      (suggestion) => suggestion.tag === tag,
     );
-    if (chatSuggestion?.conversationId) {
+    if (command?.commandId) {
       setShowMentionDropdown(false);
       setMentionFilter("");
       setMentionTrigger("@");
-      void onOpenConversation(chatSuggestion.conversationId);
+      setInput("");
+      void onRunCommand(command.commandId);
+      inputRef.current?.focus();
       return;
     }
 
@@ -651,6 +659,7 @@ export function useChatMentions({
       textBeforeCursor.lastIndexOf("#"),
       textBeforeCursor.lastIndexOf("$"),
       textBeforeCursor.lastIndexOf("~"),
+      textBeforeCursor.startsWith("/") ? 0 : -1,
     );
     if (mentionIndex !== -1) {
       const newValue = `${textBeforeCursor.slice(0, mentionIndex)}${tag} ${textAfterCursor}`;
@@ -661,7 +670,7 @@ export function useChatMentions({
     setMentionFilter("");
     setMentionTrigger("@");
     inputRef.current?.focus();
-  }, [input, inputRef, onOpenConversation, recentChatSuggestions, setInput]);
+  }, [input, inputRef, onRunCommand, setInput]);
 
   return {
     showMentionDropdown,

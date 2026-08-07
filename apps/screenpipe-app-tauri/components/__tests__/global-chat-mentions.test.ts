@@ -11,6 +11,8 @@ import {
   buildTagMentionSuggestions,
   findComposerMention,
   filterMentionSuggestions,
+  findChatMentionIds,
+  COMPOSER_COMMAND_SUGGESTIONS,
   mentionSuggestionIdentity,
   normalizeComposerMentionsForModel,
   parseMentions,
@@ -436,5 +438,89 @@ describe("global chat mentions", () => {
     const match3 = "@last-week".match(regex);
     expect(match3).not.toBeNull();
     expect(match3![1]).toBe("last-week");
+  });
+});
+
+describe("composer slash commands and chat references", () => {
+  it("opens the command list only at the start of the composer", () => {
+    expect(findComposerMention("/")).toEqual({ trigger: "/", filter: "" });
+    expect(findComposerMention("/ne")).toEqual({ trigger: "/", filter: "ne" });
+  });
+
+  it("does not turn a date or a path into a command list", () => {
+    // The reason `/` is anchored to the start: screenpipe prompts are full of
+    // dates, paths and urls that would otherwise open a command palette.
+    expect(findComposerMention("summarize 03/04")).toBeNull();
+    expect(findComposerMention("open /Users/me/notes")).toBeNull();
+    expect(findComposerMention("check https://x.com/")).toBeNull();
+  });
+
+  it("filters the command catalog on the typed prefix", () => {
+    const all = filterMentionSuggestions({
+      mentionTrigger: "/",
+      mentionFilter: "",
+      atMentionSuggestions: [],
+      tagMentionSuggestions: [],
+      allTagMentionSuggestions: [],
+      tagSearchSuggestions: [],
+      speakerSuggestions: [],
+    });
+    expect(all).toEqual(COMPOSER_COMMAND_SUGGESTIONS);
+
+    const narrowed = filterMentionSuggestions({
+      mentionTrigger: "/",
+      mentionFilter: "sto",
+      atMentionSuggestions: [],
+      tagMentionSuggestions: [],
+      allTagMentionSuggestions: [],
+      tagSearchSuggestions: [],
+      speakerSuggestions: [],
+    });
+    expect(narrowed.map((suggestion) => suggestion.tag)).toEqual(["/stop"]);
+  });
+
+  it("every command carries an id the chat surface can run", () => {
+    for (const suggestion of COMPOSER_COMMAND_SUGGESTIONS) {
+      expect(suggestion.category).toBe("command");
+      expect(suggestion.commandId).toBeTruthy();
+    }
+  });
+
+  it("extracts referenced conversation ids in order, without duplicates", () => {
+    expect(
+      findChatMentionIds("compare @chat:aaa-111 with @chat:bbb-222 and @chat:aaa-111"),
+    ).toEqual(["aaa-111", "bbb-222"]);
+    expect(findChatMentionIds("no references here")).toEqual([]);
+  });
+
+  it("resolves a referenced chat to a title and an openable path", () => {
+    const result = normalizeComposerMentionsForModel(
+      "what changed since @chat:aaa-111",
+      {
+        now: new Date(2026, 6, 30, 12, 0, 0),
+        chats: [
+          { id: "aaa-111", title: "pricing review", path: "/data/chats/aaa-111.json" },
+        ],
+      },
+    );
+
+    expect(result.context.chats).toHaveLength(1);
+    expect(result.modelInput).toContain("title: pricing review");
+    expect(result.modelInput).toContain("path: /data/chats/aaa-111.json");
+    expect(result.modelInput).toContain("it may or may not be related");
+
+    const sentence = result.modelInput
+      .split("</screenpipe_query_context>")[1]
+      ?.trim();
+    expect(sentence).toBe("what changed since");
+  });
+
+  it("leaves an unresolvable chat reference in the sentence", () => {
+    const result = normalizeComposerMentionsForModel("recap @chat:missing", {
+      now: new Date(2026, 6, 30, 12, 0, 0),
+      chats: [],
+    });
+    expect(result.context.chats).toEqual([]);
+    expect(result.modelInput).toBe("recap @chat:missing");
   });
 });

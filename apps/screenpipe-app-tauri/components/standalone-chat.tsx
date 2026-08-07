@@ -33,14 +33,17 @@ import { useChatFilePreview } from "@/lib/hooks/use-chat-file-preview";
 import { useChatInspector } from "@/lib/hooks/use-chat-inspector";
 import { ChatInspector } from "@/components/chat/chat-inspector";
 import { useSqlAutocomplete, useTagAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
-import { loadConversationFile } from "@/lib/chat-storage";
+import { conversationFilePath, loadConversationFile } from "@/lib/chat-storage";
 import {
   buildAppMentionSuggestions,
   buildTagMentionSuggestions,
   buildComposerSkillReferences,
   isConversationHistorySyncPrompt,
   isInjectedTitleSourcePrompt,
+  findChatMentionIds,
   normalizeComposerMentionsForModel,
+  type ComposerChatReference,
+  type ComposerCommandId,
   type ComposerSkillReference,
 } from "@/lib/chat-utils";
 import { useAutoSuggestions } from "@/lib/hooks/use-auto-suggestions";
@@ -383,14 +386,36 @@ export function StandaloneChat({
         }
         composerSkillsRef.current = skills;
       }
-      return normalizeComposerMentionsForModel(text, { appTagMap, skills });
+      // `@chat:<id>` points at a conversation on disk; resolve each id to a
+      // title and an absolute path so the agent can open it instead of being
+      // handed a bare uuid.
+      const chats: ComposerChatReference[] = [];
+      for (const id of findChatMentionIds(text)) {
+        try {
+          const conversation = await loadConversationFile(id);
+          if (!conversation) continue;
+          chats.push({
+            id,
+            title: conversation.title?.trim() || "untitled",
+            path: await conversationFilePath(id),
+          });
+        } catch {
+          // An unreadable conversation stays an unresolved token in the
+          // sentence rather than a broken path in the context block.
+        }
+      }
+      return normalizeComposerMentionsForModel(text, { appTagMap, skills, chats });
     },
     [appTagMap],
   );
 
-  const openMentionConversationRef = useRef<
-    ((conversationId: string) => void | Promise<void>) | null
+  // Slash commands run actions declared further down this component, so the
+  // handler is installed through a ref (same indirection the chat surface
+  // already uses for deferred callbacks).
+  const runComposerCommandRef = useRef<
+    ((commandId: ComposerCommandId) => void | Promise<void>) | null
   >(null);
+  const composerStopRef = useRef<(() => void | Promise<void>) | null>(null);
 
   const atMentionSuggestions = React.useMemo(
     () => [...STATIC_MENTION_SUGGESTIONS, ...appMentionSuggestions],
@@ -446,8 +471,7 @@ export function StandaloneChat({
     atMentionSuggestions,
     tagMentionSuggestions,
     allTagMentionSuggestions,
-    onOpenConversation: (targetConversationId) =>
-      openMentionConversationRef.current?.(targetConversationId),
+    onRunCommand: (commandId) => runComposerCommandRef.current?.(commandId),
   });
   const dropdownRef = useRef<HTMLDivElement>(null);
   // Root of the chat surface. The webview drag-drop event is window-global and
@@ -875,10 +899,24 @@ export function StandaloneChat({
   const startNewConversationRef = useRef(startNewConversation);
   loadConversationRef.current = loadConversation;
   startNewConversationRef.current = startNewConversation;
-  openMentionConversationRef.current = async (targetConversationId) => {
-    const conversation = await loadConversationFile(targetConversationId);
-    if (conversation) {
-      await loadConversationRef.current(conversation);
+  runComposerCommandRef.current = async (commandId) => {
+    switch (commandId) {
+      case "new-chat":
+        piStoppedIntentionallyRef.current = true;
+        await startNewConversationRef.current();
+        return;
+      case "stop":
+        await composerStopRef.current?.();
+        return;
+      case "clear-filters":
+        setInput("");
+        return;
+      case "inspector":
+        toggleInspector();
+        return;
+      case "pipes":
+        await commands.showWindow({ Home: { page: "pipes" } });
+        return;
     }
   };
 
@@ -1131,7 +1169,13 @@ export function StandaloneChat({
   // `handleStop` closes over stable refs, so no cleanup is needed.
   if (typeof window !== "undefined") {
     (window as any).__e2eStopChat = handleStop;
+    // E2E-only: lets a spec assert that picking a chat from the `@` list
+    // referenced it instead of navigating to it.
+    (window as any).__e2eChatConversationId = conversationId;
   }
+  // `/stop` reaches the same action the stop button uses. Render assignment
+  // because the command handler is installed above this point.
+  composerStopRef.current = handleStop;
 
 
   const answerPiExtensionUiRequest = useCallback(async (
