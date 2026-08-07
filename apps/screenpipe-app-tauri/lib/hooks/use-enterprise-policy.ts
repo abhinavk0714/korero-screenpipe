@@ -6,8 +6,12 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useEnterpriseBuildStatus } from "./use-is-enterprise-build";
 import { commands } from "@/lib/utils/tauri";
 import { isLocalControlPlaneBase, tauriFetchWithDeadline } from "@/lib/http/tauri-fetch";
-import { getStore, useSettings } from "./use-settings";
+import { applyCapturedContentSettingsPolicy, getStore, useSettings } from "./use-settings";
 import { computeManagedSettingUpdates } from "./managed-settings";
+import {
+  normalizeCapturedContentPolicy,
+  type CapturedContentPolicy,
+} from "@/lib/captured-content-policy";
 import { applyDiagnosticsMode } from "@/lib/diagnostics-runtime";
 import type { DiagnosticsMode } from "@/lib/diagnostics";
 import { getVersion } from "@tauri-apps/api/app";
@@ -49,6 +53,7 @@ interface EnterprisePolicy {
   managedAiPreset: EnterpriseManagedAiPreset | null;
   aiPresetPolicy: EnterpriseAiPresetPolicy;
   appUpdatePolicy: EnterpriseAppUpdatePolicy;
+  capturedContentDestinationPolicy: CapturedContentPolicy | null;
   managedPipes: ManagedPipe[];
   orgName: string;
   /** Admin requires employees to sign in with their screenpipe account —
@@ -62,6 +67,7 @@ const EMPTY_POLICY: EnterprisePolicy = {
   managedAiPreset: null,
   aiPresetPolicy: DEFAULT_ENTERPRISE_AI_PRESET_POLICY,
   appUpdatePolicy: DEFAULT_ENTERPRISE_APP_UPDATE_POLICY,
+  capturedContentDestinationPolicy: null,
   managedPipes: [],
   orgName: "",
   requireAccountLogin: false,
@@ -171,6 +177,7 @@ function readE2ePolicyMock(licenseKey: string): E2ePolicyMockResult {
         managedAiPreset: null,
         aiPresetPolicy: DEFAULT_ENTERPRISE_AI_PRESET_POLICY,
         appUpdatePolicy: DEFAULT_ENTERPRISE_APP_UPDATE_POLICY,
+        capturedContentDestinationPolicy: null,
         managedPipes: [],
         orgName: "E2E Enterprise",
         requireAccountLogin: false,
@@ -344,22 +351,26 @@ async function applyAppUpdatePolicy(policy: EnterpriseAppUpdatePolicy): Promise<
  */
 let managedSettingsRestartInFlight = false;
 
-async function applyManagedDeviceSettings(lockedSettings: Record<string, unknown>): Promise<void> {
+async function applyManagedDeviceSettings(
+  lockedSettings: Record<string, unknown>,
+  capturedContentDestinationPolicy: CapturedContentPolicy | null,
+): Promise<void> {
   const store = await getStore();
   const settings = (await store.get<Record<string, unknown>>("settings")) || {};
   const { engineUpdates, liveUpdates, managedValues, engineChanged, liveChanged } =
     computeManagedSettingUpdates(lockedSettings, settings);
-  const managedValuesChanged =
-    JSON.stringify(settings.enterpriseManagedSettings || {}) !== JSON.stringify(managedValues);
-
-  if (!engineChanged && !liveChanged && !managedValuesChanged) return;
-
-  await store.set("settings", {
-    ...settings,
-    ...engineUpdates,
-    ...liveUpdates,
+  const capturedContent = applyCapturedContentSettingsPolicy(
+    { ...settings, ...engineUpdates, ...liveUpdates } as any,
+    capturedContentDestinationPolicy,
+  );
+  const nextSettings = {
+    ...capturedContent.state,
     enterpriseManagedSettings: managedValues,
-  });
+  };
+  const restart = engineChanged || capturedContent.restart;
+  if (!restart && !liveChanged && JSON.stringify(settings) === JSON.stringify(nextSettings)) return;
+
+  await store.set("settings", nextSettings);
   await store.save();
   if (
     liveUpdates.diagnosticsMode === "off" ||
@@ -371,11 +382,11 @@ async function applyManagedDeviceSettings(lockedSettings: Record<string, unknown
   console.log(
     `[enterprise] managed settings applied: ${Object.entries({ ...engineUpdates, ...liveUpdates })
       .map(([k, v]) => `${k}=${Array.isArray(v) ? JSON.stringify(v) : v}`)
-      .join(", ")}${engineChanged ? " — restarting engine" : " (no restart needed)"}`,
+      .join(", ")}${restart ? " — restarting engine" : " (no restart needed)"}`,
   );
 
   // Live-only change (e.g. analytics) needs no restart.
-  if (!engineChanged) return;
+  if (!restart) return;
 
   // Restart so the forced values take effect without waiting for the employee to
   // restart manually. Guarded so overlapping policy polls don't stack restarts;
@@ -545,6 +556,9 @@ function loadCachedPolicy(): EnterprisePolicy | null {
           policy.aiPresetPolicy ?? policy.managedAiPreset ?? null
         ),
         appUpdatePolicy: normalizeEnterpriseAppUpdatePolicy(policy.appUpdatePolicy),
+        capturedContentDestinationPolicy: normalizeCapturedContentPolicy(
+          policy.capturedContentDestinationPolicy,
+        ),
         managedPipes: Array.isArray(policy.managedPipes) ? policy.managedPipes : [],
         orgName: typeof policy.orgName === "string" ? policy.orgName : "",
         requireAccountLogin: policy.requireAccountLogin === true,
@@ -736,6 +750,9 @@ export function useEnterprisePolicyRuntime() {
       const appUpdatePolicy = normalizeEnterpriseAppUpdatePolicy(
         data.appUpdatePolicy ?? data.lockedSettings?.app_update_policy
       );
+      const capturedContentDestinationPolicy = normalizeCapturedContentPolicy(
+        data.capturedContentDestinationPolicy,
+      );
       const lockedKeys = Object.keys(data.lockedSettings || {});
       const allHidden = [
         ...ENTERPRISE_DEFAULT_HIDDEN,
@@ -748,6 +765,7 @@ export function useEnterprisePolicyRuntime() {
         managedAiPreset: data.managedAiPreset || null,
         aiPresetPolicy,
         appUpdatePolicy,
+        capturedContentDestinationPolicy,
         managedPipes: data.managedPipes || [],
         orgName: data.orgName || "",
         requireAccountLogin: data.requireAccountLogin === true,
@@ -786,7 +804,10 @@ export function useEnterprisePolicyRuntime() {
       // Apply every validated managed device setting in one pass. PII, capture,
       // audio, filters, and performance changes share one coordinated restart.
       try {
-        await applyManagedDeviceSettings(result.lockedSettings);
+        await applyManagedDeviceSettings(
+          result.lockedSettings,
+          result.capturedContentDestinationPolicy,
+        );
       } catch (e) {
         console.warn("[enterprise] failed to apply managed device policy:", e);
       }

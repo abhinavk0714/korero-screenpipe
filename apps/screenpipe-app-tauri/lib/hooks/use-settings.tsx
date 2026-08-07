@@ -45,6 +45,11 @@ import {
 	applyManagedOverrides,
 	type ManagedSettingValue,
 } from "./managed-settings";
+import {
+	CAPTURED_CONTENT_RULES,
+	reconcileCapturedContent,
+	type CapturedContentPolicy,
+} from "@/lib/captured-content-policy";
 import { isResolvedConsumerBuild } from "./use-is-enterprise-build";
 import {
 	clearLegacyUserGoalCategory,
@@ -279,6 +284,10 @@ export type Settings = SettingsStore & {
 	deviceId?: string;
 	/** Device-key values enforced by the current enterprise policy. */
 	enterpriseManagedSettings?: Record<string, ManagedSettingValue>;
+	/** Destination constraint persisted for offline and cross-window enforcement. */
+	enterpriseCapturedContentPolicy?: CapturedContentPolicy;
+	/** Exact values retained for rules whose administrator policy locks them. */
+	enterpriseCapturedContentLockedValues?: Record<string, unknown>;
 	/** @deprecated PR #5878 transition field; migrated into remoteControlPreferences. */
 	semanticContextPreference?: boolean | null;
 	/** Explicit local choices. null means inherit that control's remote rollout default. */
@@ -1055,6 +1064,40 @@ async function activeManagedValues(
 	return (await isResolvedConsumerBuild()) ? undefined : managed;
 }
 
+async function activeCapturedContentPolicy(
+	settings: Partial<Settings>
+): Promise<CapturedContentPolicy | undefined> {
+	const policy = settings.enterpriseCapturedContentPolicy;
+	if (!policy) return undefined;
+	return (await isResolvedConsumerBuild()) ? undefined : policy;
+}
+
+export function applyCapturedContentSettingsPolicy(
+	settings: Settings,
+	policy: CapturedContentPolicy | null,
+) {
+	const previousLocks = JSON.stringify(settings.enterpriseCapturedContentPolicy) === JSON.stringify(policy)
+		? settings.enterpriseCapturedContentLockedValues || {}
+		: {};
+	const reconciled = reconcileCapturedContent(
+		{ ...settings } as Record<string, unknown>,
+		policy,
+		CAPTURED_CONTENT_RULES,
+		previousLocks,
+	);
+	const next = reconciled.state as Settings;
+
+	if (policy) {
+		next.enterpriseCapturedContentPolicy = policy;
+		next.enterpriseCapturedContentLockedValues = reconciled.locks;
+	} else {
+		delete next.enterpriseCapturedContentPolicy;
+		delete next.enterpriseCapturedContentLockedValues;
+	}
+
+	return { ...reconciled, state: next };
+}
+
 // Store utilities similar to Cap's implementation
 function createSettingsStore() {
 	const get = async (): Promise<Settings> => {
@@ -1427,6 +1470,16 @@ function createSettingsStore() {
 				needsUpdate = true;
 			}
 
+			const capturedContentPolicy = await activeCapturedContentPolicy(settings);
+			const capturedContent = applyCapturedContentSettingsPolicy(
+				settings,
+				capturedContentPolicy ?? null,
+			);
+			if (JSON.stringify(settings) !== JSON.stringify(capturedContent.state)) {
+				Object.assign(settings, capturedContent.state);
+				needsUpdate = true;
+			}
+
 		// Save migrations if needed
 		if (needsUpdate) {
 			await setSettingsStripped(store, settings);
@@ -1469,6 +1522,11 @@ function createSettingsStore() {
 			);
 			if (managedValues) newSettings.enterpriseManagedSettings = managedValues;
 			else delete newSettings.enterpriseManagedSettings;
+			const capturedContentPolicy = await activeCapturedContentPolicy(current);
+			newSettings = applyCapturedContentSettingsPolicy(
+				newSettings,
+				capturedContentPolicy ?? null,
+			).state;
 			await setSettingsStripped(store, newSettings);
 			await saveAndEncrypt(store);
 		});
@@ -1491,7 +1549,12 @@ function createSettingsStore() {
 				),
 			);
 			if (managedValues) defaults.enterpriseManagedSettings = managedValues;
-			await store.set("settings", defaults);
+			const capturedContentPolicy = await activeCapturedContentPolicy(current);
+			const reconciledDefaults = applyCapturedContentSettingsPolicy(
+				defaults,
+				capturedContentPolicy ?? null,
+			).state;
+			await store.set("settings", reconciledDefaults);
 			await saveAndEncrypt(store);
 		});
 
