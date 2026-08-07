@@ -93,10 +93,6 @@ const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
         "accounting-follow-through",
         include_str!("../../assets/pipes/accounting-follow-through/pipe.md"),
     ),
-    (
-        "company-brain",
-        include_str!("../../assets/pipes/company-brain/pipe.md"),
-    ),
 ];
 
 /// Explicitly install one trusted Pipe bundled with the app.
@@ -8788,19 +8784,23 @@ mod tests {
         assert!(body.contains("never run recursive `find` or `grep`"));
     }
 
-    /// The company brain Pipe pushes to a *shared* repository. Its safety
-    /// contract lives entirely in the prompt, so assert the parts that must
-    /// never be lost by a careless prompt edit.
+    /// The company brain Pipe pushes to a *shared* repository, and it ships
+    /// through the Pipe Store rather than as a bundled builtin. Its whole
+    /// safety contract therefore lives in the prompt text, so pin the parts a
+    /// careless edit must not drop. Two of these assertions exist because the
+    /// behavior they describe actually failed in a live run: the prompt has to
+    /// name the working-day window (a daily schedule gets a 1h default
+    /// lookback, and re-labelling the header's `Z` timestamps as local produced
+    /// a window in the future), and it has to require remote confirmation (the
+    /// first approved run committed locally, never pushed, and still reported
+    /// commit SHAs as a completed push).
     #[test]
-    fn bundled_company_brain_ships_its_safety_contract() {
-        let bundled = BUNDLED_BUILTIN_PIPES
-            .iter()
-            .find_map(|(name, content)| (*name == "company-brain").then_some(*content))
-            .expect("company-brain is bundled");
-        let (config, body) = parse_frontmatter(bundled).expect("bundled prompt should parse");
+    fn company_brain_prompt_keeps_its_safety_contract() {
+        let source = include_str!("../../assets/pipes/company-brain/pipe.md");
+        let (config, body) = parse_frontmatter(source).expect("prompt should parse");
 
         // Ships off: pushing to a team repo is opt-in, never a side effect of
-        // installing the app.
+        // installing the Pipe.
         assert!(!config.enabled);
         assert_eq!(config.timeout, Some(600));
 
@@ -8808,19 +8808,27 @@ mod tests {
         // CLI or an existing clone must not be gated behind GitHub OAuth.
         assert!(config.connections.is_empty());
 
-        // Human approval, transport ladder, and redaction are the contract.
+        // Approval is a separate run over exactly the approved files.
         assert!(body.contains("approve_files"));
         assert!(body.contains("Never push in the same run that drafted"));
+
+        // All four transports stay reachable.
+        assert!(body.contains("/connections/github/proxy/repos/"));
         assert!(body.contains("gh auth status"));
         assert!(body.contains("gh auth login"));
-        assert!(body.contains("/connections/github/proxy/repos/"));
         assert!(body.contains("local_clone"));
         assert!(body.contains("Never force-push"));
+
+        // Regression: the window must be stated, not inherited from the header.
+        assert!(body.contains("Cover the working day"));
+        assert!(body.contains("never re-label a `Z` timestamp with a local offset"));
+
+        // Regression: a local commit must never be reported as a push.
+        assert!(body.contains("A local commit is not a push"));
+        assert!(body.contains("ls-remote"));
+
         assert!(body.contains("Redaction — this is a shared repository"));
         assert!(body.contains("Read the screenpipe skill first."));
-
-        // Fresh installs must already be in migrated form.
-        assert!(migrate_builtin_pipe_text("company-brain", bundled).is_none());
     }
 
     #[test]

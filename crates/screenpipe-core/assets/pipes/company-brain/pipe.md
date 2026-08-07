@@ -44,7 +44,11 @@ While `repo` is empty: still do Steps 1 and 2 so the work is captured locally, a
 
 ## Step 1 — find what deserves to be remembered
 
-Search the API only. At most 5 bounded searches with `limit=10`, covering the range in the run header: decisions made, problems diagnosed and fixed, things learned about a customer or the market, processes that changed, and commitments to other teams.
+Cover the working day, not the header's default lookback: from 00:00 local today through now, or from the last successful run of this pipe if that is later. The header's default lookback is one hour for a daily schedule, which is the wrong window for this job.
+
+Timestamps in the run header end in `Z` and are UTC. Send them to the API unchanged, or convert them properly — never re-label a `Z` timestamp with a local offset, which silently produces a window in the future. If a range comes back empty, check that its end is not in the future before concluding nothing happened.
+
+Search the API only. At most 5 bounded searches with `limit=10`: decisions made, problems diagnosed and fixed, things learned about a customer or the market, processes that changed, and commitments to other teams.
 
 Skip anything that is routine execution, private, or already obviously in a tracked system. Absence of evidence is never a finding. If the day contains nothing durable, write nothing, notify nothing, and stop — that is a good outcome.
 
@@ -75,12 +79,12 @@ Never write: secrets, tokens, keys, passwords, or `.env` values; customer or per
 
 ## Step 3 — resolve one push transport
 
-Check in this order and use the first that works. Report which one you used.
+An explicitly configured `local_clone` always wins — it is a deliberate choice, not a fallback. Otherwise check in this order and use the first that works. Report which one you used.
 
-1. **GitHub connection (preferred, no CLI, any OS).** `GET /connections/github` returns `{"connected": true}`. Write through the local proxy, which injects auth server-side:
+1. **Local clone (when `local_clone` is set).** It must be a git repository. `git -C <path> pull --ff-only`, write the file, `git add`, `git commit`, then `git -C <path> push origin HEAD:<branch>`. Never force-push, never rebase, never touch files you did not create.
+2. **GitHub connection (no CLI, any OS).** `GET /connections/github` returns `{"connected": true}`. Write through the local proxy, which injects auth server-side:
    `PUT /connections/github/proxy/repos/OWNER/REPO/contents/DIR/FILE.md` with `{"message": "...", "branch": "...", "content": "<base64>"}`.
-2. **`gh` CLI.** `gh auth status` succeeds. Same GitHub API, different transport: `gh api --method PUT repos/OWNER/REPO/contents/DIR/FILE.md -f message=... -f content=... -f branch=...`.
-3. **Local clone.** `local_clone` is set and is a git repository: `git -C <path> pull --ff-only`, write the file, `git add`, `git commit`, `git push`. Never force-push, never rebase, never touch files you did not create.
+3. **`gh` CLI.** `gh auth status` succeeds. Same GitHub API, different transport: `gh api --method PUT repos/OWNER/REPO/contents/DIR/FILE.md -f message=... -f content=... -f branch=...`.
 4. **Nothing available.** Keep the drafts and ask (Step 4) with the exact next step: connect GitHub in Settings → Connections → GitHub → "Connect with GitHub" (`screenpipe://settings?section=connections`), or authenticate the CLI with `gh auth login`.
 
 Build request bodies with bun so base64 is single-line and JSON escaping is safe; do not hand-roll shell quoting. On `409`/`422` for an existing path, `GET` that path's `sha` once and retry with it. If `mode: pr`, create a branch ref from the base branch, write there, then open a pull request. Two failed attempts on one transport means stop and report — never fall through to a different repository, branch, or account.
@@ -99,7 +103,14 @@ Use `priority: "normal"`. If setup is missing, say so plainly in the body instea
 
 When the run context contains `approve_files`, skip Steps 1, 2 and 4 entirely. Push exactly those files, unmodified, to the configured repo, branch, and directory — one commit per entry with the message `brain: <subject>`. Do not re-draft, re-search, add entries, or edit content on an approval run.
 
-Read the result back from the provider response, then notify a receipt with the file or pull request URL and the commit sha. If a push fails, say which entry failed, the exact provider error, and the one action that fixes it. Never report a push as done without a URL or sha from the provider.
+### Confirm the push landed remotely
+
+A local commit is not a push. Confirm on the remote side before claiming anything:
+
+- **Local clone:** `git -C <path> rev-parse HEAD` must equal `git -C <path> ls-remote origin <branch>`, and `git -C <path> status -sb` must show 0 ahead. If the branch is still ahead, the push did not happen — report that, do not report a commit sha as success.
+- **GitHub API transports:** use the `commit.sha` and `content.html_url` the provider returned in its response body.
+
+Then notify a receipt with the confirmed sha and, when one exists, the file URL. If a push fails, say which entry failed, the exact provider or git error, and the one action that fixes it. Never turn a local commit, an exit code, or your own summary into a claimed push.
 
 ## Never
 
