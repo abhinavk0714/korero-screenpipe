@@ -101,6 +101,7 @@ import {
   getLiveViewTimeRangeOption,
 } from "@/lib/live-views/time-range";
 import { summarizeLiveViewFreshness } from "@/lib/live-views/freshness";
+import { planSourceCadence } from "@/lib/live-views/source-cadence";
 import {
   liveViewSourceStatus,
   parsePipeScheduleSnapshots,
@@ -1092,27 +1093,36 @@ export function BrainOverview({
         total: boundSlots.length,
       });
 
-      // Re-enable any paused source before running it. Without this a refresh
-      // fills the Block once and the task goes straight back to never running,
-      // so the value silently freezes again until the next manual click.
-      const paused = stalledSourcePipes(pipeNames, pipeSchedulesRef.current).paused;
-      if (paused.length > 0) {
+      // Give every source feeding this dashboard a cadence before running it.
+      // Otherwise the refresh fills the Block once and the task goes straight
+      // back to never running, so the value silently freezes again. Enabling a
+      // task is not enough on its own: a `manual` schedule leaves the scheduler
+      // with nothing to fire, which is how bundled tasks ship.
+      const cadencePlans = planSourceCadence(
+        [{ slots: boundSlots, timeRange: targetView.timeRange }],
+        pipeSchedulesRef.current,
+      );
+      if (cadencePlans.length > 0) {
         await Promise.all(
-          paused.map(async (pipeName) => {
+          cadencePlans.map(async (plan) => {
             try {
-              await localFetch(`/pipes/${encodeURIComponent(pipeName)}/enable`, {
+              const config: Record<string, unknown> = {};
+              if (plan.schedule) config.schedule = plan.schedule;
+              if (plan.enable) config.enabled = true;
+              await localFetch(`/pipes/${encodeURIComponent(plan.pipeName)}/config`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ enabled: true }),
+                body: JSON.stringify({ config }),
               });
             } catch {
               // Non-fatal: the run below still refreshes the Block once.
             }
           }),
         );
-        posthog.capture("live_view_source_resumed", {
+        posthog.capture("live_view_source_cadence_applied", {
           ...analyticsProperties,
-          resumed_pipe_count: paused.length,
+          scheduled_pipe_count: cadencePlans.filter((plan) => plan.schedule).length,
+          resumed_pipe_count: cadencePlans.filter((plan) => plan.enable).length,
         });
         try {
           const response = await localFetch("/pipes");

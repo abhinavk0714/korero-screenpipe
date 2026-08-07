@@ -1081,7 +1081,7 @@ describe("BrainOverview", () => {
     );
   });
 
-  it("resumes a paused source before refreshing it, and says it was stalled", async () => {
+  it("gives a paused manual source a schedule before refreshing it", async () => {
     const calls: Array<{ path: string; body: unknown }> = [];
     let enabled = false;
     mocks.localFetch.mockImplementation(async (path: string, init?: RequestInit) => {
@@ -1097,14 +1097,14 @@ describe("BrainOverview", () => {
                 config: {
                   name: "daily-summary",
                   enabled,
-                  schedule: "every 1h",
+                  schedule: enabled ? "every 1h" : "manual",
                 },
               },
             ],
           }),
         };
       }
-      if (path.endsWith("/enable")) enabled = true;
+      if (path.endsWith("/config")) enabled = true;
       return { ok: true, status: 200, json: async () => ({ success: true }) };
     });
 
@@ -1120,19 +1120,24 @@ describe("BrainOverview", () => {
 
     fireEvent.click(await screen.findByTestId("overview-refresh-data"));
 
+    // Enabling alone is not enough: a `manual` schedule leaves the scheduler
+    // with nothing to fire, so the block would freeze again after this refresh.
     await waitFor(() =>
       expect(
-        calls.some(
-          (call) =>
-            call.path === "/pipes/daily-summary/enable" &&
-            (call.body as { enabled?: boolean })?.enabled === true,
-        ),
+        calls.some((call) => {
+          const config = (call.body as { config?: Record<string, unknown> })?.config;
+          return (
+            call.path === "/pipes/daily-summary/config" &&
+            config?.schedule === "every 1h" &&
+            config?.enabled === true
+          );
+        }),
       ).toBe(true),
     );
-    const enableIndex = calls.findIndex((call) => call.path.endsWith("/enable"));
+    const configIndex = calls.findIndex((call) => call.path.endsWith("/config"));
     const runIndex = calls.findIndex((call) => call.path.endsWith("/run"));
-    expect(enableIndex).toBeGreaterThanOrEqual(0);
-    expect(runIndex).toBeGreaterThan(enableIndex);
+    expect(configIndex).toBeGreaterThanOrEqual(0);
+    expect(runIndex).toBeGreaterThan(configIndex);
     await waitFor(() =>
       expect(screen.queryByTestId("overview-stalled-sources")).toBeNull(),
     );
@@ -1171,7 +1176,7 @@ describe("BrainOverview", () => {
     await waitFor(() =>
       expect(calls.some((path) => path.endsWith("/run"))).toBe(true),
     );
-    expect(calls.some((path) => path.endsWith("/enable"))).toBe(false);
+    expect(calls.some((path) => path.endsWith("/config"))).toBe(false);
   });
 
   it("omits the freshness line until a block is actually connected", async () => {
