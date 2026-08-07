@@ -26,6 +26,12 @@
 //! No new server surface: `/api/cli-auth` already backs `screenpipe login`.
 //! No custom-scheme redirect, so Safari's scheme blocking is irrelevant here.
 
+// `open_login_window` only reaches this module under `cfg(not(target_os =
+// "macos"))`, so on macOS every item here is exercised solely by the unit tests
+// at the bottom of the file. Keep it compiled everywhere so those tests run on
+// all platforms, but do not report the production items as dead on macOS.
+#![cfg_attr(target_os = "macos", allow(dead_code))]
+
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
