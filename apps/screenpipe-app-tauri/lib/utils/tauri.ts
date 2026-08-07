@@ -993,9 +993,15 @@ async livetextHide() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async livetextHighlight(terms: string[]) : Promise<Result<number, string>> {
+/**
+ * Highlight `terms` on the frame they were matched in. `frame_id` scopes the
+ * request: the bridge only paints when that frame's analysis is on the overlay,
+ * and re-paints automatically once it lands (analysis is asynchronous, so the
+ * highlight request usually arrives first).
+ */
+async livetextHighlight(terms: string[], frameId: string) : Promise<Result<number, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("livetext_highlight", { terms }) };
+    return { status: "ok", data: await TAURI_INVOKE("livetext_highlight", { terms, frameId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1151,8 +1157,17 @@ async openGoogleCalendarAuthWindow(authUrl: string) : Promise<Result<null, strin
  * `fresh_session` is used by "use different account": macOS asks
  * ASWebAuthenticationSession for an ephemeral browser session instead of
  * reusing Safari cookies, and Windows/Linux use a throwaway webview profile.
+ * Returns the device code when this call started the browser device-code flow,
+ * and an empty string for every path that needs no out-of-band confirmation
+ * (macOS auth session, embedded WebView fallback).
+ *
+ * The code is returned as well as broadcast on `login-browser-pending` so a
+ * caller never has to depend on a global event to render it. #5936 changed
+ * this shared command to require the user read a code out of the app, but only
+ * taught onboarding to show one; every other login surface silently opened a
+ * browser asking for a code nothing displayed.
  */
-async openLoginWindow(freshSession: boolean | null) : Promise<Result<null, string>> {
+async openLoginWindow(freshSession: boolean | null) : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("open_login_window", { freshSession }) };
 } catch (e) {
@@ -2177,7 +2192,7 @@ async setChatAlwaysOnTop(onTop: boolean) : Promise<Result<null, string>> {
  * in the screenpipe-api skill that Pi installs on every run.
  *
  * Mechanism: the screenpipe-core `Pi::ensure_screenpipe_skill` reads
- * `~/.screenpipe/cloud_media_analysis.disabled` at install time and
+ * `<data_dir>/cloud_media_analysis.disabled` at install time and
  * conditionally appends the Gemma 4 E4B confidential-enclave section
  * to `<project>/.pi/skills/screenpipe-api/SKILL.md`. Default (no
  * marker) = enabled. This command just creates or removes the marker.

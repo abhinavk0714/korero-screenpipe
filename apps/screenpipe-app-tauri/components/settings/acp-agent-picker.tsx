@@ -9,9 +9,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { AcpAgentConfig } from "@/lib/utils/tauri";
-import { SELECTABLE_ACP_ADAPTERS, acpAdapterInfo } from "@/lib/utils/preset-appearance";
+import { acpAdapterInfo } from "@/lib/utils/preset-appearance";
+import { useSelectableAcpAdapters } from "@/lib/acp-rollout";
 import { AcpInstallGate } from "@/components/settings/acp-install-gate";
 import { AcpPresetDefaults } from "@/components/settings/acp-preset-defaults";
+import { AcpBoundaries } from "@/components/settings/acp-boundaries";
 
 const DEFAULT_AGENT_ID = "pi-acp";
 
@@ -52,6 +54,9 @@ export function AcpAgentPicker({
   const [installBlocked, setInstallBlocked] = useState(false);
   const currentId = agent?.id || DEFAULT_AGENT_ID;
   const info = acpAdapterInfo(currentId);
+  // Some agents roll out on their own flag; the already-selected one is always
+  // included so a user on a flagged agent still sees their selection.
+  const adapters = useSelectableAcpAdapters(currentId);
 
   // Merge a partial change into the current agent and emit the full object.
   const merge = (change: Partial<AcpAgentConfig>) =>
@@ -85,7 +90,8 @@ export function AcpAgentPicker({
         <div className="space-y-1">
           <Label htmlFor="acpAgent">Agent</Label>
           <p className="text-xs text-muted-foreground">
-            Choose the coding agent Screenpipe should run. Your existing sign-in and agent settings stay in that app.
+            Choose the coding agent Screenpipe should run. It runs as its own
+            program with its own account — see the split below.
           </p>
         </div>
       )}
@@ -99,7 +105,7 @@ export function AcpAgentPicker({
         aria-label={compact ? "agent" : "Agent"}
         className={cn("grid", compact ? "grid-cols-2 gap-1.5" : "grid-cols-2 gap-2 sm:grid-cols-3")}
       >
-        {SELECTABLE_ACP_ADAPTERS.map((adapter) => {
+        {adapters.map((adapter) => {
           const isSelected = currentId === adapter.id;
           return (
             <button
@@ -140,6 +146,11 @@ export function AcpAgentPicker({
       <p className={cn("text-muted-foreground", compact ? "text-[10px]" : "text-xs")}>
         {info.description}
       </p>
+
+      {/* Ownership split. Sits above the install gate so the answer to "does my
+          Anthropic key configure this?" is visible before the user starts
+          troubleshooting a sign-in. */}
+      <AcpBoundaries agentName={info.name} compact={compact} />
 
       <AcpInstallGate
         compact={compact}

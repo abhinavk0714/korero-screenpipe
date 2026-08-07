@@ -21,7 +21,11 @@
     "imageSrc": "/images/claude-ai.svg",
     "presetName": "claude code",
     "description": "Use your existing Claude Code account and configuration.",
-    "launch": { "kind": "npx", "package": "@agentclientprotocol/claude-agent-acp@0.61.0", "args": [] }
+    "launch": {
+      "kind": "npx",
+      "package": "@agentclientprotocol/claude-agent-acp@0.61.0",
+      "args": ["--hide-claude-auth"]
+    }
   },
   {
     "id": "opencode",
@@ -42,7 +46,8 @@
     "description": "Use Cursor's ACP agent installed on this computer.",
     "launch": { "kind": "binary", "command": "cursor-agent", "args": ["acp"] },
     "installUrl": "https://cursor.com/cli",
-    "httpMcp": true
+    "httpMcp": true,
+    "flag": "acp_agent_cursor"
   },
   {
     "id": "github-copilot-cli",
@@ -52,7 +57,8 @@
     "presetName": "github copilot",
     "description": "Use GitHub Copilot's CLI agent installed on this computer.",
     "launch": { "kind": "npx", "package": "@github/copilot@1.0.74", "args": ["--acp"] },
-    "httpMcp": true
+    "httpMcp": true,
+    "flag": "acp_agent_github_copilot"
   },
   {
     "id": "kimi",
