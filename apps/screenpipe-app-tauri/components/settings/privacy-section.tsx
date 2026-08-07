@@ -511,6 +511,10 @@ export function PrivacySection() {
   // checked == managed value — doesn't fit; lock the switches manually.
   const managedKeyboardCapture = getManagedValue("disableKeyboardCapture");
   const managedClickCapture = getManagedValue("disableClickCapture");
+  const managedDiagnosticsMode = getManagedValue("diagnosticsMode");
+  const managedLegacyAnalytics = getManagedValue("analyticsEnabled");
+  const diagnosticsManaged =
+    managedDiagnosticsMode !== undefined || managedLegacyAnalytics !== undefined;
 
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -1965,7 +1969,6 @@ export function PrivacySection() {
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
           Diagnostics
         </h2>
-        <LockedSetting settingKey="telemetry">
         <Card className="border-border bg-card">
           <CardContent className="p-0">
             <div className="flex flex-col items-stretch justify-between gap-3 px-3 py-2.5 sm:flex-row sm:items-start">
@@ -1976,12 +1979,15 @@ export function PrivacySection() {
                     Share diagnostics
                   </h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Help us fix crashes and improve reliability.
+                    {diagnosticsManaged
+                      ? "Managed by your organization."
+                      : "Help us fix crashes and improve reliability."}
                   </p>
                 </div>
               </div>
               <Select
                 value={settings.diagnosticsMode}
+                disabled={diagnosticsManaged}
                 onValueChange={(value) => void handleDiagnosticsModeChange(value as DiagnosticsMode)}
               >
                 <SelectTrigger
@@ -2022,7 +2028,6 @@ export function PrivacySection() {
             </details>
           </CardContent>
         </Card>
-        </LockedSetting>
       </div>
 
       {/* Floating apply & restart bar */}

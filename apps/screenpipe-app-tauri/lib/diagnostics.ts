@@ -25,10 +25,15 @@ export function isUsageDiagnosticsEnabled(mode: DiagnosticsMode): boolean {
 
 export function normalizeDiagnosticsSettings(
   settings: { diagnosticsMode?: unknown; analyticsEnabled?: unknown },
+  managedDiagnosticsMode?: unknown,
   managedAnalyticsEnabled?: unknown,
 ): { diagnosticsMode: DiagnosticsMode; analyticsEnabled: boolean } {
   const managedMode =
-    typeof managedAnalyticsEnabled === "boolean"
+    managedDiagnosticsMode === "off" ||
+    managedDiagnosticsMode === "crash" ||
+    managedDiagnosticsMode === "usage"
+      ? managedDiagnosticsMode
+      : typeof managedAnalyticsEnabled === "boolean"
       ? managedAnalyticsEnabled
         ? "usage"
         : "off"

@@ -59,6 +59,20 @@ const enumeration = (
   defaultValue,
 });
 
+const liveEnumeration = (
+  policyKey: string,
+  values: readonly string[],
+  defaultValue?: string,
+  deviceKey = policyKey,
+): ManagedSettingDefinition => ({
+  policyKey,
+  deviceKey,
+  apply: "live",
+  kind: "enum",
+  values,
+  defaultValue,
+});
+
 const number = (
   policyKey: string,
   min: number,
@@ -156,6 +170,9 @@ export const MANAGED_SETTING_DEFINITIONS: readonly ManagedSettingDefinition[] = 
   stringArray("piiRedactionLabels", ["secret"], ["secret"]),
 
   bool("listen_on_lan", false, "engine", "listenOnLan"),
+  liveEnumeration("diagnosticsMode", ["off", "crash", "usage"], "usage"),
+  // Compatibility for policies saved before SCR-465. When both are present,
+  // diagnosticsMode below becomes the source of truth.
   bool("analyticsEnabled", true, "live"),
 ];
 
@@ -238,6 +255,17 @@ export function computeManagedSettingUpdates(
     if (value === undefined) continue;
     const target = definition.apply === "engine" ? engineUpdates : liveUpdates;
     target[definition.deviceKey] = value;
+  }
+
+  const diagnosticsMode = liveUpdates.diagnosticsMode;
+  if (
+    diagnosticsMode === "off" ||
+    diagnosticsMode === "crash" ||
+    diagnosticsMode === "usage"
+  ) {
+    liveUpdates.analyticsEnabled = diagnosticsMode === "usage";
+  } else if (typeof liveUpdates.analyticsEnabled === "boolean") {
+    liveUpdates.diagnosticsMode = liveUpdates.analyticsEnabled ? "usage" : "off";
   }
 
   // Keep the user-facing PII hierarchy coherent even for policies written by

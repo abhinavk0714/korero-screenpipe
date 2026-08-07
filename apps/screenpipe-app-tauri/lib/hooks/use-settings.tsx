@@ -1410,6 +1410,7 @@ function createSettingsStore() {
 				}
 				const diagnostics = normalizeDiagnosticsSettings(
 					settings,
+					managedValues.diagnosticsMode,
 					managedValues.analyticsEnabled,
 				);
 				if (
@@ -1462,6 +1463,7 @@ function createSettingsStore() {
 				newSettings,
 				normalizeDiagnosticsSettings(
 					newSettings,
+					managedValues?.diagnosticsMode,
 					managedValues?.analyticsEnabled,
 				),
 			);
@@ -1484,6 +1486,7 @@ function createSettingsStore() {
 				defaults,
 				normalizeDiagnosticsSettings(
 					defaults,
+					managedValues?.diagnosticsMode,
 					managedValues?.analyticsEnabled,
 				),
 			);

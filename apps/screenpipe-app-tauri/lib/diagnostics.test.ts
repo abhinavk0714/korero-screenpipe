@@ -44,15 +44,27 @@ describe("diagnostics mode", () => {
     expect(
       normalizeDiagnosticsSettings(
         { diagnosticsMode: "usage", analyticsEnabled: true },
+        undefined,
         false,
       ),
     ).toEqual({ diagnosticsMode: "off", analyticsEnabled: false });
     expect(
       normalizeDiagnosticsSettings(
         { diagnosticsMode: "off", analyticsEnabled: false },
+        undefined,
         true,
       ),
     ).toEqual({ diagnosticsMode: "usage", analyticsEnabled: true });
+  });
+
+  it("gives the managed diagnostics mode precedence over the legacy boolean", () => {
+    expect(
+      normalizeDiagnosticsSettings(
+        { diagnosticsMode: "off", analyticsEnabled: false },
+        "crash",
+        true,
+      ),
+    ).toEqual({ diagnosticsMode: "crash", analyticsEnabled: false });
   });
 
   it.each([
