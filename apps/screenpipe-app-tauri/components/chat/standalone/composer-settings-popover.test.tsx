@@ -12,7 +12,7 @@
 
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { AcpConfigSelector } from "./acp-config-selector";
 import { ThinkingLevelSelector } from "@/components/thinking-level-selector";
 import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
@@ -80,6 +80,51 @@ describe("composer settings control", () => {
 
     render(<ThinkingLevelSelector sessionId={SESSION} />);
     expect(screen.getByTestId("thinking-level-trigger")).toHaveTextContent("Medium");
+  });
+
+  it("gives effort the same dial on both providers", () => {
+    // The point of the shared control: an adapter's reasoning effort and Pi's
+    // thinking level are the same decision, so they must not look like two.
+    useAcpSessionConfig.setState({
+      sessions: {
+        [SESSION]: {
+          options: [
+            {
+              id: "reasoning_effort",
+              name: "Reasoning effort",
+              type: "select",
+              currentValue: "high",
+              values: [
+                { value: "low", name: "Low" },
+                { value: "medium", name: "Medium" },
+                { value: "high", name: "High" },
+              ],
+            },
+          ],
+          modes: null,
+        },
+      } as never,
+      byAgent: {},
+    });
+    render(<AcpConfigSelector sessionId={SESSION} agentId="codex-acp" />);
+    fireEvent.click(screen.getByTestId("acp-config-trigger"));
+    const acpSlider = screen.getByTestId("acp-effort-slider");
+    expect(acpSlider).toHaveAttribute("role", "slider");
+    expect(screen.getByTestId("acp-effort-slider-value")).toHaveTextContent("High");
+    cleanup();
+
+    render(<ThinkingLevelSelector sessionId={SESSION} />);
+    fireEvent.click(screen.getByTestId("thinking-level-trigger"));
+    const piSlider = screen.getByTestId("thinking-level-slider");
+    expect(piSlider).toHaveAttribute("role", "slider");
+    expect(screen.getByTestId("thinking-level-slider-value")).toHaveTextContent("Medium");
+  });
+
+  it("keeps a model list as a list, not a scale", () => {
+    renderAcp();
+    fireEvent.click(screen.getByTestId("acp-config-trigger"));
+    expect(screen.queryByTestId("acp-effort-slider")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Model").tagName).toBe("SELECT");
   });
 
   it("keeps the test ids other specs select on", () => {

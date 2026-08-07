@@ -11,6 +11,10 @@ import {
   ComposerSettingsPopover,
   ComposerSettingsSelect,
 } from "@/components/chat/standalone/composer-settings-popover";
+import {
+  ComposerEffortSlider,
+  isEffortOption,
+} from "@/components/chat/standalone/composer-effort-slider";
 import { commands, type AIPreset } from "@/lib/utils/tauri";
 import {
   dedupedModes,
@@ -198,24 +202,39 @@ export function AcpConfigSelector({
           }
         />
       )}
-      {selects.map((option) => (
-        <ComposerSettingsSelect
-          key={option.id}
-          label={option.name}
-          value={selectedValue(option)}
-          disabled={pendingId === option.id}
-          title={option.description || option.name}
-          options={option.values}
-          onValueChange={(value) =>
-            applyChange(
-              option.id,
-              { optionId: option.id, value },
-              () => commands.piAcpSetConfigOption(sessionId, option.id, value, null),
-              option.name,
-            )
-          }
-        />
-      ))}
+      {selects.map((option) => {
+        const apply = (value: string) =>
+          applyChange(
+            option.id,
+            { optionId: option.id, value },
+            () => commands.piAcpSetConfigOption(sessionId, option.id, value, null),
+            option.name,
+          );
+        // An adapter's reasoning effort is the same axis as Pi's thinking
+        // level, so it gets the same dial rather than a second look for the
+        // same decision. Everything else stays a list, because it is one.
+        return isEffortOption(option) ? (
+          <ComposerEffortSlider
+            key={option.id}
+            label={option.name}
+            testId="acp-effort-slider"
+            value={selectedValue(option)}
+            disabled={pendingId === option.id}
+            steps={option.values}
+            onValueChange={apply}
+          />
+        ) : (
+          <ComposerSettingsSelect
+            key={option.id}
+            label={option.name}
+            value={selectedValue(option)}
+            disabled={pendingId === option.id}
+            title={option.description || option.name}
+            options={option.values}
+            onValueChange={apply}
+          />
+        );
+      })}
         {toggles.map((option) => (
           <div
             key={option.id}

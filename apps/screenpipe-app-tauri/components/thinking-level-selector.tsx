@@ -8,10 +8,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Brain } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import { usePiThinkingLevel } from "@/lib/hooks/use-pi-thinking-level";
-import {
-  ComposerSettingsPopover,
-  ComposerSettingsSelect,
-} from "@/components/chat/standalone/composer-settings-popover";
+import { ComposerSettingsPopover } from "@/components/chat/standalone/composer-settings-popover";
+import { ComposerEffortSlider } from "@/components/chat/standalone/composer-effort-slider";
 
 export type ThinkingLevel = "low" | "medium" | "high";
 
@@ -137,12 +135,12 @@ export function ThinkingLevelSelector({ streaming = false, sessionId = null }: T
       onOpenChange={setIsOpen}
       disabled={isRpcLoading || piThinkingUnsupported}
     >
-      <ComposerSettingsSelect
-        label="thinking"
+      <ComposerEffortSlider
+        label="effort"
+        testId="thinking-level-slider"
         value={currentLevel}
         disabled={isRpcLoading || piThinkingUnsupported}
-        title={disabledReason || "Controls reasoning depth"}
-        options={THINKING_LEVELS.map((level) => ({
+        steps={THINKING_LEVELS.map((level) => ({
           value: level.value,
           name: level.label,
         }))}
