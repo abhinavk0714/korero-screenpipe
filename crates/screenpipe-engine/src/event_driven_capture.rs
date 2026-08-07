@@ -2254,7 +2254,7 @@ fn resolve_capture_metadata_with_policy(
         CaptureTrigger::AppSwitch {
             app_name: trigger_app_name,
             ..
-        } if !trigger_app_name.is_empty() => {
+        } if tree_snapshot.is_none() && !trigger_app_name.is_empty() => {
             if app_name.as_deref() != Some(trigger_app_name.as_str()) {
                 debug!(
                     "focused app mismatch on app_switch: trigger='{}', tree={:?}; using trigger value",
@@ -2266,7 +2266,7 @@ fn resolve_capture_metadata_with_policy(
         CaptureTrigger::WindowFocus {
             window_name: trigger_window_name,
             ..
-        } if !trigger_window_name.is_empty() => {
+        } if tree_snapshot.is_none() && !trigger_window_name.is_empty() => {
             if window_name.as_deref() != Some(trigger_window_name.as_str()) {
                 debug!(
                     "focused window mismatch on window_focus: trigger='{}', tree={:?}; using trigger value",
