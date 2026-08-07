@@ -7,6 +7,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useToast } from "@/components/ui/use-toast";
 import OnboardingLogin from "@/components/onboarding/login-gate";
+import AcquisitionStep from "@/components/onboarding/acquisition-step";
 import PermissionsStep from "@/components/onboarding/permissions-step";
 import TimelineChoice from "@/components/onboarding/timeline-choice";
 import EngineStartup from "@/components/onboarding/engine-startup";
@@ -21,6 +22,7 @@ import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
 
 type SlideKey =
   | "login"
+  | "acquisition"
   | "permissions"
   | "timeline"
   | "engine"
@@ -29,6 +31,7 @@ type SlideKey =
 const SLIDE_WINDOW_SIZES: Record<SlideKey, { width: number; height: number }> =
   {
     login: { width: 500, height: 480 },
+    acquisition: { width: 500, height: 560 },
     permissions: { width: 500, height: 560 },
     timeline: { width: 500, height: 680 },
     engine: { width: 500, height: 620 },
@@ -39,6 +42,7 @@ const SLIDE_WINDOW_SIZES: Record<SlideKey, { width: number; height: number }> =
 // persisted before the engine spawns and reads it — no restart needed.
 const SLIDE_ORDER: SlideKey[] = [
   "login",
+  "acquisition",
   "permissions",
   "timeline",
   "engine",
@@ -182,6 +186,7 @@ export default function OnboardingPage() {
         // Map old and new step names
         const stepMap: Record<string, SlideKey> = {
           login: "login",
+          acquisition: "acquisition",
           permissions: "permissions",
           timeline: "timeline",
           engine: "engine",
@@ -454,6 +459,9 @@ export default function OnboardingPage() {
             ) : (
               <OnboardingLogin handleNextSlide={handleNextSlide} />
             ))}
+          {currentSlide === "acquisition" && (
+            <AcquisitionStep handleNextSlide={handleNextSlide} />
+          )}
           {currentSlide === "permissions" && (
             <PermissionsStep
               handleNextSlide={handleNextSlide}

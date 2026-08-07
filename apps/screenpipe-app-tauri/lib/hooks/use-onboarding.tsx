@@ -12,6 +12,10 @@ import {
   setFirstRunGuidePending,
   setFirstRunGuideReplayAfterOnboarding,
 } from "@/lib/first-run-guide";
+import {
+  beginLearningWindow,
+  resetLearningWindow,
+} from "@/lib/first-run/learning-window";
 import type { OnboardingLiveViewFlowProperties } from "@/lib/analytics/onboarding-funnel";
 
 export type OnboardingCompletionContext = {
@@ -82,6 +86,10 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
 
       if (result.status === "ok") {
         setFirstRunGuideReplayAfterOnboarding(false);
+        // Open the learning window from the moment setup ends: everything it
+        // summarizes is captured after this instant, so the cutoff has to be
+        // the completion itself, not the first time a surface mounts.
+        beginLearningWindow();
         // Update local state
         set((state) => ({
           onboardingData: {
@@ -148,6 +156,9 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
         // Reset setup without replaying the separate optional app tour.
         setFirstRunGuidePending(false);
         setFirstRunGuideReplayAfterOnboarding(false);
+        // Clear any half-finished window so a replayed setup opens a fresh one
+        // instead of resuming a countdown against the previous run's cutoff.
+        resetLearningWindow();
         // Update local state
         set((state) => ({
           onboardingData: {

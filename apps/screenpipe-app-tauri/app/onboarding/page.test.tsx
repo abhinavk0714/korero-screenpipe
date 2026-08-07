@@ -177,7 +177,7 @@ describe("enterprise onboarding authentication", () => {
     );
 
     await waitFor(() =>
-      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("permissions"),
+      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("acquisition"),
     );
     expect(
       mocks.capture.mock.calls.filter(
@@ -263,7 +263,7 @@ describe("enterprise onboarding authentication", () => {
     render(<OnboardingPage />);
 
     await waitFor(() =>
-      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("permissions"),
+      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("acquisition"),
     );
   });
 
