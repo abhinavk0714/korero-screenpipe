@@ -318,7 +318,7 @@ impl ServerCore {
         if std::env::var("SCREENPIPE_DISTRIBUTION").is_err() {
             std::env::set_var("SCREENPIPE_DISTRIBUTION", "desktop-app");
         }
-        analytics::init(config.analytics_enabled);
+        analytics::set_usage_analytics_enabled(config.analytics_enabled);
 
         if config.use_chinese_mirror {
             std::env::set_var("HF_ENDPOINT", "https://hf-mirror.com");

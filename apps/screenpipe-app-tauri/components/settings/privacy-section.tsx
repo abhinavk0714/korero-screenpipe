@@ -18,7 +18,10 @@ export const searchIndex: SettingsField[] = [
     label: "Remote support logs",
     keywords: ["support", "diagnostic", "troubleshooting", "remote", "logs"],
   },
-  { label: "Telemetry" },
+  {
+    label: "Share diagnostics",
+    keywords: ["telemetry", "crash", "error", "PostHog", "Sentry"],
+  },
 ];
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
@@ -47,6 +50,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { WindowPicker } from "./window-picker";
@@ -62,11 +72,8 @@ import { useSqlAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import { useInstalledApps } from "@/lib/hooks/use-installed-apps";
 import { commands } from "@/lib/utils/tauri";
 import { planEnhancedIncognitoPermission } from "@/lib/utils/incognito-permission";
-import posthog from "posthog-js";
-import * as Sentry from "@sentry/react";
-import { defaultOptions } from "tauri-plugin-sentry-api";
-import { cacheAnalyticsEnabled } from "@/lib/analytics-id";
-import { initializePostHog } from "@/lib/posthog-client";
+import { applyDiagnosticsMode } from "@/lib/diagnostics-runtime";
+import { isUsageDiagnosticsEnabled, type DiagnosticsMode } from "@/lib/diagnostics";
 import {
   validateField,
   sanitizeValue,
@@ -594,30 +601,9 @@ export function PrivacySection() {
         setPendingApiKey(null);
       }
 
-      const analyticsEnabled =
-        pendingSettings.analyticsEnabled ?? settings.analyticsEnabled;
-
-      // Cache immediately so the next boot picks up the change before
-      // settings IPC resolves (see readCachedAnalyticsEnabled in providers.tsx).
-      cacheAnalyticsEnabled(analyticsEnabled);
-      await commands.setDiagnosticsPolicy({
-        crashReports: analyticsEnabled,
-        usageAnalytics: analyticsEnabled,
-      });
-
-      if (!analyticsEnabled) {
-        posthog.opt_out_capturing();
-        Sentry.close();
-      } else {
-        const isDebug = process.env.TAURI_ENV_DEBUG === "true";
-        if (!isDebug) {
-          if (await initializePostHog()) {
-            posthog.opt_in_capturing();
-            posthog.capture("telemetry", { enabled: true });
-            Sentry.init({ ...defaultOptions });
-          }
-        }
-      }
+      await applyDiagnosticsMode(
+        pendingSettings.diagnosticsMode ?? settings.diagnosticsMode,
+      );
 
       await commands.stopScreenpipe();
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -982,17 +968,20 @@ export function PrivacySection() {
     handleSettingsChange({ recordWhileLocked: checked }, true);
   };
 
-  const handleAnalyticsToggle = (checked: boolean) => {
-    // no restart needed — analytics is purely frontend
-    handleSettingsChange({ analyticsEnabled: checked }, false);
-    cacheAnalyticsEnabled(checked);
-    const isDebug = process.env.TAURI_ENV_DEBUG === "true";
-    if (!isDebug) {
-      if (checked) {
-        posthog.opt_in_capturing();
-      } else {
-        posthog.opt_out_capturing();
-      }
+  const handleDiagnosticsModeChange = async (mode: DiagnosticsMode) => {
+    try {
+      await updateSettings({
+        diagnosticsMode: mode,
+        analyticsEnabled: isUsageDiagnosticsEnabled(mode),
+      });
+      await applyDiagnosticsMode(mode);
+    } catch (error) {
+      console.error("Failed to update diagnostics setting:", error);
+      toast({
+        title: "Could not update diagnostics",
+        description: "Please try again.",
+        variant: "destructive",
+      });
     }
   };
 
@@ -1971,33 +1960,66 @@ export function PrivacySection() {
 
       <RemoteSupportLogsCard />
 
-      {/* Telemetry */}
+      {/* Diagnostics */}
       <div className="space-y-2">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
-          Telemetry
+          Diagnostics
         </h2>
         <LockedSetting settingKey="telemetry">
         <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
+          <CardContent className="p-0">
+            <div className="flex flex-col items-stretch justify-between gap-3 px-3 py-2.5 sm:flex-row sm:items-start">
+              <div className="flex items-start space-x-2.5">
+                <Monitor className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                <div className="min-w-0">
                   <h3 className="text-sm font-medium text-foreground">
-                    Analytics
+                    Share diagnostics
                   </h3>
-                  <p className="text-xs text-muted-foreground">
-                    Anonymous usage data
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Help us fix crashes and improve reliability.
                   </p>
                 </div>
               </div>
-              <ManagedSwitch
-                settingKey="analyticsEnabled"
-                id="analyticsEnabled"
-                checked={settings.analyticsEnabled}
-                onCheckedChange={handleAnalyticsToggle}
-              />
+              <Select
+                value={settings.diagnosticsMode}
+                onValueChange={(value) => void handleDiagnosticsModeChange(value as DiagnosticsMode)}
+              >
+                <SelectTrigger
+                  className="h-8 w-full text-xs sm:w-[300px]"
+                  data-testid="diagnostics-mode-select"
+                  aria-label="Share diagnostics"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="off">Off</SelectItem>
+                  <SelectItem value="crash">Crash and error reports</SelectItem>
+                  <SelectItem value="usage">Usage and reliability diagnostics</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
+            <details className="group border-t border-border px-3 py-2">
+              <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs font-medium text-foreground">
+                <ChevronRight className="h-3 w-3 shrink-0 transition-transform group-open:rotate-90" />
+                What is shared
+              </summary>
+              <div className="mt-2 grid gap-2 pl-[18px] text-xs text-muted-foreground">
+                <p>
+                  <span className="font-medium text-foreground">Off.</span>{" "}
+                  Nothing is sent to PostHog or Sentry.
+                </p>
+                <p>
+                  <span className="font-medium text-foreground">Crash and error reports.</span>{" "}
+                  Sentry receives errors, stack traces, app version, and OS information.
+                  Screenpipe log files are not sent.
+                </p>
+                <p>
+                  <span className="font-medium text-foreground">Usage and reliability diagnostics.</span>{" "}
+                  Includes crash and error reports. PostHog receives feature usage and
+                  aggregate performance and health measurements.
+                </p>
+              </div>
+            </details>
           </CardContent>
         </Card>
         </LockedSetting>

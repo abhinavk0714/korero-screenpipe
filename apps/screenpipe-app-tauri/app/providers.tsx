@@ -19,7 +19,7 @@ import { AppEntitlementGate } from "@/components/app-entitlement-gate";
 import { DeeplinkHandler } from "@/components/deeplink-handler";
 import { LiveViewOnboardingFollowUp } from "@/components/live-view-onboarding-follow-up";
 import { usePathname } from "next/navigation";
-import { readCachedAnalyticsEnabled } from "@/lib/analytics-id";
+import { readCachedDiagnosticsMode } from "@/lib/analytics-id";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/query-client";
 import { DesktopRemoteControl } from "@/components/desktop-remote-control";
@@ -76,12 +76,12 @@ export const Providers = forwardRef<
       const isE2E = process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true";
       const isBrowserDev = Boolean(process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV);
       if (isDebug || isE2E || isBrowserDev) return;
-      // Read the cached analytics preference to sync PostHog opt-in/out
-      // after init. undefined = first boot → allow capturing (default true).
-      const cachedEnabled = readCachedAnalyticsEnabled();
+      // Read the cached diagnostics preference before PostHog can make a
+      // request. undefined = first boot → allow usage diagnostics (default).
+      const cachedMode = readCachedDiagnosticsMode();
       // `posthog.init` can fetch feature flags, so opting out after it runs is
       // insufficient for the zero-request contract. Wait for both gates.
-      if (cachedEnabled === false) return;
+      if (cachedMode !== undefined && cachedMode !== "usage") return;
       void initializePostHog().then((didInitialize) => {
         if (!didInitialize) return;
         posthog.opt_in_capturing();

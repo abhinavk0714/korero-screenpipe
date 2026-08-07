@@ -151,8 +151,7 @@ import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { platform } from "@tauri-apps/plugin-os";
-import posthog from "posthog-js";
-import { initializePostHog } from "@/lib/posthog-client";
+import { applyDiagnosticsMode } from "@/lib/diagnostics-runtime";
 import {
   Language,
   areLanguageSelectionsEqual,
@@ -174,8 +173,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { MeetingAppsPicker } from "./meeting-apps-picker";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useSqlAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
-import * as Sentry from "@sentry/react";
-import { defaultOptions } from "tauri-plugin-sentry-api";
 import { useLoginDialog } from "../login-dialog";
 import { BatterySaverSection } from "./battery-saver-section";
 import { ApplyRestartBar } from "./apply-restart-bar";
@@ -2350,30 +2347,7 @@ export function RecordingSettings({ section }: { section: RecordingSettingsSecti
     try {
       await flushSettingsWrites(settingsWriteQueueRef.current);
 
-      await commands.setDiagnosticsPolicy({
-        crashReports: settings.analyticsEnabled,
-        usageAnalytics: settings.analyticsEnabled,
-      });
-
-      if (!settings.analyticsEnabled) {
-        posthog.opt_out_capturing();
-        Sentry.close();
-        console.log("Telemetry disabled");
-      } else {
-        const isDebug = process.env.TAURI_ENV_DEBUG === "true";
-        if (!isDebug) {
-          if (await initializePostHog()) {
-            posthog.opt_in_capturing();
-            posthog.capture("telemetry", {
-              enabled: true,
-            });
-            Sentry.init({
-              ...defaultOptions,
-            });
-          }
-          console.log("Telemetry enabled");
-        }
-      }
+      await applyDiagnosticsMode(settings.diagnosticsMode);
 
       if (pendingAudioExclusions !== null) {
         try {
@@ -2590,11 +2564,6 @@ export function RecordingSettings({ section }: { section: RecordingSettingsSecti
         variant: "destructive",
       });
     }
-  };
-
-  const handleAnalyticsToggle = (checked: boolean) => {
-    const newValue = checked;
-    handleSettingsChange({ analyticsEnabled: newValue }, true);
   };
 
   const handleChineseMirrorToggle = async (checked: boolean) => {

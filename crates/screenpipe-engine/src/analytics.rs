@@ -39,6 +39,18 @@ impl DiagnosticsPolicy {
             usage_analytics: enabled,
         }
     }
+
+    pub fn from_persisted_mode(mode: Option<&str>, legacy_enabled: bool) -> Self {
+        match mode {
+            Some("off") => Self::OFF,
+            Some("crash") => Self {
+                crash_reports: true,
+                usage_analytics: false,
+            },
+            Some("usage") => Self::from_legacy_enabled(true),
+            _ => Self::from_legacy_enabled(legacy_enabled),
+        }
+    }
 }
 
 const CRASH_REPORTS_BIT: u8 = 1;
@@ -123,6 +135,14 @@ pub fn diagnostics_policy() -> DiagnosticsPolicy {
         crash_reports: bits & CRASH_REPORTS_BIT != 0,
         usage_analytics: bits & USAGE_ANALYTICS_BIT != 0,
     }
+}
+
+/// Change the usage destination without overwriting independently persisted
+/// crash consent. Desktop recorder restarts call this legacy boolean path.
+pub fn set_usage_analytics_enabled(enabled: bool) {
+    let mut policy = diagnostics_policy();
+    policy.usage_analytics = enabled;
+    set_diagnostics_policy(policy);
 }
 
 /// Initialize analytics with the legacy all-diagnostics setting.
@@ -362,5 +382,46 @@ mod tests {
                 )
             });
         }
+    }
+
+    #[test]
+    fn persisted_modes_map_to_independent_destinations() {
+        assert_eq!(
+            DiagnosticsPolicy::from_persisted_mode(Some("off"), true),
+            DiagnosticsPolicy::OFF
+        );
+        assert_eq!(
+            DiagnosticsPolicy::from_persisted_mode(Some("crash"), true),
+            DiagnosticsPolicy {
+                crash_reports: true,
+                usage_analytics: false,
+            }
+        );
+        assert_eq!(
+            DiagnosticsPolicy::from_persisted_mode(Some("usage"), false),
+            DiagnosticsPolicy::from_legacy_enabled(true)
+        );
+        assert_eq!(
+            DiagnosticsPolicy::from_persisted_mode(None, false),
+            DiagnosticsPolicy::OFF
+        );
+    }
+
+    #[test]
+    fn usage_updates_preserve_crash_consent() {
+        with_env(&[], || {
+            set_diagnostics_policy(DiagnosticsPolicy {
+                crash_reports: true,
+                usage_analytics: true,
+            });
+            set_usage_analytics_enabled(false);
+            assert_eq!(
+                diagnostics_policy(),
+                DiagnosticsPolicy {
+                    crash_reports: true,
+                    usage_analytics: false,
+                }
+            );
+        });
     }
 }

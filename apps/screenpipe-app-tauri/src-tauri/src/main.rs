@@ -503,7 +503,9 @@ async fn main() {
     #[cfg(target_os = "windows")]
     windows_crash_dump::install();
 
-    // Check if telemetry is disabled via store setting (analyticsEnabled)
+    // Load diagnostics consent before either native destination can emit. The
+    // legacy boolean is the migration fallback for stores created before
+    // SCR-465; the web settings layer persists diagnosticsMode on first load.
     let store_path = screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
     let store_json = std::fs::read(&store_path).ok().and_then(|data| {
         if data.len() >= 8 && &data[..8] == b"SPSTORE1" {
@@ -529,15 +531,26 @@ async fn main() {
             })
         })
     };
-    // CI / automation (GitHub Actions, etc.) always wins over the settings
-    // opt-in so the desktop-app e2e suite never reaches Sentry/PostHog.
-    let telemetry_disabled = store_bool("analyticsEnabled")
-        .map(|enabled| !enabled)
-        .unwrap_or(false)
-        || screenpipe_engine::analytics::telemetry_disabled_by_env();
-    screenpipe_engine::analytics::set_diagnostics_policy(
-        screenpipe_engine::analytics::DiagnosticsPolicy::from_legacy_enabled(!telemetry_disabled),
-    );
+    let store_string = |key: &str| -> Option<&str> {
+        store_json.as_ref().and_then(|data| {
+            data.get(key).and_then(|v| v.as_str()).or_else(|| {
+                data.get("settings")
+                    .and_then(|s| s.get(key))
+                    .and_then(|v| v.as_str())
+            })
+        })
+    };
+    let is_debug = std::env::var("TAURI_ENV_DEBUG").as_deref() == Ok("true")
+        || cfg!(debug_assertions);
+    let policy = if is_debug {
+        screenpipe_engine::analytics::DiagnosticsPolicy::OFF
+    } else {
+        screenpipe_engine::analytics::DiagnosticsPolicy::from_persisted_mode(
+            store_string("diagnosticsMode"),
+            store_bool("analyticsEnabled").unwrap_or(true),
+        )
+    };
+    screenpipe_engine::analytics::set_diagnostics_policy(policy);
     // The webview gets this same decision through the
     // `is_telemetry_disabled_by_env` command (see commands.rs); it cannot read
     // the process env itself.
@@ -1304,7 +1317,7 @@ async fn main() {
             });
 
             // Attach non-sensitive settings to all future Sentry events.
-            if !telemetry_disabled {
+            if screenpipe_engine::analytics::is_crash_reporting_enabled() {
                 sentry::configure_scope(|scope| {
                     // Support context env vars are attached as tags so managed
                     // deployments can be filtered without replacing the app id.

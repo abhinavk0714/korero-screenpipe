@@ -15,8 +15,13 @@ import {
 } from "@/components/settings/settings-write-queue";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
-import { cacheAnalyticsId, cacheAnalyticsEnabled } from "@/lib/analytics-id";
+import { cacheAnalyticsId, cacheDiagnosticsMode } from "@/lib/analytics-id";
 import { resolveTelemetryDisabledByEnv, shouldIdentifyInPostHog } from "@/lib/telemetry-env";
+import {
+	isUsageDiagnosticsEnabled,
+	normalizeDiagnosticsSettings,
+	type DiagnosticsMode,
+} from "@/lib/diagnostics";
 import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
 import { installAuthInterceptor } from "../auth-guard";
@@ -265,6 +270,7 @@ export interface ChatHistoryStore {
 
 // Extend SettingsStore with fields added before Rust types are regenerated
 export type Settings = SettingsStore & {
+	diagnosticsMode: DiagnosticsMode;
 	/** Goal used to prioritize the Home cards. Persisted in store.bin. */
 	userGoalCategory?: UserGoalCategory;
 	/** Internal marker/snapshot used to unwind the forced free-plan policy. */
@@ -716,6 +722,7 @@ let DEFAULT_SETTINGS: Settings = {
 			teamFilters: { ignoredWindows: [], includedWindows: [], ignoredUrls: [] },
 
 			analyticsEnabled: true,
+			diagnosticsMode: "usage",
 			remoteLogCollectionEnabled: false,
 			remoteLogCollectionUserId: null,
 			audioChunkDuration: 30,
@@ -1078,6 +1085,21 @@ function createSettingsStore() {
 			needsUpdate = true;
 		}
 
+		// SCR-465: preserve the old all-on/all-off choice, then make the mode the
+		// source of truth. analyticsEnabled remains a compatibility mirror for
+		// existing PostHog and engine consumers.
+		const diagnostics = normalizeDiagnosticsSettings(settings);
+		const diagnosticsMode = diagnostics.diagnosticsMode;
+		if (settings.diagnosticsMode !== diagnosticsMode) {
+			settings.diagnosticsMode = diagnosticsMode;
+			needsUpdate = true;
+		}
+		const usageAnalyticsEnabled = diagnostics.analyticsEnabled;
+		if (settings.analyticsEnabled !== usageAnalyticsEnabled) {
+			settings.analyticsEnabled = usageAnalyticsEnabled;
+			needsUpdate = true;
+		}
+
 		// Temporary one-time migration: force restart notifications off for all
 		// existing users until the stall detector is more reliable. Users can
 		// still manually opt back in afterward; the marker prevents re-overriding.
@@ -1386,6 +1408,17 @@ function createSettingsStore() {
 					Object.assign(settings, applyManagedOverrides(settings, managedValues));
 					needsUpdate = true;
 				}
+				const diagnostics = normalizeDiagnosticsSettings(
+					settings,
+					managedValues.analyticsEnabled,
+				);
+				if (
+					settings.diagnosticsMode !== diagnostics.diagnosticsMode ||
+					settings.analyticsEnabled !== diagnostics.analyticsEnabled
+				) {
+					Object.assign(settings, diagnostics);
+					needsUpdate = true;
+				}
 			} else if (settings.enterpriseManagedSettings) {
 				// Confirmed consumer build carrying a stale policy blob: drop it so
 				// the machine stops re-clamping on every read.
@@ -1425,6 +1458,13 @@ function createSettingsStore() {
 				newSettings as Record<string, unknown>,
 				managedValues
 			) as Settings;
+			Object.assign(
+				newSettings,
+				normalizeDiagnosticsSettings(
+					newSettings,
+					managedValues?.analyticsEnabled,
+				),
+			);
 			if (managedValues) newSettings.enterpriseManagedSettings = managedValues;
 			else delete newSettings.enterpriseManagedSettings;
 			await setSettingsStripped(store, newSettings);
@@ -1440,6 +1480,13 @@ function createSettingsStore() {
 				createDefaultSettingsObject() as Record<string, unknown>,
 				managedValues
 			) as Settings;
+			Object.assign(
+				defaults,
+				normalizeDiagnosticsSettings(
+					defaults,
+					managedValues?.analyticsEnabled,
+				),
+			);
 			if (managedValues) defaults.enterpriseManagedSettings = managedValues;
 			await store.set("settings", defaults);
 			await saveAndEncrypt(store);
@@ -1658,7 +1705,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
 		// Cache the analytics opt-out preference so providers.tsx can sync
 		// PostHog opt-in/out on the next boot. See lib/analytics-id.
-		cacheAnalyticsEnabled(settings.analyticsEnabled);
+		cacheDiagnosticsMode(settings.diagnosticsMode);
 
 		let cancelled = false;
 
@@ -1699,7 +1746,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		// `person_profiles: "identified_only"`, so they must clear BOTH opt-out
 		// signals before running:
 		//
-		//  - settings.analyticsEnabled — the user's own preference. providers.tsx
+		//  - settings.diagnosticsMode — the user's own preference. providers.tsx
 		//    can only read the localStorage cache, which is EMPTY on a fresh
 		//    profile, so it opt_in's by default. Without this check a user who
 		//    has analytics turned off is still identified once on first boot.
@@ -1707,7 +1754,10 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		//    known only to Rust. See lib/telemetry-env.
 		void resolveTelemetryDisabledByEnv().then((envDisabled) => {
 			if (cancelled) return;
-			if (!shouldIdentifyInPostHog({ analyticsEnabled: settings.analyticsEnabled, envDisabled })) {
+			if (!shouldIdentifyInPostHog({
+				analyticsEnabled: isUsageDiagnosticsEnabled(settings.diagnosticsMode),
+				envDisabled,
+			})) {
 				try { posthog.opt_out_capturing(); } catch {}
 				return;
 			}
@@ -1718,7 +1768,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			cancelled = true;
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [settings.analyticsId, settings.analyticsEnabled, settings.user?.id, settings.user?.clerk_id, settings.user?.cloud_subscribed, (settings.user as any)?.app_entitled, (settings.user as any)?.subscription_plan]);
+	}, [settings.analyticsId, settings.diagnosticsMode, settings.user?.id, settings.user?.clerk_id, settings.user?.cloud_subscribed, (settings.user as any)?.app_entitled, (settings.user as any)?.subscription_plan]);
 
 	// When user becomes a Pro subscriber, default to cloud transcription (one-time)
 	useEffect(() => {

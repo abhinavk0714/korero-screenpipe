@@ -6,7 +6,7 @@ import { z } from "zod";
 import { SettingsStore, AIPreset, AIProviderType, EmbeddedLLM, User, Credits } from "./tauri";
 
 // Extended settings type that includes fields not yet in generated SettingsStore
-type ExtendedSettingsKeys = keyof SettingsStore | "ignoredUrls" | "deviceId" | "updateChannel";
+type ExtendedSettingsKeys = keyof SettingsStore | "ignoredUrls" | "deviceId" | "updateChannel" | "diagnosticsMode";
 
 // Zod schemas for validation
 export const creditsSchema = z.object({
@@ -120,6 +120,7 @@ export const settingsStoreSchema = z.object({
   dataDir: z.string().min(1, "Data directory is required"),
   port: z.number().int().min(1024, "Port must be at least 1024").max(65535, "Port cannot exceed 65535"),
   analyticsEnabled: z.boolean(),
+  diagnosticsMode: z.enum(["off", "crash", "usage"]),
   useChineseMirror: z.boolean(),
   usePiiRemoval: z.boolean(),
   devMode: z.boolean(),

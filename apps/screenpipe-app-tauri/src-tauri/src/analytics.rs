@@ -511,11 +511,7 @@ pub fn start_analytics(
         && !is_debug
         && !cfg!(debug_assertions)
         && !screenpipe_engine::analytics::telemetry_disabled_by_env();
-    screenpipe_engine::analytics::set_diagnostics_policy(
-        screenpipe_engine::analytics::DiagnosticsPolicy::from_legacy_enabled(
-            should_enable_analytics,
-        ),
-    );
+    screenpipe_engine::analytics::set_usage_analytics_enabled(should_enable_analytics);
 
     let analytics_manager = Arc::new(AnalyticsManager::new(
         posthog_api_key,
