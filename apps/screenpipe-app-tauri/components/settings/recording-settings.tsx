@@ -152,6 +152,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { platform } from "@tauri-apps/plugin-os";
 import posthog from "posthog-js";
+import { initializePostHog } from "@/lib/posthog-client";
 import {
   Language,
   areLanguageSelectionsEqual,
@@ -2349,24 +2350,28 @@ export function RecordingSettings({ section }: { section: RecordingSettingsSecti
     try {
       await flushSettingsWrites(settingsWriteQueueRef.current);
 
+      await commands.setDiagnosticsPolicy({
+        crashReports: settings.analyticsEnabled,
+        usageAnalytics: settings.analyticsEnabled,
+      });
+
       if (!settings.analyticsEnabled) {
-        posthog.capture("telemetry", {
-          enabled: false,
-        });
         posthog.opt_out_capturing();
         Sentry.close();
         console.log("Telemetry disabled");
       } else {
         const isDebug = process.env.TAURI_ENV_DEBUG === "true";
         if (!isDebug) {
-          posthog.opt_in_capturing();
-          posthog.capture("telemetry", {
-            enabled: true,
-          });
+          if (await initializePostHog()) {
+            posthog.opt_in_capturing();
+            posthog.capture("telemetry", {
+              enabled: true,
+            });
+            Sentry.init({
+              ...defaultOptions,
+            });
+          }
           console.log("Telemetry enabled");
-          Sentry.init({
-            ...defaultOptions,
-          });
         }
       }
 
