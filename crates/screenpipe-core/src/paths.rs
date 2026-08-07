@@ -316,7 +316,10 @@ mod best_effort_tests {
         let excluded = ensure_spotlight_excluded_best_effort(&missing);
 
         #[cfg(target_os = "macos")]
-        assert!(!excluded, "a failed exclusion must report the degraded state");
+        assert!(
+            !excluded,
+            "a failed exclusion must report the degraded state"
+        );
         #[cfg(not(target_os = "macos"))]
         assert!(excluded, "non-macOS needs no exclusion, so it is satisfied");
     }
