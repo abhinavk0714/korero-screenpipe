@@ -117,13 +117,15 @@ import {
   type TranscriptOpenIntent,
 } from "./transcript-open-state";
 import {
-  findMeetingSummaryExecution,
   latestSummaryInputAt,
   meetingSummaryFailure,
   meetingSummaryFailureCopy,
-  meetingSummaryLifecycle,
-  type MeetingSummaryExecution,
+  meetingSummaryLifecycleFromStatus,
+  summaryLifecycleIsWorking,
+  SUMMARY_ACTIVE_POLL_MS,
+  SUMMARY_IDLE_POLL_MS,
   type MeetingSummaryLifecycle,
+  type MeetingSummaryStatus,
 } from "./meeting-summary-lifecycle";
 import { QUOTA_PLAN_LABELS } from "@/lib/chat/quota-errors";
 import { openExternalUrl } from "@/lib/open-external-url";
@@ -344,35 +346,6 @@ export function NoteView({
     };
   }, [summaryPipeSlug]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const loadSummaryPipe = async () => {
-      try {
-        const response = await localFetch(
-          `/pipes/${encodeURIComponent(summaryPipeSlug)}`,
-        );
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const payload = await response.json();
-        const config = payload?.data?.config;
-        const triggerEvents = config?.trigger?.events;
-        if (!cancelled) {
-          setAutoSummaryEnabled(
-            config?.enabled === true &&
-              Array.isArray(triggerEvents) &&
-              triggerEvents.includes("meeting_ended"),
-          );
-        }
-      } catch (error) {
-        console.warn("failed to read meeting summary pipe config", error);
-        if (!cancelled) setAutoSummaryEnabled(null);
-      }
-    };
-    void loadSummaryPipe();
-    return () => {
-      cancelled = true;
-    };
-  }, [summaryPipeSlug]);
-
   const refreshedSummaryExecutionRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -422,24 +395,19 @@ export function NoteView({
     let pollHandle: ReturnType<typeof setTimeout> | null = null;
     const poll = async () => {
       try {
+        // One authoritative read. It already accounts for the Pipe being
+        // deleted or disabled, so this is also what keeps an open note from
+        // promising a summary that can no longer happen.
+        const query = new URLSearchParams({ pipe: summaryPipeSlug });
+        if (summaryInputUpdatedAt) query.set("not_before", summaryInputUpdatedAt);
         const response = await localFetch(
-          `/pipes/${encodeURIComponent(summaryPipeSlug)}/executions?limit=20&include_output=false`,
+          `/meetings/${meeting.id}/summary-status?${query.toString()}`,
         );
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const payload = await response.json();
-        const executions = Array.isArray(payload?.data)
-          ? (payload.data as MeetingSummaryExecution[])
-          : [];
-        const execution = findMeetingSummaryExecution(executions, meeting.id, {
-          notBefore: summaryInputUpdatedAt,
-        });
-        const next = meetingSummaryLifecycle(execution, {
-          meetingEnd: meeting.meeting_end,
-          contentUpdatedAt: transcriptUpdatedAt,
-          contentRefreshRequested: transcriptRefreshRequested,
-          autoSummaryEnabled,
-        });
+        const status = (await response.json()) as MeetingSummaryStatus;
+        const next = meetingSummaryLifecycleFromStatus(status);
         if (cancelled) return;
+        setAutoSummaryEnabled(status.auto_summary_enabled);
         if (next.kind === "queued" || next.kind === "running") {
           const buffered = summaryStreamsRef.current.get(next.execution.id);
           if (buffered?.markdown) {
@@ -474,26 +442,21 @@ export function NoteView({
           }
         }
 
-        if (
-          next.kind === "finalizing" ||
-          next.kind === "queued" ||
-          next.kind === "running"
-        ) {
-          pollHandle = setTimeout(() => void poll(), 2000);
-        }
+        // Never stop: settling to idle used to end the poll, which is how a
+        // deleted Pipe or a late run stayed invisible until the note remounted.
+        pollHandle = setTimeout(
+          () => void poll(),
+          summaryLifecycleIsWorking(next)
+            ? SUMMARY_ACTIVE_POLL_MS
+            : SUMMARY_IDLE_POLL_MS,
+        );
       } catch (error) {
         console.warn("failed to read meeting summary status", error);
         if (cancelled) return;
-        const fallback = meetingSummaryLifecycle(null, {
-          meetingEnd: meeting.meeting_end,
-          contentUpdatedAt: transcriptUpdatedAt,
-          contentRefreshRequested: transcriptRefreshRequested,
-          autoSummaryEnabled,
-        });
-        setSummaryLifecycle(fallback);
-        if (fallback.kind === "finalizing") {
-          pollHandle = setTimeout(() => void poll(), 3000);
-        }
+        // The engine owns this answer, so an unreachable engine means unknown,
+        // not "off" and not a spinner for work that may not exist.
+        setAutoSummaryEnabled(null);
+        pollHandle = setTimeout(() => void poll(), SUMMARY_IDLE_POLL_MS);
       }
     };
 
@@ -503,7 +466,6 @@ export function NoteView({
       if (pollHandle) clearTimeout(pollHandle);
     };
   }, [
-    autoSummaryEnabled,
     isLive,
     meeting.id,
     meeting.meeting_end,
@@ -511,8 +473,6 @@ export function NoteView({
     summaryPipeSlug,
     summaryStatusRefreshKey,
     summaryInputUpdatedAt,
-    transcriptRefreshRequested,
-    transcriptUpdatedAt,
   ]);
 
   // Drag-and-drop images straight into the note. Tauri delivers OS file drops
@@ -913,15 +873,10 @@ export function NoteView({
         meetingId: meeting.id,
         meetingEnd,
       });
+      // Optimistic until the next status poll confirms it from the engine.
       setSummaryLifecycle({
         kind: "queued",
-        execution: {
-          id: executionId,
-          status: "queued",
-          started_at: new Date().toISOString(),
-          trigger_event: "meeting_ended",
-          trigger_key: String(meeting.id),
-        },
+        execution: { id: executionId, status: "queued" },
       });
       setSummaryStatusRefreshKey((key) => key + 1);
     } catch (err) {
