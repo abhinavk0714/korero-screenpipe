@@ -5,6 +5,7 @@ history: false
 template: true
 title: Company Brain
 description: Turns the day's decisions and learnings into reviewed entries you push to your team's brain repo
+category: productivity
 featured: false
 timeout: 600
 ---
