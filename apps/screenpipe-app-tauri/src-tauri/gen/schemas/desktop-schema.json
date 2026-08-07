@@ -4689,10 +4689,10 @@
           "markdownDescription": "Denies the save command without any pre-configured scope."
         },
         {
-          "description": "Default plugin permissions.\n#### This default permission set includes:\n\n- `allow-main-overlay-visible`\n- `allow-mark-capture-intended`\n- `allow-emit-disk-space-low`\n- `allow-emit-disk-space-recovered`\n- `allow-reset-disk-pressure-notification-latch`\n- `allow-disk-pressure-notification-armed`\n- `allow-handle-disk-space-low`\n- `allow-capture-session-running`\n- `allow-set-low-disk-guard-enabled`\n- `allow-set-notification-master-enabled`\n- `allow-low-disk-guard-enabled`\n- `allow-set-tray-recording-status`\n- `allow-installed-tray-recording-status`\n- `allow-shortcut-reminder-visible`\n- `allow-emit-meeting-overlay-transcript`\n- `allow-emit-agent-stream`\n- `allow-emit-settled-agent-follow-up`\n- `allow-emit-pipe-stream`\n- `allow-arm-capture-loop-silent-fault`\n- `allow-arm-sck-lookup-hang-fault`\n- `allow-screen-is-locked`\n- `allow-set-screen-recording-restart-required`\n- `allow-screen-recording-restart-requested`\n- `allow-recording-health-return-race`\n- `allow-owned-browser-visible`\n- `allow-owned-browser-detach`\n- `allow-inject-db-hard-fault`\n- `allow-db-hard-fault-state`\n- `allow-seed-flags`",
+          "description": "Default plugin permissions.\n#### This default permission set includes:\n\n- `allow-main-overlay-visible`\n- `allow-mark-capture-intended`\n- `allow-emit-disk-space-low`\n- `allow-emit-disk-space-recovered`\n- `allow-reset-disk-pressure-notification-latch`\n- `allow-disk-pressure-notification-armed`\n- `allow-handle-disk-space-low`\n- `allow-capture-session-running`\n- `allow-set-low-disk-guard-enabled`\n- `allow-set-notification-master-enabled`\n- `allow-low-disk-guard-enabled`\n- `allow-set-tray-recording-status`\n- `allow-installed-tray-recording-status`\n- `allow-shortcut-reminder-visible`\n- `allow-emit-meeting-overlay-transcript`\n- `allow-emit-agent-stream`\n- `allow-emit-settled-agent-follow-up`\n- `allow-emit-pipe-stream`\n- `allow-arm-capture-loop-silent-fault`\n- `allow-arm-sck-lookup-hang-fault`\n- `allow-screen-is-locked`\n- `allow-set-screen-recording-restart-required`\n- `allow-screen-recording-restart-requested`\n- `allow-recording-health-return-race`\n- `allow-owned-browser-visible`\n- `allow-owned-browser-detach`\n- `allow-inject-db-hard-fault`\n- `allow-db-hard-fault-state`\n- `allow-seed-flags`\n- `allow-capture-pi-start-error`",
           "type": "string",
           "const": "e2e:default",
-          "markdownDescription": "Default plugin permissions.\n#### This default permission set includes:\n\n- `allow-main-overlay-visible`\n- `allow-mark-capture-intended`\n- `allow-emit-disk-space-low`\n- `allow-emit-disk-space-recovered`\n- `allow-reset-disk-pressure-notification-latch`\n- `allow-disk-pressure-notification-armed`\n- `allow-handle-disk-space-low`\n- `allow-capture-session-running`\n- `allow-set-low-disk-guard-enabled`\n- `allow-set-notification-master-enabled`\n- `allow-low-disk-guard-enabled`\n- `allow-set-tray-recording-status`\n- `allow-installed-tray-recording-status`\n- `allow-shortcut-reminder-visible`\n- `allow-emit-meeting-overlay-transcript`\n- `allow-emit-agent-stream`\n- `allow-emit-settled-agent-follow-up`\n- `allow-emit-pipe-stream`\n- `allow-arm-capture-loop-silent-fault`\n- `allow-arm-sck-lookup-hang-fault`\n- `allow-screen-is-locked`\n- `allow-set-screen-recording-restart-required`\n- `allow-screen-recording-restart-requested`\n- `allow-recording-health-return-race`\n- `allow-owned-browser-visible`\n- `allow-owned-browser-detach`\n- `allow-inject-db-hard-fault`\n- `allow-db-hard-fault-state`\n- `allow-seed-flags`"
+          "markdownDescription": "Default plugin permissions.\n#### This default permission set includes:\n\n- `allow-main-overlay-visible`\n- `allow-mark-capture-intended`\n- `allow-emit-disk-space-low`\n- `allow-emit-disk-space-recovered`\n- `allow-reset-disk-pressure-notification-latch`\n- `allow-disk-pressure-notification-armed`\n- `allow-handle-disk-space-low`\n- `allow-capture-session-running`\n- `allow-set-low-disk-guard-enabled`\n- `allow-set-notification-master-enabled`\n- `allow-low-disk-guard-enabled`\n- `allow-set-tray-recording-status`\n- `allow-installed-tray-recording-status`\n- `allow-shortcut-reminder-visible`\n- `allow-emit-meeting-overlay-transcript`\n- `allow-emit-agent-stream`\n- `allow-emit-settled-agent-follow-up`\n- `allow-emit-pipe-stream`\n- `allow-arm-capture-loop-silent-fault`\n- `allow-arm-sck-lookup-hang-fault`\n- `allow-screen-is-locked`\n- `allow-set-screen-recording-restart-required`\n- `allow-screen-recording-restart-requested`\n- `allow-recording-health-return-race`\n- `allow-owned-browser-visible`\n- `allow-owned-browser-detach`\n- `allow-inject-db-hard-fault`\n- `allow-db-hard-fault-state`\n- `allow-seed-flags`\n- `allow-capture-pi-start-error`"
         },
         {
           "description": "Enables the arm_capture_loop_silent_fault command without any pre-configured scope.",
@@ -4705,6 +4705,12 @@
           "type": "string",
           "const": "e2e:allow-arm-sck-lookup-hang-fault",
           "markdownDescription": "Enables the arm_sck_lookup_hang_fault command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the capture_pi_start_error command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-capture-pi-start-error",
+          "markdownDescription": "Enables the capture_pi_start_error command without any pre-configured scope."
         },
         {
           "description": "Enables the capture_session_running command without any pre-configured scope.",
@@ -4879,6 +4885,12 @@
           "type": "string",
           "const": "e2e:deny-arm-sck-lookup-hang-fault",
           "markdownDescription": "Denies the arm_sck_lookup_hang_fault command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the capture_pi_start_error command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-capture-pi-start-error",
+          "markdownDescription": "Denies the capture_pi_start_error command without any pre-configured scope."
         },
         {
           "description": "Denies the capture_session_running command without any pre-configured scope.",

@@ -12,6 +12,7 @@ import type {
 import type { QueuedDisplayPayload } from "@/lib/chat/types";
 import type { Suggestion } from "@/lib/hooks/use-auto-suggestions";
 import type { ExtractedDoc } from "@/lib/pi/extract-document";
+import type { ComposerHandle } from "@/components/chat/standalone/composer-editor";
 import type { AIPreset, PiQueuedPrompt } from "@/lib/utils/tauri";
 
 type ActiveChatFilters = {
@@ -73,7 +74,7 @@ interface ComposerQueueProps {
 
 export interface ComposerInputProps {
   sectionRef: React.RefObject<HTMLDivElement>;
-  inputRef: React.RefObject<HTMLTextAreaElement>;
+  inputRef: React.MutableRefObject<ComposerHandle | null>;
   value: string;
   disabledReason: string | null;
   canChat: boolean;
@@ -86,10 +87,10 @@ export interface ComposerInputProps {
   chipPrefixWidth: number;
   chipScrollTop: number;
   onClearConnectionChip: () => void;
-  onChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
+  onChange: (value: string) => void;
   onCompositionStart: () => void;
   onCompositionEnd: () => void;
-  onTextareaScroll: (event: React.UIEvent<HTMLTextAreaElement>) => void;
+  onTextareaScroll: () => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onSubmit: (event: React.FormEvent) => void;
   onPaste: (event: React.ClipboardEvent) => void;
