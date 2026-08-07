@@ -100,6 +100,12 @@ async function composer(): Promise<WebdriverIO.Element> {
 async function typeIntoComposer(text: string): Promise<void> {
   const el = await composer();
   await el.click();
+  // A click lands the caret wherever it hit; force it to the end so the
+  // appended text extends the existing draft instead of splitting it.
+  await browser.execute((node: HTMLTextAreaElement) => {
+    node.focus();
+    node.setSelectionRange(node.value.length, node.value.length);
+  }, el as unknown as HTMLTextAreaElement);
   await browser.keys(text.split(""));
 }
 
