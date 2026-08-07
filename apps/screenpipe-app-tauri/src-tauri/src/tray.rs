@@ -164,8 +164,14 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
 fn plan_display_name(plan: Option<&str>) -> &'static str {
     let enterprise_build = cfg!(feature = "enterprise-build");
     match plan.unwrap_or("none").to_ascii_lowercase().as_str() {
-        "standard" => "Basic",
-        "pro" => "Business",
+        "standard" | "basic" => "Basic",
+        "pro" | "business" => "Business",
+        // Business Max/Ultra were added to the web and TS plan maps but never
+        // here, so they fell through to `_ => "Free"`: a paying $100/mo Max or
+        // $200/mo Ultra account was labelled "Free plan" in the tray and shown
+        // an "Upgrade to Business" item for a plan it already exceeds.
+        "pro_max" | "business_max" => "Business Max",
+        "pro_ultra" | "business_ultra" => "Business Ultra",
         "team" => {
             if enterprise_build {
                 "Team"
@@ -2017,5 +2023,22 @@ mod tests {
                 ..hd.clone()
             })
         );
+    }
+
+    /// Business Max and Ultra were absent from `plan_display_name`, so a
+    /// paying account fell through to the `_` arm and the tray told them they
+    /// were on "Free plan".
+    #[test]
+    fn plan_display_name_covers_every_paid_tier() {
+        assert_eq!(plan_display_name(Some("standard")), "Basic");
+        assert_eq!(plan_display_name(Some("pro")), "Business");
+        assert_eq!(plan_display_name(Some("pro_max")), "Business Max");
+        assert_eq!(plan_display_name(Some("pro_ultra")), "Business Ultra");
+        assert_eq!(plan_display_name(Some("business_max")), "Business Max");
+        assert_eq!(plan_display_name(Some("business_ultra")), "Business Ultra");
+        assert_eq!(plan_display_name(Some("PRO_MAX")), "Business Max");
+        assert_eq!(plan_display_name(Some("lifetime")), "Lifetime");
+        assert_eq!(plan_display_name(None), "Free");
+        assert_eq!(plan_display_name(Some("something_new")), "Free");
     }
 }
