@@ -46,6 +46,28 @@
 //!   more `secret` boxes, and every model-reachable runaway came through a
 //!   tile-only box. Enforced structurally: this runs inside the adapter on the
 //!   whole-frame pass, before tile detections are merged in.
+//!
+//! ## Known limitation: this walks DOWNWARD only
+//!
+//! If the detector fires on a *later* line of a wrapped token, the lines above
+//! it are still left visible. Measured on a real captured frame: a wrapped
+//! OAuth URL was detected on its third line, so the extension covered that line
+//! and below, while `&state=<token>` on the line above stayed legible.
+//!
+//! This is an improvement, not a fix, for that shape — coverage on that frame
+//! went from 1 line to 2 — and the honest summary is "the leak is smaller",
+//! not "the leak is closed".
+//!
+//! Extending upward is not symmetric and must not be bolted on without the
+//! same adversarial testing the downward walk got. The signal that makes the
+//! downward walk safe is the *short tail row*, and a wrapped token has no
+//! equivalent marker at its head: every line above is full width too. The
+//! plausible head signal is "the first line starts further right, because it
+//! follows a key like `\"apiKey\": \"`", which is a different rule with a
+//! different failure mode against, say, an indented block of hashes.
+//!
+//! A corpus audit is provided for exactly this kind of question — see
+//! `examples/rfdetr_continuation_audit.rs`.
 
 use crate::image::ImageRegion;
 
