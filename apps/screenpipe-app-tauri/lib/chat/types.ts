@@ -17,9 +17,23 @@ export type ChatEntryCard =
 
 export type ChatResponsePosition = "initial" | "followup";
 
+/**
+ * Who wrote the prompt that was sent.
+ *
+ * The experiment's thesis is that a prefilled, editable starter teaches people
+ * to phrase their own questions. A click-through rate cannot show that — only
+ * the split between sending a starter untouched and reworking it can, so this
+ * is recorded as its own dimension. Content-free: never carries prompt text.
+ */
+export type ChatComposerAuthorship =
+  | "user_authored"
+  | "template_unmodified"
+  | "template_edited";
+
 export type ChatSendOptions = {
   entrySource?: ChatEntrySource;
   entryCard?: ChatEntryCard;
+  composerAuthorship?: ChatComposerAuthorship;
 };
 
 // Per-message attachment metadata. The extracted text lives inside the message

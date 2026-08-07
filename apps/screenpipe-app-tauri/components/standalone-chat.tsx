@@ -235,10 +235,14 @@ export function StandaloneChat({
     setChipScrollTop,
     clearConnectionChip,
   } = useChatComposerShell();
-  const pendingContextualHomeSuggestionRef = useRef(false);
+  // Holds the exact text a contextual starter put in the composer, so the send
+  // can tell "sent the starter as-is" from "reworked it into their own
+  // question". The second is the outcome the experiment is actually testing —
+  // a click alone proves neither. Cleared once the composer is emptied.
+  const pendingContextualHomeSuggestionRef = useRef<string | null>(null);
   const fillContextualHomeSuggestion = useCallback(
     (text: string) => {
-      pendingContextualHomeSuggestionRef.current = true;
+      pendingContextualHomeSuggestionRef.current = text;
       setInput(text);
       requestAnimationFrame(() => {
         inputRef.current?.focus();
@@ -248,7 +252,7 @@ export function StandaloneChat({
     [inputRef, setInput],
   );
   useEffect(() => {
-    if (!input.trim()) pendingContextualHomeSuggestionRef.current = false;
+    if (!input.trim()) pendingContextualHomeSuggestionRef.current = null;
   }, [input]);
   useTryInChatEvent({
     startNewRef: tryInChatStartNewRef,
@@ -1170,20 +1174,21 @@ export function StandaloneChat({
 
   const sendComposerMessage = useCallback(
     (message: string, displayLabel?: string) => {
-      const cameFromContextualHomeSuggestion =
-        pendingContextualHomeSuggestionRef.current;
-      pendingContextualHomeSuggestionRef.current = false;
-      return sendMessage(
-        message,
-        displayLabel,
-        undefined,
-        cameFromContextualHomeSuggestion
-          ? {
-              entrySource: "home_card",
-              entryCard: "contextual_suggestion",
-            }
-          : undefined,
-      );
+      const filledSuggestion = pendingContextualHomeSuggestionRef.current;
+      pendingContextualHomeSuggestionRef.current = null;
+      if (filledSuggestion === null) {
+        return sendMessage(message, displayLabel, undefined, {
+          composerAuthorship: "user_authored",
+        });
+      }
+      return sendMessage(message, displayLabel, undefined, {
+        entrySource: "home_card",
+        entryCard: "contextual_suggestion",
+        composerAuthorship:
+          message.trim() === filledSuggestion.trim()
+            ? "template_unmodified"
+            : "template_edited",
+      });
     },
     [sendMessage],
   );
@@ -2025,10 +2030,13 @@ export function StandaloneChat({
         }}
         summaryCardsProps={{
           onSendMessage: (message, displayLabel, entrySource, entryCard) => {
-            pendingContextualHomeSuggestionRef.current = false;
+            pendingContextualHomeSuggestionRef.current = null;
+            // Control cards send their prompt on click without ever showing it,
+            // so the user authored nothing.
             return sendMessage(message, displayLabel, undefined, {
               entrySource,
               entryCard,
+              composerAuthorship: "template_unmodified",
             });
           },
           customTemplates,
