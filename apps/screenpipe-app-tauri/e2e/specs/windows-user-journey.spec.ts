@@ -468,10 +468,19 @@ describe("Windows user journey", function () {
 
     await browser.waitUntil(
       async () => {
-        const sectionText = (await screenSection.getText()).toLowerCase();
+        // textContent rather than getText(): the screen-share privacy card sits
+        // at the bottom of a scrollable section, so rendered-text reads can miss
+        // it depending on scroll position.
+        const sectionText = (
+          (await browser.execute(
+            () =>
+              document.querySelector('[data-testid="section-settings-screen"]')?.textContent ?? "",
+          )) as string
+        ).toLowerCase();
         return (
           sectionText.includes("screen context capture") &&
           sectionText.includes("screenshot images") &&
+          sectionText.includes("hide screenpipe from screen capture") &&
           !sectionText.includes("audio recording")
         );
       },
@@ -492,9 +501,13 @@ describe("Windows user journey", function () {
 
     const audioSection = await $('[data-testid="section-settings-audio"]');
     await audioSection.waitForDisplayed({ timeout: t(20_000) });
-    const audioText = (await audioSection.getText()).toLowerCase();
+    const audioText = (
+      (await browser.execute(
+        () => document.querySelector('[data-testid="section-settings-audio"]')?.textContent ?? "",
+      )) as string
+    ).toLowerCase();
     expect(audioText).toContain("audio recording");
-    expect(audioText).toContain("hide screenpipe from screen capture");
+    expect(audioText).not.toContain("hide screenpipe from screen capture");
     expect(audioText).not.toContain("screen context capture");
 
     const audioScreenshot = await saveScreenshot("windows-user-journey-audio-settings");

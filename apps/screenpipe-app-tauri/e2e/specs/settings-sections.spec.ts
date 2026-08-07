@@ -112,7 +112,7 @@ describe('Settings sections', () => {
     expect(existsSync(filepath)).toBe(true);
   });
 
-  it('keeps screen capture controls in their own settings destination', async () => {
+  it('keeps screen capture controls in their own settings destination and applies screen-share privacy live', async () => {
     const navRecording = await $('[data-testid="settings-nav-recording"]');
     await navRecording.waitForExist({ timeout: 8_000 });
     await navRecording.click();
@@ -120,33 +120,19 @@ describe('Settings sections', () => {
 
     const section = await $('[data-testid="section-settings-screen"]');
     await section.waitForExist({ timeout: 8_000 });
-    const sectionText = (await section.getText()).toLowerCase();
-    expect(sectionText).toContain('screen context capture');
-    expect(sectionText).toContain('screenshot images');
-    expect(sectionText).not.toContain('audio recording');
-    expect(sectionText).not.toContain('live meeting notes');
-
-    const filepath = await saveScreenshot('settings-screen-capture');
-    expect(existsSync(filepath)).toBe(true);
-  });
-
-  it('keeps audio and meeting notes separate and applies screen-share privacy live', async () => {
-    const navAudio = await $('[data-testid="settings-nav-audio"]');
-    await navAudio.waitForExist({ timeout: 8_000 });
-    expect((await navAudio.getText()).toLowerCase()).toContain('audio & meetings');
-    await navAudio.click();
-
-    const section = await $('[data-testid="section-settings-audio"]');
-    await section.waitForExist({ timeout: 8_000 });
     const sectionText = (
       (await browser.execute(
-        () => document.querySelector('[data-testid="section-settings-audio"]')?.textContent ?? '',
+        () => document.querySelector('[data-testid="section-settings-screen"]')?.textContent ?? '',
       )) as string
     ).toLowerCase();
-    expect(sectionText).toContain('audio recording');
+    expect(sectionText).toContain('screen context capture');
+    expect(sectionText).toContain('screenshot images');
+    // Whether screenpipe's own windows appear in other apps' screenshots is a
+    // screen concern, so a user who cannot screenshot the app finds it here
+    // rather than under audio.
     expect(sectionText).toContain('hide screenpipe from screen capture');
-    expect(sectionText).not.toContain('screen context capture');
-    expect(sectionText).not.toContain('screenshot images');
+    expect(sectionText).not.toContain('audio recording');
+    expect(sectionText).not.toContain('live meeting notes');
 
     const toggle = await $('[data-testid="hide-app-in-screen-share-toggle"]');
     await toggle.waitForExist({ timeout: 5_000 });
@@ -202,7 +188,7 @@ describe('Settings sections', () => {
       );
       expect(await toggle.getAttribute('data-state')).toBe('checked');
 
-      const filepath = await saveScreenshot('settings-audio-meetings-privacy');
+      const filepath = await saveScreenshot('settings-screen-capture');
       expect(existsSync(filepath)).toBe(true);
     } finally {
       const status = await invokeOrThrow<{ requestedHidden: boolean }>(
@@ -212,6 +198,28 @@ describe('Settings sections', () => {
         await toggle.click();
       }
     }
+  });
+
+  it('keeps audio and meeting notes separate', async () => {
+    const navAudio = await $('[data-testid="settings-nav-audio"]');
+    await navAudio.waitForExist({ timeout: 8_000 });
+    expect((await navAudio.getText()).toLowerCase()).toContain('audio & meetings');
+    await navAudio.click();
+
+    const section = await $('[data-testid="section-settings-audio"]');
+    await section.waitForExist({ timeout: 8_000 });
+    const sectionText = (
+      (await browser.execute(
+        () => document.querySelector('[data-testid="section-settings-audio"]')?.textContent ?? '',
+      )) as string
+    ).toLowerCase();
+    expect(sectionText).toContain('audio recording');
+    expect(sectionText).not.toContain('screen context capture');
+    expect(sectionText).not.toContain('screenshot images');
+    expect(sectionText).not.toContain('hide screenpipe from screen capture');
+
+    const filepath = await saveScreenshot('settings-audio-meetings');
+    expect(existsSync(filepath)).toBe(true);
   });
 
   it('navigates to AI Presets and renders model/preset controls', async () => {

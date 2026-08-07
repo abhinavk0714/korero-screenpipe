@@ -314,11 +314,11 @@ export function DisplaySection() {
                 <div>
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     Show Overlay in Screen Recording
-                    <HelpTooltip text="When enabled, the screenpipe overlay can appear in OBS or Screen Studio. The broader 'Hide screenpipe from screen capture' preference in Audio & meetings takes priority." />
+                    <HelpTooltip text="When enabled, the screenpipe overlay can appear in OBS or Screen Studio. The broader 'Hide screenpipe from screen capture' preference in Screen takes priority." />
                   </h3>
                   <p className="text-xs text-muted-foreground">
                     {(settings?.hideAppInScreenShare ?? true)
-                      ? "Global screen-share privacy is on in Audio & meetings"
+                      ? "Turn off 'Hide screenpipe from screen capture' in Screen first"
                       : "Let OBS or Screen Studio capture the overlay"}
                   </p>
                 </div>

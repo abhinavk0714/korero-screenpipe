@@ -39,7 +39,6 @@ export const audioSearchIndex: SettingsField[] = [
   { label: "Live meeting notes", keywords: ["captions", "meeting", "live"], conditional: true },
   { label: "Append typed text to note", keywords: ["note", "append"], conditional: true },
   { label: "Automatic meeting detection", keywords: ["zoom", "teams", "meet"], conditional: true },
-  { label: "Hide screenpipe from screen capture", keywords: ["screen share", "zoom", "screenshot", "privacy"] },
   { label: "Auto-select audio devices", keywords: ["devices", "bluetooth"], conditional: true },
   { label: "Languages", keywords: ["transcript language", "language"], conditional: true },
   { label: "Custom Vocabulary", keywords: ["vocabulary", "names", "jargon", "replacement"], conditional: true },
@@ -61,6 +60,21 @@ export const screenSearchIndex: SettingsField[] = [
   // conditional: hidden when screen recording is off (same gate as Recording quality).
   { label: "Capture frequency", keywords: ["screenshot", "interval", "idle", "cadence", "every", "minimum"], conditional: true },
   { label: "HD recording for meetings", keywords: ["hd", "meeting"] },
+  {
+    label: "Hide screenpipe from screen capture",
+    keywords: [
+      "screenshot",
+      "screen share",
+      "screen recording",
+      "black",
+      "blank",
+      "missing",
+      "invisible",
+      "zoom",
+      "obs",
+      "privacy",
+    ],
+  },
   { label: "Chinese mirror", keywords: ["china", "mirror"] },
 ];
 
@@ -2789,32 +2803,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
       <div className="space-y-2 pt-2">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Audio &amp; meetings</h2>
 
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center space-x-2.5">
-                <Shield className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <div className="min-w-0">
-                  <h3 className="text-sm font-medium text-foreground">
-                    Hide screenpipe from screen capture
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    You&apos;ll still see screenpipe, but it stays hidden from screenshots and anyone watching your shared screen.
-                  </p>
-                </div>
-              </div>
-              <Switch
-                id="hideAppInScreenShare"
-                data-testid="hide-app-in-screen-share-toggle"
-                checked={settings.hideAppInScreenShare ?? true}
-                onCheckedChange={(checked) => {
-                  void handleScreenSharePrivacyChange(checked);
-                }}
-              />
-            </div>
-          </CardContent>
-        </Card>
-
         <LockedSetting settingKey="audio_recording">
         <div className="space-y-2">
         {/* Audio Recording Toggle */}
@@ -4180,6 +4168,38 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
       </div>
       </LockedSetting>
 
+      {/* Privacy. Deliberately outside the screen_recording LockedSetting: this
+          controls whether screenpipe's own windows appear in other apps'
+          captures, which is independent of whether screenpipe records. */}
+      <div className="space-y-2 pt-2">
+        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Privacy</h2>
+
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center space-x-2.5">
+                <Shield className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0">
+                  <h3 className="text-sm font-medium text-foreground">
+                    Hide screenpipe from screen capture
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    On by default. screenpipe stays visible to you, but is left out of screenshots, screen recordings, and shared screens. That includes screenshots you take of screenpipe yourself, so turn this off if you want to capture the app.
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="hideAppInScreenShare"
+                data-testid="hide-app-in-screen-share-toggle"
+                checked={settings.hideAppInScreenShare ?? true}
+                onCheckedChange={(checked) => {
+                  void handleScreenSharePrivacyChange(checked);
+                }}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
 
       {/* System */}
       <div className="space-y-2 pt-2">
