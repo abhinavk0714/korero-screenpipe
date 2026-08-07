@@ -150,6 +150,19 @@ pub struct RfdetrConfig {
     /// seams. A confidence floor on tile-only detections: it buys back the
     /// harness stray rise but drops real core recall to 68.8%.
     pub tiled_inference: bool,
+    /// Grow a detected `Secret` box over the wrapped continuation lines of the
+    /// same token.
+    ///
+    /// The detector emits one box per rendered line, so a credential that soft
+    /// wraps gets only its first line blacked while the rest stays legible —
+    /// and the pipeline reports success. See
+    /// [`crate::image::secret_continuation`] for the guards that stop this from
+    /// swallowing columns of same-shaped tokens (`sha256:` digests, PEM bodies,
+    /// lockfile hashes).
+    ///
+    /// Off only for measurement: the audit example runs a corpus both ways to
+    /// show the added area is confined to genuinely wrapped secrets.
+    pub extend_wrapped_secrets: bool,
 }
 
 impl Default for RfdetrConfig {
@@ -164,6 +177,7 @@ impl Default for RfdetrConfig {
             // applies a second floor.
             conf_threshold: 0.50,
             tiled_inference: true,
+            extend_wrapped_secrets: true,
         }
     }
 }
@@ -472,6 +486,9 @@ mod imp {
             img: &image::RgbImage,
             regions: Vec<ImageRegion>,
         ) -> Vec<ImageRegion> {
+            if !self.cfg.extend_wrapped_secrets {
+                return regions;
+            }
             let (out, stats) = crate::image::secret_continuation::extend_secret_boxes(
                 img,
                 &regions,
@@ -838,6 +855,7 @@ mod tests {
             input_size: 0,
             conf_threshold: 0.3,
             tiled_inference: true,
+            extend_wrapped_secrets: true,
         };
         let res = RfdetrRedactor::load(cfg);
         assert!(matches!(res, Err(RedactError::Unavailable(_))));
@@ -894,6 +912,7 @@ mod tests {
                 input_size: 0,
                 conf_threshold: 0.3,
                 tiled_inference: true,
+                extend_wrapped_secrets: true,
             };
             // This must return Err, not panic.
             let res = RfdetrRedactor::load(cfg);
@@ -923,6 +942,7 @@ mod tests {
             input_size: 0,
             conf_threshold: 0.3,
             tiled_inference: true,
+            extend_wrapped_secrets: true,
         };
         // Wrong-checksum file → ensure_model_present tries to
         // download. Network may or may not be available in CI, so
