@@ -51,7 +51,24 @@ Timestamps in the run header end in `Z` and are UTC. Send them to the API unchan
 
 Search the API only. At most 5 bounded searches with `limit=10`: decisions made, problems diagnosed and fixed, things learned about a customer or the market, processes that changed, and commitments to other teams.
 
-Skip anything that is routine execution, private, or already obviously in a tracked system. Absence of evidence is never a finding. If the day contains nothing durable, write nothing, notify nothing, and stop — that is a good outcome.
+### The bar for an entry
+
+Keep it only if a teammate reading it in three months would avoid redoing work, avoid a mistake, or understand why something is the way it is. Concretely:
+
+- **Keep:** a decision and its reason, a root cause, a corrected number or belief, a process or policy that changed, something learned about a customer, a constraint discovered the hard way.
+- **Drop:** work still in flight, a task list, a status update, routine execution, anything whose only content is "we were looking at X", and anything you cannot back with a durable pointer.
+
+An entry that would need to be rewritten tomorrow is a task, not knowledge. Absence of evidence is never a finding. If the day contains nothing durable, write nothing, notify nothing, and stop — that is a good outcome, and the common one.
+
+### Do not repeat what is already recorded
+
+Before drafting, read what already exists, and drop any candidate that is already covered:
+
+- the repository's existing entries in `dir`, read-only, through whichever transport Step 3 resolves (`GET .../contents/DIR`, or `ls` the clone) — check the most recent 30 filenames and read any whose slug is close to a candidate;
+- previous drafts still in `./output/`;
+- `./pushed.md`, the ledger of what previous runs already pushed.
+
+If new evidence materially changes an existing entry, write a new dated entry that says what changed and references the earlier filename. Never restate an entry to add a detail.
 
 ## Step 2 — draft, at most 3 entries
 
@@ -72,7 +89,7 @@ confidence: high | medium | low
 ## Next step
 ```
 
-Evidence means app, thread, meeting, or document plus timing — enough for a teammate to verify. Quote sparingly. Mark every inference as an inference and keep `confidence` honest.
+Every entry needs at least one durable pointer a teammate can open: a `screenpipe://frame/<id>` link for a screen moment, a meeting id, or a thread or document name plus timing. Use ids that came back in your own search results and never invent one. Quote sparingly. Mark every inference as an inference and keep `confidence` honest — `low` is a fine answer.
 
 ### Redaction — this is a shared repository
 
@@ -88,13 +105,20 @@ An explicitly configured `local_clone` always wins — it is a deliberate choice
 3. **`gh` CLI.** `gh auth status` succeeds. Same GitHub API, different transport: `gh api --method PUT repos/OWNER/REPO/contents/DIR/FILE.md -f message=... -f content=... -f branch=...`.
 4. **Nothing available.** Keep the drafts and ask (Step 4) with the exact next step: connect GitHub in Settings → Connections → GitHub → "Connect with GitHub" (`screenpipe://settings?section=connections`), or authenticate the CLI with `gh auth login`.
 
-Build request bodies with bun so base64 is single-line and JSON escaping is safe; do not hand-roll shell quoting. On `409`/`422` for an existing path, `GET` that path's `sha` once and retry with it. If `mode: pr`, create a branch ref from the base branch, write there, then open a pull request. Two failed attempts on one transport means stop and report — never fall through to a different repository, branch, or account.
+Build request bodies with bun so base64 is single-line and JSON escaping is safe; do not hand-roll shell quoting.
+
+**Entries are append-only.** If the target path already exists, do not overwrite it and do not retry with its `sha`: compare content first. Identical content means this entry was already pushed, so report it as already recorded and commit nothing. Different content means write to the next free `-2`, `-3` suffix instead. The only file you may replace is one you created earlier in this same run.
+
+If `mode: pr`, put the whole batch on one branch named `brain/<YYYY-MM-DD>-<slug of the first entry>` created from `branch`, then open a single pull request. If that branch already exists, add a `-2` suffix rather than pushing into it.
+
+Two failed attempts on one transport means stop and report — never fall through to a different repository, branch, or account.
 
 ## Step 4 — ask before pushing
 
 Never push in the same run that drafted. Send one notification with the draft subjects and these actions:
 
-- `push it` — `type: "pipe"`, `pipe: "company-brain"`, `primary: true`, `context: {"approve_files": ["<absolute draft paths>"], "transport": "<resolved transport>"}`
+- `push it` — `type: "pipe"`, `pipe: "company-brain"`, `primary: true`, and a context that pins exactly what the user is approving:
+  `context: {"approve_files": [{"path": "<absolute draft path>", "sha256": "<first 12 hex chars>", "subject": "<entry subject>"}], "transport": "<resolved transport>"}`
 - `review first` — a `deeplink` action to `screenpipe://view?path=<url-encoded absolute draft path>` so the draft opens in-app
 - `skip` — `dismiss`
 
@@ -104,6 +128,10 @@ Use `priority: "normal"`. If setup is missing, say so plainly in the body instea
 
 When the run context contains `approve_files`, skip Steps 1, 2 and 4 entirely. Push exactly those files, unmodified, to the configured repo, branch, and directory — one commit per entry with the message `brain: <subject>`. Do not re-draft, re-search, add entries, or edit content on an approval run.
 
+**Push what was actually reviewed.** For each approved file, recompute `sha256` and compare with the digest in the context. A mismatch means the draft changed after the user saw it, so do not push that entry: keep it and notify that it needs a fresh look. A missing file means an earlier run already cleaned it up, so report that rather than reconstructing it. Older contexts carry plain path strings with no digest; push those but say in the receipt that the content was not digest-verified.
+
+Approving twice is not two pushes. A notification stays clickable in the bell, so before committing, check whether the entry is already in the repo (the append-only rule in Step 3) and report it as already recorded instead of creating a second copy.
+
 ### Confirm the push landed remotely
 
 A local commit is not a push. Confirm on the remote side before claiming anything:
@@ -111,7 +139,7 @@ A local commit is not a push. Confirm on the remote side before claiming anythin
 - **Local clone:** `git -C <path> rev-parse HEAD` must equal `git -C <path> ls-remote origin <branch>`, and `git -C <path> status -sb` must show 0 ahead. If the branch is still ahead, the push did not happen — report that, do not report a commit sha as success.
 - **GitHub API transports:** use the `commit.sha` and `content.html_url` the provider returned in its response body.
 
-Then notify a receipt with the confirmed sha and, when one exists, the file URL. If a push fails, say which entry failed, the exact provider or git error, and the one action that fixes it. Never turn a local commit, an exit code, or your own summary into a claimed push.
+Then notify a receipt with the confirmed sha and, when one exists, the file URL. Append one line per pushed entry to `./pushed.md` as `YYYY-MM-DD | filename | subject | sha` so later runs do not redraft it, and delete the drafts that were pushed from `./output/`. Append only when that filename is not already in the ledger — an entry that was already recorded stays one line, not two. Keep that ledger out of `./memory.md`, which is for lessons only. If a push fails, say which entry failed, the exact provider or git error, and the one action that fixes it. Never turn a local commit, an exit code, or your own summary into a claimed push.
 
 ## Never
 

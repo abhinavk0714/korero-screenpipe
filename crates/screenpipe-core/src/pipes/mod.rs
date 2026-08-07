@@ -8827,6 +8827,17 @@ mod tests {
         assert!(body.contains("A local commit is not a push"));
         assert!(body.contains("ls-remote"));
 
+        // Entries accumulate, so a repeat run or a second approval click must
+        // never overwrite or duplicate what is already in the repository.
+        assert!(body.contains("Entries are append-only"));
+        assert!(body.contains("Do not repeat what is already recorded"));
+        assert!(body.contains("Approving twice is not two pushes"));
+        assert!(body.contains("pushed.md"));
+
+        // The approval click must push the bytes the user actually reviewed.
+        assert!(body.contains("sha256"));
+        assert!(body.contains("Push what was actually reviewed"));
+
         assert!(body.contains("Redaction — this is a shared repository"));
         assert!(body.contains("Read the screenpipe skill first."));
     }
