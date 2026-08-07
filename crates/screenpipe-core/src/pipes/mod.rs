@@ -93,6 +93,10 @@ const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
         "accounting-follow-through",
         include_str!("../../assets/pipes/accounting-follow-through/pipe.md"),
     ),
+    (
+        "company-brain",
+        include_str!("../../assets/pipes/company-brain/pipe.md"),
+    ),
 ];
 
 /// Explicitly install one trusted Pipe bundled with the app.
@@ -8782,6 +8786,41 @@ mod tests {
         assert!(!body.contains("buildMeetingSummarizeInstructions"));
         assert!(body.contains("screenpipe API search is required"));
         assert!(body.contains("never run recursive `find` or `grep`"));
+    }
+
+    /// The company brain Pipe pushes to a *shared* repository. Its safety
+    /// contract lives entirely in the prompt, so assert the parts that must
+    /// never be lost by a careless prompt edit.
+    #[test]
+    fn bundled_company_brain_ships_its_safety_contract() {
+        let bundled = BUNDLED_BUILTIN_PIPES
+            .iter()
+            .find_map(|(name, content)| (*name == "company-brain").then_some(*content))
+            .expect("company-brain is bundled");
+        let (config, body) = parse_frontmatter(bundled).expect("bundled prompt should parse");
+
+        // Ships off: pushing to a team repo is opt-in, never a side effect of
+        // installing the app.
+        assert!(!config.enabled);
+        assert_eq!(config.timeout, Some(600));
+
+        // Deliberately declares no required connection: a team using the `gh`
+        // CLI or an existing clone must not be gated behind GitHub OAuth.
+        assert!(config.connections.is_empty());
+
+        // Human approval, transport ladder, and redaction are the contract.
+        assert!(body.contains("approve_files"));
+        assert!(body.contains("Never push in the same run that drafted"));
+        assert!(body.contains("gh auth status"));
+        assert!(body.contains("gh auth login"));
+        assert!(body.contains("/connections/github/proxy/repos/"));
+        assert!(body.contains("local_clone"));
+        assert!(body.contains("Never force-push"));
+        assert!(body.contains("Redaction — this is a shared repository"));
+        assert!(body.contains("Read the screenpipe skill first."));
+
+        // Fresh installs must already be in migrated form.
+        assert!(migrate_builtin_pipe_text("company-brain", bundled).is_none());
     }
 
     #[test]
