@@ -102,10 +102,19 @@ sanitize_json_fallback() {
     printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9._:-' '_'
 }
 
+telemetry_disabled() {
+    for value in "${SCREENPIPE_DISABLE_TELEMETRY:-}" "${SCREENPIPE_DISABLE_ANALYTICS:-}" "${DO_NOT_TRACK:-}"; do
+        case "$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) return 0 ;;
+        esac
+    done
+    return 1
+}
+
 build_posthog_payload() {
     if command -v node >/dev/null 2>&1; then
         SCREENPIPE_POSTHOG_OS="$OS" SCREENPIPE_POSTHOG_ARCH="$(uname -m)" node <<'NODE'
-const { hostname } = require("node:os");
+const { randomUUID } = require("node:crypto");
 
 function firstEnv(names) {
   for (const name of names) {
@@ -152,7 +161,7 @@ const supportContext = supportTelemetryContext();
 const properties = {
   distinct_id:
     firstEnv(["SCREENPIPE_ANALYTICS_ID", "SCREENPIPE_SUPPORT_ID", "SCREENPIPE_TELEMETRY_ID"]) ||
-    hostname(),
+    `install-${randomUUID()}`,
   os: process.env.SCREENPIPE_POSTHOG_OS || "",
   arch: process.env.SCREENPIPE_POSTHOG_ARCH || "",
   ...supportContext,
@@ -174,10 +183,13 @@ NODE
     fi
 
     # Minimal fallback for direct shell runs where Node is unavailable.
-    printf '%s' "{\"api_key\":\"phc_z7FZXE8vmXtdTQ78LMy3j1BQWW4zP6PGDUP46rgcdnb\",\"event\":\"cli_install_npm\",\"properties\":{\"distinct_id\":\"$(sanitize_json_fallback "$(hostname)")\",\"os\":\"$(sanitize_json_fallback "$OS")\",\"arch\":\"$(sanitize_json_fallback "$(uname -m)")\"}}}"
+    printf '%s' "{\"api_key\":\"phc_z7FZXE8vmXtdTQ78LMy3j1BQWW4zP6PGDUP46rgcdnb\",\"event\":\"cli_install_npm\",\"properties\":{\"distinct_id\":\"install-$(sanitize_json_fallback "$$-$RANDOM-$RANDOM")\",\"os\":\"$(sanitize_json_fallback "$OS")\",\"arch\":\"$(sanitize_json_fallback "$(uname -m)")\"}}}"
 }
 
-POSTHOG_PAYLOAD=$(build_posthog_payload 2>/dev/null || true)
+POSTHOG_PAYLOAD=""
+if ! telemetry_disabled; then
+    POSTHOG_PAYLOAD=$(build_posthog_payload 2>/dev/null || true)
+fi
 
 # PostHog install tracking (non-blocking)
 if [ -n "$POSTHOG_PAYLOAD" ]; then

@@ -303,6 +303,27 @@ pub fn is_telemetry_disabled_by_env() -> bool {
     screenpipe_engine::analytics::telemetry_disabled_by_env()
 }
 
+/// Update the in-process diagnostics gates. This is intentionally separate
+/// from remote support logs: changing analytics consent must never grant
+/// support access to local logs.
+#[derive(Debug, Clone, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsPolicyInput {
+    pub crash_reports: bool,
+    pub usage_analytics: bool,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_diagnostics_policy(policy: DiagnosticsPolicyInput) {
+    screenpipe_engine::analytics::set_diagnostics_policy(
+        screenpipe_engine::analytics::DiagnosticsPolicy {
+            crash_reports: policy.crash_reports,
+            usage_analytics: policy.usage_analytics,
+        },
+    );
+}
+
 /// Return the macOS bundle identifier of the running app
 /// (e.g. `screenpi.pe`, `screenpi.pe.beta`, `screenpi.pe.dev`,
 /// `screenpi.pe.enterprise`). The onboarding stuck-screen surfaces this so

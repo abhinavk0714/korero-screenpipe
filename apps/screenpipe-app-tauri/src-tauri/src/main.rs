@@ -535,13 +535,19 @@ async fn main() {
         .map(|enabled| !enabled)
         .unwrap_or(false)
         || screenpipe_engine::analytics::telemetry_disabled_by_env();
+    screenpipe_engine::analytics::set_diagnostics_policy(
+        screenpipe_engine::analytics::DiagnosticsPolicy::from_legacy_enabled(!telemetry_disabled),
+    );
     // The webview gets this same decision through the
     // `is_telemetry_disabled_by_env` command (see commands.rs); it cannot read
     // the process env itself.
 
     let app_version = env!("CARGO_PKG_VERSION");
-    let sentry_guard = if !telemetry_disabled {
-        Some(sentry::init((
+    // Initialize the client even while diagnostics are off so a later settings
+    // change can enable crash reporting without relaunching the desktop shell.
+    // The shared before_send policy is the network gate and returns None while
+    // crash reporting is disabled.
+    let sentry_guard = Some(sentry::init((
             "https://da4edafe2c8e5e8682505945695ecad7@o4505591122886656.ingest.us.sentry.io/4510761355116544",
             sentry::ClientOptions {
                 release: Some(format!("screenpipe-app@{}", app_version).into()),
@@ -632,14 +638,11 @@ async fn main() {
                             *v = strip_user_paths(v);
                         }
                     }
-                    Some(event)
+                    screenpipe_engine::analytics::is_crash_reporting_enabled().then_some(event)
                 })),
                 ..Default::default()
             },
-        )))
-    } else {
-        None
-    };
+        )));
 
     // Install a panic hook that logs to stderr + Sentry BEFORE the default hook runs.
     // This is critical because panics inside `tao::send_event` (called from Obj-C)
@@ -981,7 +984,8 @@ async fn main() {
         .plugin(tauri_plugin_webdriver::init())
         .plugin(e2e::plugin());
 
-    // Only add Sentry plugin if telemetry is enabled
+    // The plugin is always registered; the shared diagnostics policy prevents
+    // envelopes when crash reporting is disabled and supports runtime opt-in.
     let app = if let Some(ref _guard) = sentry_guard {
         let client = sentry::Hub::current().client().unwrap();
         app.plugin(tauri_plugin_sentry::init(&client))
@@ -1288,16 +1292,22 @@ async fn main() {
                 });
             }
 
-            // Attach non-sensitive settings to all future Sentry events
+            // Set the stable diagnostic identity even when diagnostics start
+            // disabled. The before_send policy blocks all envelopes while
+            // disabled, and keeping the scope ready means a later opt-in does
+            // not lose cross-session correlation.
+            sentry::configure_scope(|scope| {
+                scope.set_user(Some(sentry::protocol::User {
+                    id: Some(store.recording.analytics_id.clone()),
+                    ..Default::default()
+                }));
+            });
+
+            // Attach non-sensitive settings to all future Sentry events.
             if !telemetry_disabled {
                 sentry::configure_scope(|scope| {
-                    // Set user.id to the persistent analytics UUID. Support
-                    // context env vars are attached as tags so managed
+                    // Support context env vars are attached as tags so managed
                     // deployments can be filtered without replacing the app id.
-                    scope.set_user(Some(sentry::protocol::User {
-                        id: Some(store.recording.analytics_id.clone()),
-                        ..Default::default()
-                    }));
                     let telemetry_context = screenpipe_engine::telemetry_context::TelemetryContext::from_env();
                     for (key, value) in telemetry_context.pairs() {
                         scope.set_tag(key, value);
@@ -1980,23 +1990,24 @@ async fn main() {
             let email = store.user.email.unwrap_or_default();
             let local_api = crate::recording::local_api_context_from_app(&app_handle);
 
-            if is_analytics_enabled {
-                match start_analytics(
-                    unique_id,
-                    email,
-                    posthog_api_key,
-                    interval_hours,
-                    local_api.url(""),
-                    local_api.api_key.clone(),
-                    data_dir.clone(),
-                    is_analytics_enabled,
-                ) {
-                    Ok(analytics_manager) => {
-                        app.manage(analytics_manager);
-                    }
-                    Err(e) => {
-                        error!("Failed to start analytics: {}", e);
-                    }
+            // Keep the manager alive while diagnostics are off. The shared
+            // policy blocks every request until a user enables usage analytics
+            // at runtime, avoiding a shell restart just to begin collection.
+            match start_analytics(
+                unique_id,
+                email,
+                posthog_api_key,
+                interval_hours,
+                local_api.url(""),
+                local_api.api_key.clone(),
+                data_dir.clone(),
+                is_analytics_enabled,
+            ) {
+                Ok(analytics_manager) => {
+                    app.manage(analytics_manager);
+                }
+                Err(e) => {
+                    error!("Failed to start analytics: {}", e);
                 }
             }
 

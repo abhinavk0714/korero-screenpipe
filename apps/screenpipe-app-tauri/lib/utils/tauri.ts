@@ -2240,6 +2240,9 @@ async setCloudToken(token: string | null) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async setDiagnosticsPolicy(policy: DiagnosticsPolicyInput) : Promise<void> {
+    await TAURI_INVOKE("set_diagnostics_policy", { policy });
+},
 /**
  * Enable or disable enhanced AI suggestions (uses screenpipe cloud).
  */
@@ -2866,6 +2869,12 @@ source: string;
  * True when a skill of the same normalized name is already imported.
  */
 imported: boolean }
+/**
+ * Update the in-process diagnostics gates. This is intentionally separate
+ * from remote support logs: changing analytics consent must never grant
+ * support access to local logs.
+ */
+export type DiagnosticsPolicyInput = { crashReports: boolean; usageAnalytics: boolean }
 /**
  * An SSH host discovered from ~/.ssh/config or ~/.ssh/known_hosts.
  */

@@ -5,7 +5,7 @@
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use tracing::{debug, trace};
 
 use crate::telemetry_context::TelemetryContext;
@@ -18,7 +18,32 @@ use tracing::warn;
 const POSTHOG_API_KEY: &str = "phc_z7FZXE8vmXtdTQ78LMy3j1BQWW4zP6PGDUP46rgcdnb";
 const POSTHOG_HOST: &str = "https://us.i.posthog.com";
 
-static TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(false);
+/// Diagnostics destinations are deliberately independent. The desktop UI
+/// still exposes one legacy preference today, but callers must not assume
+/// enabling usage analytics also implies crash reporting (or vice versa).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiagnosticsPolicy {
+    pub crash_reports: bool,
+    pub usage_analytics: bool,
+}
+
+impl DiagnosticsPolicy {
+    pub const OFF: Self = Self {
+        crash_reports: false,
+        usage_analytics: false,
+    };
+
+    pub const fn from_legacy_enabled(enabled: bool) -> Self {
+        Self {
+            crash_reports: enabled,
+            usage_analytics: enabled,
+        }
+    }
+}
+
+const CRASH_REPORTS_BIT: u8 = 1;
+const USAGE_ANALYTICS_BIT: u8 = 2;
+static DIAGNOSTICS_POLICY: AtomicU8 = AtomicU8::new(0);
 
 static ANALYTICS: Lazy<Analytics> = Lazy::new(Analytics::new);
 
@@ -72,22 +97,56 @@ pub(crate) fn env_value_truthy(value: &str) -> bool {
     !matches!(v.as_str(), "" | "0" | "false" | "no" | "off")
 }
 
-/// Initialize analytics with telemetry enabled/disabled
+/// Set the process-wide diagnostics policy. CI and explicit environment
+/// opt-outs always win over callers, including runtime settings changes.
+pub fn set_diagnostics_policy(policy: DiagnosticsPolicy) {
+    let policy = if telemetry_disabled_by_env() {
+        DiagnosticsPolicy::OFF
+    } else {
+        policy
+    };
+    let bits = (if policy.crash_reports {
+        CRASH_REPORTS_BIT
+    } else {
+        0
+    }) | (if policy.usage_analytics {
+        USAGE_ANALYTICS_BIT
+    } else {
+        0
+    });
+    DIAGNOSTICS_POLICY.store(bits, Ordering::SeqCst);
+}
+
+pub fn diagnostics_policy() -> DiagnosticsPolicy {
+    let bits = DIAGNOSTICS_POLICY.load(Ordering::SeqCst);
+    DiagnosticsPolicy {
+        crash_reports: bits & CRASH_REPORTS_BIT != 0,
+        usage_analytics: bits & USAGE_ANALYTICS_BIT != 0,
+    }
+}
+
+/// Initialize analytics with the legacy all-diagnostics setting.
 pub fn init(telemetry_enabled: bool) {
-    // CI / automation always wins over the settings opt-in.
-    let telemetry_enabled = telemetry_enabled && !telemetry_disabled_by_env();
-    TELEMETRY_ENABLED.store(telemetry_enabled, Ordering::SeqCst);
+    set_diagnostics_policy(DiagnosticsPolicy::from_legacy_enabled(telemetry_enabled));
     // Force lazy initialization
     let _ = &*ANALYTICS;
     debug!(
         "Analytics initialized, telemetry_enabled: {}",
-        telemetry_enabled
+        is_usage_analytics_enabled()
     );
 }
 
 /// Whether telemetry-backed analytics are currently enabled.
 pub fn is_enabled() -> bool {
-    TELEMETRY_ENABLED.load(Ordering::SeqCst)
+    is_usage_analytics_enabled()
+}
+
+pub fn is_usage_analytics_enabled() -> bool {
+    diagnostics_policy().usage_analytics
+}
+
+pub fn is_crash_reporting_enabled() -> bool {
+    diagnostics_policy().crash_reports
 }
 
 /// Get the current distinct_id
@@ -97,7 +156,7 @@ pub fn get_distinct_id() -> &'static str {
 
 /// Capture an analytics event
 pub async fn capture_event(event: &str, properties: Value) {
-    if !is_enabled() {
+    if !is_usage_analytics_enabled() {
         return;
     }
 

@@ -464,6 +464,7 @@ async fn main() -> anyhow::Result<()> {
         info!("telemetry force-disabled: detected CI / automation environment");
         config.analytics_enabled = false;
     }
+    screenpipe_engine::analytics::init(config.analytics_enabled);
 
     // mDNS LAN discovery is opt-in (off by default) so we don't trigger the
     // macOS "Local Network" permission prompt unless the user wants it.
@@ -590,7 +591,7 @@ async fn main() -> anyhow::Result<()> {
                             *v = strip_user_paths(v);
                         }
                     }
-                    Some(event)
+                    screenpipe_engine::analytics::is_crash_reporting_enabled().then_some(event)
                 })),
                 ..Default::default()
             }
@@ -927,9 +928,6 @@ async fn main() -> anyhow::Result<()> {
 
     let resource_reporter = ResourceTelemetryReporter::new(config.analytics_enabled);
     resource_reporter.start_monitoring(Duration::from_secs(30), Some(Duration::from_secs(60)));
-
-    // Initialize analytics for API tracking
-    analytics::init(config.analytics_enabled);
 
     // Check macOS version and send telemetry if below supported versions
     // This helps track users who may have screen capture issues due to old macOS
