@@ -28,6 +28,10 @@ import {
   type FirstRunLearningState,
 } from "@/lib/first-run/learning-window";
 import { fetchRecentActivity } from "@/lib/first-run/recent-activity";
+import {
+  fetchFirstRunMedia,
+  mediaMarkdown,
+} from "@/lib/first-run/recent-media";
 import { seedFirstRunSummaryChat } from "@/lib/first-run/seed-summary-chat";
 import { summarizeFirstRunWithAi } from "@/lib/first-run/summarize-with-ai";
 import type { AIPreset } from "@/lib/utils/tauri";
@@ -163,7 +167,16 @@ export function useLearningWindow(
         return;
       }
 
-      const chatId = await seedFirstRunSummaryChat(written ?? fallback);
+      // Proof, not decoration: the summary describes what was seen, and this
+      // is the thing itself. Appended after whichever text won so a media
+      // failure can never cost the user the summary — and skipped entirely
+      // when screenshots are off, where frame rows exist but pixels do not.
+      const media = await fetchFirstRunMedia(startedAt);
+      const summary = media
+        ? `${written ?? fallback}\n\n${mediaMarkdown(media)}`
+        : (written ?? fallback);
+
+      const chatId = await seedFirstRunSummaryChat(summary);
       if (cancelled) {
         seedingRef.current = false;
         // The chat is already on disk, so do not release — a retry would
