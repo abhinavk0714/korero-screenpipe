@@ -1295,20 +1295,55 @@ mod tests {
     #[test]
     fn unknown_monitor_rejects_ax_pairing() {
         let native = NativeFocusSnapshot::default();
-        let rejected = observation(
+        let unknown = observation(
             CaptureFocusSnapshot {
                 native: native.clone(),
                 monitor: None,
             },
             CaptureFocusSnapshot {
-                native,
+                native: native.clone(),
                 monitor: None,
             },
         );
         assert_eq!(
-            rejected.decision(),
+            unknown.decision(),
             AxCoherenceDecision::RejectMonitorUnknown
         );
+
+        let capture_monitor = CaptureMonitorIdentity {
+            id: 7,
+            stable_id: Some("display-7".into()),
+        };
+        let other_monitor = CaptureMonitorIdentity {
+            id: 8,
+            stable_id: Some("display-8".into()),
+        };
+        let changed = observation(
+            CaptureFocusSnapshot {
+                native: native.clone(),
+                monitor: Some(capture_monitor.clone()),
+            },
+            CaptureFocusSnapshot {
+                native: native.clone(),
+                monitor: Some(other_monitor.clone()),
+            },
+        );
+        assert_eq!(
+            changed.decision(),
+            AxCoherenceDecision::RejectMonitorChanged
+        );
+
+        let wrong = observation(
+            CaptureFocusSnapshot {
+                native: native.clone(),
+                monitor: Some(other_monitor.clone()),
+            },
+            CaptureFocusSnapshot {
+                native,
+                monitor: Some(other_monitor),
+            },
+        );
+        assert_eq!(wrong.decision(), AxCoherenceDecision::RejectWrongMonitor);
     }
 
     #[tokio::test]
