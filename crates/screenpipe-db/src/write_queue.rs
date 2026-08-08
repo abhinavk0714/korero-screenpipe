@@ -124,13 +124,29 @@ const PERSISTENT_FAILURE_REFIRE_EVERY: Duration = Duration::from_secs(600);
 // so the hook only fires on a genuine wedge.
 
 /// Fire the persistent-failure hook after this many *consecutive* contended
-/// batches. Batches only form when writes arrive, so this is the fast path for
+/// batches. Each one costs a full `write_semaphore` timeout, so 60 is already
+/// ~30 minutes of uninterrupted contention; this is the fast path for
 /// write-heavy load, not the primary trigger.
 const CONTENTION_PERSISTENT_AFTER: u64 = 60;
-/// The real trigger: a contention run that has spanned this long. A full
-/// VACUUM on a multi-GB capture database is minutes, not ten of them, so this
-/// only fires when the coordinator is genuinely stuck.
-const CONTENTION_PERSISTENT_AFTER_WALL: Duration = Duration::from_secs(600);
+/// The real trigger: a contention run that has spanned this long with no
+/// successful write in between.
+///
+/// Deliberately generous. `compact()` (full VACUUM) and `backup_to()`
+/// (VACUUM INTO) hold the coordinator for as long as it takes to rewrite a
+/// multi-GB capture database, and neither announces itself — they do not use
+/// `request_write_pause`, so the drain loop cannot tell them apart from a
+/// wedge. Restarting the engine mid-VACUUM would roll back the whole thing and
+/// waste the work, so the budget has to sit clearly beyond any plausible
+/// maintenance hold rather than merely beyond a typical one.
+///
+/// Thirty minutes without a single successful write is unambiguous: capture
+/// writes arrive continuously while recording, so a run this long is either a
+/// stuck coordinator or a maintenance operation that is itself a bug.
+///
+/// The better long-term fix is for the long maintenance paths to announce
+/// their hold (the `WRITE_PAUSED` seam already exists for sleep), at which
+/// point this can come down a lot.
+const CONTENTION_PERSISTENT_AFTER_WALL: Duration = Duration::from_secs(1_800);
 /// Require this many contended batches in the run before the wall-clock rule
 /// can fire, so a single slow checkpoint on an otherwise idle machine cannot
 /// request a restart.
@@ -2674,8 +2690,14 @@ mod tests {
         let mut e = contention_esc();
         let t0 = std::time::Instant::now();
 
-        // A multi-minute VACUUM: well past a batch budget, well short of ours.
-        let maintenance = CONTENTION_PERSISTENT_AFTER_WALL / 4;
+        // A ten-minute VACUUM on a multi-GB capture database: far past a batch
+        // budget, still well inside ours. Restarting mid-VACUUM would roll the
+        // whole thing back.
+        let maintenance = Duration::from_secs(600);
+        assert!(
+            maintenance < CONTENTION_PERSISTENT_AFTER_WALL,
+            "the escalation budget must sit beyond a realistic maintenance hold"
+        );
         for i in 0..CONTENTION_PERSISTENT_MIN_BATCHES * 2 {
             let at = t0 + maintenance * (i as u32) / (CONTENTION_PERSISTENT_MIN_BATCHES * 2) as u32;
             assert!(
