@@ -122,6 +122,10 @@ struct MeetingEventData {
 type RecordingHandlesMap = DashMap<AudioDevice, Arc<Mutex<JoinHandle<Result<()>>>>>;
 const MEETING_AUDIO_FRAME_BUFFER: usize = 512;
 const RECONCILIATION_IDLE_INTERVAL: Duration = Duration::from_secs(120);
+
+/// Attempts to land an `audio_chunks` row before falling back to a durable
+/// recovery marker.
+const CHUNK_INSERT_ATTEMPTS: u32 = 4;
 const MAX_IMMEDIATE_RECONCILIATION_SWEEPS: usize = 4;
 
 fn meetings_only_capture_waiting(
@@ -624,6 +628,26 @@ impl AudioManager {
                                 info!("reconciliation: transcribed {} orphaned chunks", count);
                             }
                             return sweep.hit_candidate_limit;
+                        }
+                        drop(engine_guard);
+
+                        // No transcription engine — but orphaned chunks still
+                        // need their `audio_chunks` row back, or they stay
+                        // invisible to the timeline and to search forever.
+                        // `reconcile_untranscribed` already drains markers
+                        // before its own transcription-disabled early return;
+                        // this gate above it defeated that, so markers piled up
+                        // to the 10k cap and were then dropped. Draining does
+                        // not transcribe anything, so it is safe here.
+                        if let Some(dir) = output_path_bg.as_deref() {
+                            let recovered =
+                                super::reconciliation::drain_pending_chunk_markers(&db, dir).await;
+                            if recovered > 0 {
+                                info!(
+                                    "reconciliation: recovered {} orphaned audio chunk(s) without a transcription engine",
+                                    recovered
+                                );
+                            }
                         }
                         false
                     })
@@ -1475,12 +1499,12 @@ impl AudioManager {
                             // Without this, audio files are written to disk but orphaned from the DB,
                             // causing silent data loss on the timeline.
                             let mut inserted = false;
-                            // Keep the last failure so the final error log can name
+                            // Keep the last failure so the final log can name
                             // the actual cause. Without it every distinct DB failure
                             // (pool timeout vs stuck transaction vs cantopen) collapses
                             // into one undiagnosable Sentry issue.
                             let mut last_err: Option<String> = None;
-                            for retry in 0..3u32 {
+                            for retry in 0..CHUNK_INSERT_ATTEMPTS {
                                 match db.insert_audio_chunk(&path, capture_dt).await {
                                     Ok(_) => {
                                         inserted = true;
@@ -1488,31 +1512,20 @@ impl AudioManager {
                                     }
                                     Err(e) => {
                                         warn!(
-                                            "failed to insert audio chunk into db (attempt {}/3): {:?}",
+                                            "failed to insert audio chunk into db (attempt {}/{}): {:?}",
                                             retry + 1,
+                                            CHUNK_INSERT_ATTEMPTS,
                                             e
                                         );
                                         last_err = Some(format!("{:?}", e));
-                                        if retry < 2 {
-                                            tokio::time::sleep(std::time::Duration::from_millis(
-                                                500 * (retry as u64 + 1),
-                                            ))
-                                            .await;
+                                        if retry + 1 < CHUNK_INSERT_ATTEMPTS {
+                                            tokio::time::sleep(super::write_retry::backoff(retry))
+                                                .await;
                                         }
                                     }
                                 }
                             }
                             if !inserted {
-                                // path is a structured field so Sentry dedups the
-                                // issue across different devices; otherwise every
-                                // device name creates a new Sentry issue. error is a
-                                // separate field so the underlying cause is filterable
-                                // within that one issue rather than lost.
-                                error!(
-                                    audio_chunk_path = %path,
-                                    error = last_err.as_deref().unwrap_or("unknown"),
-                                    "audio chunk DB insert failed after 3 retries, data may be missing from timeline"
-                                );
                                 // Durable recovery: the audio file is on disk but
                                 // has no audio_chunks row, so it is invisible to the
                                 // timeline and the reconciliation candidate query
@@ -1520,12 +1533,40 @@ impl AudioManager {
                                 // (off the hot path) so the reconciliation sweep
                                 // re-inserts the row once the write pool recovers.
                                 // See SCREENPIPE-CLI-RC.
-                                super::reconciliation::persist_orphaned_chunk(
+                                let queued = super::reconciliation::persist_orphaned_chunk(
                                     out,
                                     path.clone(),
                                     capture_dt,
                                 )
                                 .await;
+
+                                // Report what actually happened to the user's
+                                // audio. A queued chunk is recovered by the next
+                                // sweep — nothing is lost — so it must not page
+                                // as an error; that is what made CLI-RC 50 users
+                                // of "data may be missing" with no way to tell
+                                // whether any data actually went missing. Only a
+                                // chunk we could not even queue is real loss.
+                                //
+                                // The filename (not the absolute path) is the
+                                // structured field so Sentry still dedups across
+                                // devices without shipping the user's home
+                                // directory in the event context.
+                                if queued {
+                                    warn!(
+                                        audio_chunk = %super::reconciliation::redact_home(&path),
+                                        error = last_err.as_deref().unwrap_or("unknown"),
+                                        "audio chunk DB insert failed after {} attempts; queued for reconciliation recovery",
+                                        CHUNK_INSERT_ATTEMPTS
+                                    );
+                                } else {
+                                    error!(
+                                        audio_chunk = %super::reconciliation::redact_home(&path),
+                                        error = last_err.as_deref().unwrap_or("unknown"),
+                                        "audio chunk DB insert failed after {} attempts AND could not be queued for recovery — this audio is missing from the timeline",
+                                        CHUNK_INSERT_ATTEMPTS
+                                    );
+                                }
                             }
                             Some(path)
                         }

@@ -789,16 +789,42 @@ fn write_pending_chunk_capped(
 }
 
 /// Persist a pending-chunk marker using the production cap.
-pub(crate) fn write_pending_chunk(data_dir: &Path, chunk: &PendingChunk) -> std::io::Result<()> {
-    if write_pending_chunk_capped(data_dir, chunk, MAX_PENDING_CHUNK_MARKERS)?
-        == MarkerOutcome::SkippedCapReached
-    {
-        warn!(
-            "reconciliation: pending-chunk marker cap ({}) reached — not queuing {} for recovery (write outage?)",
-            MAX_PENDING_CHUNK_MARKERS, chunk.file_path
+pub(crate) fn write_pending_chunk(
+    data_dir: &Path,
+    chunk: &PendingChunk,
+) -> std::io::Result<MarkerOutcome> {
+    let outcome = write_pending_chunk_capped(data_dir, chunk, MAX_PENDING_CHUNK_MARKERS)?;
+    if outcome == MarkerOutcome::SkippedCapReached {
+        // This is the one genuinely unrecoverable path in the whole flow: the
+        // audio file is on disk, no `audio_chunks` row exists, and now nothing
+        // will ever create one. It used to be a `warn!` the caller could not
+        // see, so real data loss was quieter than the recoverable case.
+        error!(
+            "reconciliation: pending-chunk marker cap ({}) reached — {} is on disk but will NOT be recovered; this audio is lost from the timeline",
+            MAX_PENDING_CHUNK_MARKERS,
+            redact_home(&chunk.file_path)
         );
     }
-    Ok(())
+    Ok(outcome)
+}
+
+/// Strip everything above the screenpipe data directory from a path before it
+/// reaches a log line. `error!`/`warn!` fields are forwarded to Sentry as
+/// structured context, and `strip_user_paths` in the engine only sanitizes the
+/// message and exception bodies — so an absolute `/Users/<name>/…` path in a
+/// field left the device with the username intact despite `send_default_pii:
+/// false`. Only the filename identifies the chunk anyway.
+/// Splits on both separators rather than using `Path::file_name`, which only
+/// understands the host's: a Windows path redacted on a Unix box (or in a
+/// cross-platform test) would otherwise pass through whole, username included.
+pub(crate) fn redact_home(file_path: &str) -> String {
+    let name = file_path
+        .rsplit(['/', '\\'])
+        .find(|segment| !segment.is_empty());
+    match name {
+        Some(name) => format!("…/{name}"),
+        None => "…".to_string(),
+    }
 }
 
 /// Queue an audio file whose `audio_chunks` row insert was dropped for later
@@ -806,13 +832,17 @@ pub(crate) fn write_pending_chunk(data_dir: &Path, chunk: &PendingChunk) -> std:
 /// audio capture loop never issues filesystem syscalls directly — the marker
 /// write is the only disk op left on that path, and the audio file itself was
 /// just written successfully on the same path, so the disk is known good here.
-/// Best-effort: failures are logged, not propagated.
+///
+/// Returns whether the chunk is now durably queued for recovery. The caller
+/// needs this to tell "the write failed but nothing is lost" apart from "this
+/// audio is gone" — those are very different events and used to be reported
+/// identically.
 pub(crate) async fn persist_orphaned_chunk(
     data_dir: &Path,
     file_path: String,
     timestamp: Option<DateTime<Utc>>,
-) {
-    persist_pending_chunk(data_dir, file_path, timestamp, None).await;
+) -> bool {
+    persist_pending_chunk(data_dir, file_path, timestamp, None).await
 }
 
 /// Like `persist_orphaned_chunk` but for the live transcription path: carries the
@@ -823,8 +853,8 @@ pub(crate) async fn persist_transcribed_chunk(
     file_path: String,
     timestamp: Option<DateTime<Utc>>,
     transcription: PendingChunkTranscription,
-) {
-    persist_pending_chunk(data_dir, file_path, timestamp, Some(transcription)).await;
+) -> bool {
+    persist_pending_chunk(data_dir, file_path, timestamp, Some(transcription)).await
 }
 
 async fn persist_pending_chunk(
@@ -832,7 +862,7 @@ async fn persist_pending_chunk(
     file_path: String,
     timestamp: Option<DateTime<Utc>>,
     transcription: Option<PendingChunkTranscription>,
-) {
+) -> bool {
     let dir = data_dir.to_path_buf();
     let chunk = PendingChunk {
         file_path: file_path.clone(),
@@ -840,19 +870,45 @@ async fn persist_pending_chunk(
         transcription,
     };
     match tokio::task::spawn_blocking(move || write_pending_chunk(&dir, &chunk)).await {
-        Ok(Ok(())) => debug!(
-            "reconciliation: queued orphaned audio chunk {} for recovery",
-            file_path
-        ),
-        Ok(Err(e)) => warn!(
-            "reconciliation: failed to persist pending-chunk marker for {}: {}",
-            file_path, e
-        ),
-        Err(e) => warn!(
-            "reconciliation: pending-chunk marker task panicked for {}: {}",
-            file_path, e
-        ),
+        Ok(Ok(MarkerOutcome::Written)) => {
+            debug!(
+                "reconciliation: queued orphaned audio chunk {} for recovery",
+                redact_home(&file_path)
+            );
+            true
+        }
+        // Already reported at error! inside write_pending_chunk — this is the
+        // unrecoverable case.
+        Ok(Ok(MarkerOutcome::SkippedCapReached)) => false,
+        Ok(Err(e)) => {
+            warn!(
+                "reconciliation: failed to persist pending-chunk marker for {}: {}",
+                redact_home(&file_path),
+                e
+            );
+            false
+        }
+        Err(e) => {
+            warn!(
+                "reconciliation: pending-chunk marker task panicked for {}: {}",
+                redact_home(&file_path),
+                e
+            );
+            false
+        }
     }
+}
+
+/// Recover orphaned `audio_chunks` rows without needing a transcription engine.
+///
+/// Getting the row back is what makes the audio visible to the timeline and to
+/// search; transcription is a separate, later concern. The background loop used
+/// to reach the marker drain only through `reconcile_untranscribed`, which it
+/// calls only when an engine exists — so with transcription off or not yet
+/// initialized, markers accumulated to `MAX_PENDING_CHUNK_MARKERS` and were
+/// then discarded. This is the same drain, reachable on its own.
+pub(crate) async fn drain_pending_chunk_markers(db: &DatabaseManager, data_dir: &Path) -> usize {
+    retry_pending_chunks(db, data_dir).await
 }
 
 /// Stop a recovery pass after this many consecutive DB errors. The markers
@@ -872,6 +928,9 @@ const MAX_CONSECUTIVE_RECOVERY_DB_ERRORS: u32 = 3;
 /// Bails out after `MAX_CONSECUTIVE_RECOVERY_DB_ERRORS` consecutive DB failures
 /// so it never amplifies an ongoing write outage.
 /// Returns the number of chunks recovered (newly inserted this sweep).
+///
+/// See [`drain_pending_chunk_markers`] for the transcription-independent entry
+/// point used by the background loop.
 async fn retry_pending_chunks(db: &DatabaseManager, data_dir: &Path) -> usize {
     let dir = pending_chunks_dir(data_dir);
     let entries = match std::fs::read_dir(&dir) {
@@ -2020,6 +2079,74 @@ mod tests {
             !candidates.iter().any(|c| c.file_path == audio),
             "a chunk recovered WITH its transcript must not be a re-transcribe candidate"
         );
+    }
+
+    /// SCREENPIPE-CLI-RC: the caller has to be able to tell "the write failed
+    /// but the chunk is queued for recovery" (no data lost) apart from "the
+    /// chunk could not even be queued" (audio gone from the timeline forever).
+    /// Both used to be reported identically, which is why the issue said "data
+    /// *may* be missing" across 50 users with no way to know if any did.
+    #[tokio::test]
+    async fn persist_reports_whether_the_chunk_is_actually_recoverable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path();
+
+        assert!(
+            persist_orphaned_chunk(data_dir, "/a/queued.mp4".to_string(), None).await,
+            "a chunk that got a marker is recoverable"
+        );
+
+        // Fill the marker directory past the production cap so the next write
+        // is refused, which is the one genuinely unrecoverable path.
+        let dir = pending_chunks_dir(data_dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..MAX_PENDING_CHUNK_MARKERS {
+            std::fs::write(dir.join(format!("filler-{i}.json")), "{}").unwrap();
+        }
+
+        assert!(
+            !persist_orphaned_chunk(data_dir, "/a/dropped.mp4".to_string(), None).await,
+            "a chunk refused by the cap must be reported as unrecoverable"
+        );
+    }
+
+    /// Recovering the `audio_chunks` row is what puts the audio back on the
+    /// timeline, and it does not need a transcription engine. The background
+    /// loop used to reach this drain only through `reconcile_untranscribed`,
+    /// which it calls only when an engine exists — so with transcription off,
+    /// markers piled up to the cap and were then discarded.
+    #[tokio::test]
+    async fn markers_drain_without_a_transcription_engine() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path();
+        let db = temp_db(data_dir).await;
+
+        let audio = make_audio_file(data_dir, "Mic (input)_2026-08-08_00-00-00.mp4");
+        assert!(persist_orphaned_chunk(data_dir, audio.clone(), None).await);
+        assert!(db.find_audio_chunk_id(&audio).await.unwrap().is_none());
+
+        // No transcription engine anywhere in this call.
+        let recovered = drain_pending_chunk_markers(&db, data_dir).await;
+
+        assert_eq!(recovered, 1, "the chunk row must come back on its own");
+        assert!(
+            db.find_audio_chunk_id(&audio).await.unwrap().is_some(),
+            "recovered chunk must be visible to the timeline"
+        );
+    }
+
+    /// Absolute paths in a log field are forwarded to Sentry as structured
+    /// context, which `strip_user_paths` does not sanitize — so the user's home
+    /// directory name was leaving the device despite `send_default_pii: false`.
+    #[test]
+    fn redaction_keeps_the_filename_and_drops_the_home_directory() {
+        let redacted = redact_home("/Users/somebody/.screenpipe/data/Mic (input)_2026-08-08.mp4");
+        assert_eq!(redacted, "…/Mic (input)_2026-08-08.mp4");
+        assert!(!redacted.contains("somebody"));
+        assert!(!redacted.contains("/Users"));
+
+        let windows = redact_home(r"C:\Users\somebody\.screenpipe\data\chunk.mp4");
+        assert!(!windows.contains("somebody"), "got: {windows}");
     }
 
     #[test]
