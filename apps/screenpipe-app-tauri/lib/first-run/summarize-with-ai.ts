@@ -178,13 +178,31 @@ export async function summarizeFirstRunWithAi(
   },
 ): Promise<string | null> {
   const { preset } = options;
-  if (!preset) return null;
+  // Falling back is correct but silent, which makes "why is this not using
+  // AI?" unanswerable from the outside — the first thing asked of it in a real
+  // session. Name the reason; the content itself is never logged.
+  const decline = (reason: string): null => {
+    console.warn("[first-run] summary fell back to deterministic", {
+      reason,
+      provider: preset?.provider ?? "none",
+    });
+    return null;
+  };
+
+  if (!preset) return decline("no_preset");
   // An ACP preset has no local model to spawn a second harness with, and
   // trying could reopen interactive auth during onboarding of all moments.
-  if (preset.provider === "acp") return null;
+  if (preset.provider === "acp") return decline("acp_preset");
+  // A hosted preset without a signed-in token cannot authenticate. Real
+  // onboarding signs in on its first slide, so this is mostly a dev-skip or
+  // signed-out state — but it is the single likeliest cause of a silent
+  // fallback, so say so rather than failing deep inside the session.
+  if (preset.provider === "screenpipe-cloud" && !options.userToken) {
+    return decline("cloud_preset_without_token");
+  }
 
   const facts = buildActivityFacts(activity, options.elapsedMs);
-  if (!facts.trim()) return null;
+  if (!facts.trim()) return decline("no_facts");
 
   const sessionId = `${INTERNAL_TITLE_PREFIX}first-run-${Date.now()}-${Math.random()
     .toString(36)
@@ -271,7 +289,9 @@ export async function summarizeFirstRunWithAi(
         options.userToken ?? null,
         buildProviderConfig(preset),
       );
-      if (started.status !== "ok" || !started.data?.running) return null;
+      if (started.status !== "ok" || !started.data?.running) {
+        return decline("session_start_failed");
+      }
 
       const prompted = await commands.piPrompt(
         sessionId,
@@ -279,10 +299,15 @@ export async function summarizeFirstRunWithAi(
         null,
         null,
       );
-      if (prompted.status !== "ok") return null;
+      if (prompted.status !== "ok") return decline("prompt_failed");
 
       timeoutId = setTimeout(() => settle(null), SUMMARY_TIMEOUT_MS);
-      return validateSummaryCandidate(await responsePromise);
+      const raw = await responsePromise;
+      const validated = validateSummaryCandidate(raw);
+      if (!validated) {
+        return decline(raw ? "output_rejected" : "no_output_or_timeout");
+      }
+      return validated;
     } finally {
       if (timeoutId !== null) clearTimeout(timeoutId);
       if (idleTimerId !== null) clearTimeout(idleTimerId);
@@ -291,6 +316,6 @@ export async function summarizeFirstRunWithAi(
     }
   } catch {
     // Any failure falls back to the deterministic summary.
-    return null;
+    return decline("threw");
   }
 }

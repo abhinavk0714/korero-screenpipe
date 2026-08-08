@@ -94,6 +94,7 @@ describe("summarizeFirstRunWithAi — session lifecycle", () => {
     const pending = summarizeFirstRunWithAi(activity, {
       elapsedMs: 60_000,
       preset,
+      userToken: "token",
     });
     await emit([{ type: "text_delta", delta: GOOD }, { type: "agent_end" }]);
     await pending;
@@ -109,6 +110,7 @@ describe("summarizeFirstRunWithAi — session lifecycle", () => {
     const pending = summarizeFirstRunWithAi(activity, {
       elapsedMs: 60_000,
       preset,
+      userToken: "token",
     });
     await emit([
       {
@@ -126,6 +128,7 @@ describe("summarizeFirstRunWithAi — session lifecycle", () => {
     const pending = summarizeFirstRunWithAi(activity, {
       elapsedMs: 60_000,
       preset,
+      userToken: "token",
     });
     await emit([
       { type: "text_delta", delta: GOOD },
@@ -140,6 +143,7 @@ describe("summarizeFirstRunWithAi — session lifecycle", () => {
     const pending = summarizeFirstRunWithAi(activity, {
       elapsedMs: 60_000,
       preset,
+      userToken: "token",
     });
     await emit([{ type: "error", message: "quota" }]);
     expect(await pending).toBeNull();
@@ -151,6 +155,7 @@ describe("summarizeFirstRunWithAi — session lifecycle", () => {
     const pending = summarizeFirstRunWithAi(activity, {
       elapsedMs: 60_000,
       preset,
+      userToken: "token",
     });
     await emit([
       { type: "text_delta", delta: "I'm sorry, I cannot access your screen." },
@@ -173,11 +178,31 @@ describe("summarizeFirstRunWithAi — session lifecycle", () => {
     expect(piStart).not.toHaveBeenCalled();
   });
 
+  // A hosted preset with no signed-in token cannot authenticate, so spawning
+  // the session is guaranteed waste. Real onboarding signs in on its first
+  // slide; this is the dev-skip / signed-out path, and it was the actual cause
+  // of a silent deterministic fallback in a live dev session.
+  it("declines a hosted preset with no token instead of spawning a doomed session", async () => {
+    reset();
+    expect(
+      await summarizeFirstRunWithAi(activity, {
+        elapsedMs: 60_000,
+        preset,
+        userToken: null,
+      }),
+    ).toBeNull();
+    expect(piStart).not.toHaveBeenCalled();
+  });
+
   it("returns null when the session fails to start", async () => {
     reset();
     piStart.mockResolvedValue({ status: "error" } as never);
     expect(
-      await summarizeFirstRunWithAi(activity, { elapsedMs: 60_000, preset }),
+      await summarizeFirstRunWithAi(activity, {
+        elapsedMs: 60_000,
+        preset,
+        userToken: "token",
+      }),
     ).toBeNull();
     expect(piPrompt).not.toHaveBeenCalled();
   });

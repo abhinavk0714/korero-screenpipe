@@ -21,6 +21,7 @@ import {
   markLearningDone,
   markLearningEmpty,
   markLearningReady,
+  releaseLearningSeed,
   normalizeEmptyReason,
   readLearningWindow,
   type FirstRunCapturedApp,
@@ -153,10 +154,23 @@ export function useLearningWindow(
         preset: aiRef.current.aiPreset,
         userToken: aiRef.current.userToken,
       });
-      if (cancelled) return;
+      // Writing the summary can take tens of seconds, and the user is free to
+      // close this window or navigate during it. Hand the claim back so the
+      // next mount can retry instead of being locked out by a spent claim.
+      if (cancelled) {
+        seedingRef.current = false;
+        releaseLearningSeed();
+        return;
+      }
 
       const chatId = await seedFirstRunSummaryChat(written ?? fallback);
-      if (cancelled) return;
+      if (cancelled) {
+        seedingRef.current = false;
+        // The chat is already on disk, so do not release — a retry would
+        // write a second copy. Leaving it claimed is correct: the summary
+        // exists in the sidebar even though this mount never marked ready.
+        return;
+      }
 
       if (!chatId) {
         // Fall back to the visible empty state rather than a dead "done" the

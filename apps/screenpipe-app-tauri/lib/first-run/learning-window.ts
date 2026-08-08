@@ -440,6 +440,22 @@ export function claimLearningSeed(): boolean {
   return true;
 }
 
+/**
+ * Give the seed claim back after a run that did not produce a chat.
+ *
+ * The claim is taken before the summary is written, so a poll that fires while
+ * one is in flight cannot start a second. But writing it now involves an AI
+ * call that can take tens of seconds, and if the user closes the window or
+ * navigates in that time the run is abandoned with the claim already spent —
+ * which would leave the window unable to ever seed. Releasing lets the next
+ * mount try again.
+ */
+export function releaseLearningSeed(): void {
+  const current = readLearningWindow();
+  if (current.phase !== "learning" || !current.seededAt) return;
+  writeLearningWindow({ ...current, seededAt: null });
+}
+
 export function markLearningReady(chatId: string): FirstRunLearningState {
   const current = readLearningWindow();
   return writeLearningWindow({ ...current, phase: "ready", chatId });
