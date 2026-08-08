@@ -66,9 +66,16 @@ export function buildActivityFacts(
     .slice(0, MAX_FILES);
   if (files.length > 0) lines.push(`files_open: ${files.join(", ")}`);
 
-  const transcriptions = Number(activity.audio_summary?.transcription_count ?? 0);
+  const transcriptions = Number(activity.audio_summary?.segment_count ?? 0);
   if (transcriptions > 0) {
-    lines.push(`audio_transcripts: ${transcriptions}`);
+    const speakers = Array.isArray(activity.audio_summary?.speakers)
+      ? activity.audio_summary.speakers.length
+      : 0;
+    lines.push(
+      speakers > 0
+        ? `audio_transcripts: ${transcriptions} (${speakers} speakers)`
+        : `audio_transcripts: ${transcriptions}`,
+    );
   }
 
   return lines.join("\n");

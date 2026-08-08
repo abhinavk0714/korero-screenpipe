@@ -23,7 +23,7 @@ const activity: ActivitySnapshot = {
     { app_name: "Arc", window_name: "• Discord", minutes: 2 },
   ],
   edited_files: [{ path: "/Users/x/brain/080726.md" }],
-  audio_summary: { transcription_count: 3 },
+  audio_summary: { segment_count: 3, speakers: [{}, {}] },
 };
 
 describe("buildActivityFacts", () => {
@@ -40,7 +40,27 @@ describe("buildActivityFacts", () => {
     expect(facts).toContain("Obsidian (20 screens)");
     expect(facts).toContain('"080726 - brain" in Obsidian');
     expect(facts).toContain("/Users/x/brain/080726.md");
-    expect(facts).toContain("audio_transcripts: 3");
+    expect(facts).toContain("audio_transcripts: 3 (2 speakers)");
+  });
+
+  // Regression: these were originally guessed as `transcription_count` and
+  // `speaker_count`, which do not exist on the engine's AudioSummary. Nothing
+  // failed — the count read 0 and the audio line silently never appeared.
+  // Pinned here against crates/screenpipe-engine/src/routes/activity_summary.rs.
+  it("reads the audio field names the engine actually serializes", () => {
+    const wrongNames = {
+      ...activity,
+      audio_summary: { transcription_count: 9, speaker_count: 4 },
+    } as unknown as ActivitySnapshot;
+    expect(buildActivityFacts(wrongNames, 60_000)).not.toContain(
+      "audio_transcripts",
+    );
+    expect(
+      buildActivityFacts(
+        { ...activity, audio_summary: { segment_count: 9 } },
+        60_000,
+      ),
+    ).toContain("audio_transcripts: 9");
   });
 
   it("omits sections it has no data for", () => {

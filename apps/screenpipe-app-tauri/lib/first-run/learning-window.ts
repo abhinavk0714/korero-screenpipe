@@ -135,9 +135,12 @@ export type ActivitySnapshot = {
   apps?: ActivityApp[] | null;
   windows?: ActivityWindow[] | null;
   edited_files?: ActivityEditedFile[] | null;
+  // Mirrors the engine's AudioSummary exactly. These are not the names a
+  // reasonable guess would produce, and getting them wrong fails silently:
+  // the count reads 0 and the audio line simply never appears.
   audio_summary?: {
-    speaker_count?: number;
-    transcription_count?: number;
+    segment_count?: number;
+    speakers?: unknown[] | null;
   } | null;
 };
 
@@ -302,9 +305,7 @@ export function buildLearningSummary(
     .map((file) => (typeof file?.path === "string" ? fileName(file.path) : ""))
     .filter(Boolean)
     .slice(0, 3);
-  const transcriptions = Number(
-    activity.audio_summary?.transcription_count ?? 0,
-  );
+  const transcriptions = Number(activity.audio_summary?.segment_count ?? 0);
   const focus = focusLines(activity);
 
   const lines: string[] = [];

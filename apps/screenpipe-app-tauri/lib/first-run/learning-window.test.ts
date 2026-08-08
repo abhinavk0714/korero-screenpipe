@@ -261,7 +261,7 @@ describe("deterministic summary", () => {
     const rich = buildLearningSummary(
       ok({
         edited_files: [{ path: "/Users/x/proj/server.rs" }],
-        audio_summary: { transcription_count: 3 },
+        audio_summary: { segment_count: 3, speakers: [{}, {}] },
       }),
     );
     expect(rich).toContain("files open: server.rs");
