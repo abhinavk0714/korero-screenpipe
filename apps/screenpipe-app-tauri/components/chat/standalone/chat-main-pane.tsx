@@ -14,8 +14,6 @@ import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { InlineChatHistory } from "@/components/chat/standalone/inline-chat-history";
 import { ChatMessageList, type ChatMessageListProps } from "@/components/chat/standalone/chat-message-list";
 import type { ConversationMeta } from "@/lib/chat-storage";
-import { useSettings } from "@/lib/hooks/use-settings";
-import { pickPipePreset } from "@/lib/utils/pick-pipe-preset";
 import type { AIPreset } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
 import type { Message } from "@/lib/chat/types";
@@ -29,6 +27,11 @@ type ActivePipeExecution = {
 } | null;
 
 interface ChatMainPaneProps {
+  /** Preset the first-run summary is written with, and the token it needs.
+   *  Passed down rather than read here so this pane (and the banner below it)
+   *  stay renderable without a settings provider. */
+  firstRunAiPreset?: AIPreset | null;
+  firstRunUserToken?: string | null;
   hideInlineHistory?: boolean;
   showHistory: boolean;
   onCloseHistory: () => void;
@@ -99,15 +102,9 @@ export function ChatMainPane({
   messageListProps,
   isUserScrolledUp,
   scrollToBottom,
+  firstRunAiPreset,
+  firstRunUserToken,
 }: ChatMainPaneProps) {
-  // Sourced here rather than inside the banner so the banner stays a pure
-  // presentational component with no settings-provider requirement.
-  const { settings } = useSettings();
-  const firstRunPreset = React.useMemo(
-    () => pickPipePreset((settings?.aiPresets ?? []) as AIPreset[]),
-    [settings?.aiPresets],
-  );
-
   return (
     <div className="flex-1 flex overflow-hidden">
       <InlineChatHistory
@@ -257,8 +254,8 @@ export function ChatMainPane({
             {messages.length === 0 && !activePipeExecution && (
               <div className="mx-auto w-full max-w-3xl px-4 pb-4">
                 <FirstRunLearningBanner
-                  aiPreset={firstRunPreset}
-                  userToken={settings?.user?.token ?? null}
+                  aiPreset={firstRunAiPreset}
+                  userToken={firstRunUserToken}
                 />
               </div>
             )}
