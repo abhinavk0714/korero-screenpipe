@@ -2508,16 +2508,18 @@ export function BrainOverview({
           data-testid="brain-overview-empty-content"
           className="mx-auto flex min-h-full w-full max-w-5xl flex-col items-center justify-center px-6 py-8 text-center"
         >
-          <LiveViewAiComposer
-            busy={builderFeedback?.tone === "working"}
-            feedback={builderFeedback}
-            onCancel={() => builderAbortRef.current?.abort()}
-            selectedPresetId={selectedAiPreset?.id ?? null}
-            onSelectedPresetIdChange={selectAiPreset}
-            onGenerate={generateFromComposer}
-          />
+          {/* Templates lead, the composer follows.
+           *
+           * Setup no longer builds a dashboard, so this is now the first
+           * dashboard surface every new user sees rather than a rare state
+           * reached by deleting the last one. On a cold install there are only
+           * minutes of capture and no sense yet of what a Live View can even
+           * be, which is the worst possible moment to face an empty prompt —
+           * a known-good kit is far likelier to produce something real. The
+           * composer stays fully present for anyone who knows what they want,
+           * and neither is visually subordinate to the other. */}
           {templateKits.length > 0 && (
-            <div className="mt-8 w-full border-t border-border pt-6 text-left">
+            <div className="w-full text-left">
               <LiveViewTemplateGallery
                 kits={templateKits}
                 installedPipeNames={installedPipeNames}
@@ -2525,6 +2527,27 @@ export function BrainOverview({
               />
             </div>
           )}
+          <div
+            className={
+              templateKits.length > 0
+                ? "mt-8 w-full border-t border-border pt-6"
+                : "w-full"
+            }
+          >
+            {templateKits.length > 0 && (
+              <p className="mb-3 text-xs text-muted-foreground">
+                Or describe the dashboard you want
+              </p>
+            )}
+            <LiveViewAiComposer
+              busy={builderFeedback?.tone === "working"}
+              feedback={builderFeedback}
+              onCancel={() => builderAbortRef.current?.abort()}
+              selectedPresetId={selectedAiPreset?.id ?? null}
+              onSelectedPresetIdChange={selectAiPreset}
+              onGenerate={generateFromComposer}
+            />
+          </div>
           <button
             data-testid="overview-create"
             type="button"

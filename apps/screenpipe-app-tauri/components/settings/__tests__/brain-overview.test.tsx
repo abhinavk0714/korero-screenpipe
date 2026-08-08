@@ -1263,6 +1263,42 @@ describe("BrainOverview", () => {
     expect(screen.getByTestId("live-view-template-process-map")).toBeTruthy();
   });
 
+  // Setup no longer builds a dashboard, so this empty state is the first
+  // dashboard surface a new user sees. On a cold install, facing an empty
+  // prompt is the worst starting point; a known-good kit is far likelier to
+  // produce something real. Pinned because a reorder here is invisible in
+  // review and silently undoes that.
+  it("offers templates before the prompt, without hiding the prompt", async () => {
+    mocks.listBrainViewTemplateKits.mockResolvedValue({
+      status: "ok",
+      data: [dailyMemoryTemplate, processMapTemplate],
+    });
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    render(<BrainOverview />);
+
+    await openDashboardMenu();
+    fireEvent.click(await screen.findByText("delete"));
+    fireEvent.click(await screen.findByTestId("overview-confirm-delete"));
+
+    const content = await screen.findByTestId("brain-overview-empty-content");
+    const firstTemplate = await screen.findByTestId(
+      "live-view-template-daily-memory",
+    );
+    const composer = content.querySelector("textarea, input");
+    expect(composer).toBeTruthy();
+
+    // Both present, template first in document order.
+    expect(
+      firstTemplate.compareDocumentPosition(composer as Node) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // The manual escape hatch survives the reorder.
+    expect(screen.getByTestId("overview-create")).toBeTruthy();
+  });
+
   it("keeps a template-generated new dashboard in review until it is saved", async () => {
     const generatedView = {
       title: "Daily memory, personalized",
