@@ -15,6 +15,10 @@ icon: "newspaper"
 
 - **See your hosted AI usage in Settings** — the Usage tab in app settings now shows how much of your hosted AI allowance you've used, with a per-lane progress bar for auto and manual model traffic (or a single "all models" bar when your plan doesn't split them). Each meter includes your plan label, the window type, the next reset time, and turns yellow under 30% remaining and red when exhausted, with an upgrade link when one applies. See [connections](/connections).
 
+### bug fixes
+
+- **Hardened SSH remote sync against pre-auth crashes** — the SSH client used by `screenpipe sync` for remote sync now runs on a newer SSH library that closes nine security advisories, including pre-auth remote panics reachable during the client handshake. Users pointing `screenpipe sync` at a remote host get a more resilient client with no configuration changes. See the [CLI reference](/cli-reference).
+
 ## week of july 28, 2026
 
 ### new features
