@@ -42,6 +42,8 @@ import {
   type SidebarNavId,
 } from "@/lib/utils/sidebar-nav-layout";
 import { SidebarNavList } from "@/components/sidebar-nav-list";
+import { useToast } from "@/components/ui/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { AppSidebar, useSidebarContext } from "@/components/app-sidebar";
 import { UpdateBanner } from "@/components/update-banner";
 import { usePlatform } from "@/lib/hooks/use-platform";
@@ -141,6 +143,7 @@ function HomeContent() {
   const [connectionFocusRequest, setConnectionFocusRequest] = useState<ConnectionFocusRequest | null>(null);
 
   const { settings, updateSettings, isSettingsLoaded } = useSettings();
+  const { toast } = useToast();
   const updateSettingsRef = useRef(updateSettings);
   updateSettingsRef.current = updateSettings;
   const { isTranslucent } = useSidebarContext();
@@ -1006,6 +1009,31 @@ function HomeContent() {
   const persistSidebarLayout = (next: ReturnType<typeof normalizeSidebarNavLayout>) => {
     void updateSettings({ sidebarNavLayout: next });
   };
+  // Hiding a row is the one edit that removes something from view, so it is the
+  // one that gets an undo. None of the products with this feature offer one —
+  // it is cheap here because the previous layout is right there.
+  const hideSidebarNavItem = (id: SidebarNavId) => {
+    const label = SIDEBAR_SECTION_DEFS[id].label;
+    const previous = sidebarLayout;
+    persistSidebarLayout(
+      setSidebarNavItemHidden(sidebarLayout, availableSidebarIds, id, true),
+    );
+    toast({
+      title: `${label} hidden`,
+      description:
+        id === "meetings"
+          ? "still one click away from the icon next to search."
+          : "find it under Hidden at the bottom of the sidebar.",
+      action: (
+        <ToastAction
+          altText={`Show ${label} in the sidebar again`}
+          onClick={() => persistSidebarLayout(previous)}
+        >
+          Undo
+        </ToastAction>
+      ),
+    });
+  };
 
   const mainSections = visibleSidebarIds.map((id) => ({
     id,
@@ -1235,11 +1263,15 @@ function HomeContent() {
                     shiftSidebarNavItem(sidebarLayout, availableSidebarIds, id, direction),
                   )
                 }
-                onSetHidden={(id, hidden) =>
+                onSetHidden={(id, hidden) => {
+                  if (hidden) {
+                    hideSidebarNavItem(id);
+                    return;
+                  }
                   persistSidebarLayout(
-                    setSidebarNavItemHidden(sidebarLayout, availableSidebarIds, id, hidden),
-                  )
-                }
+                    setSidebarNavItemHidden(sidebarLayout, availableSidebarIds, id, false),
+                  );
+                }}
                 onReset={() => persistSidebarLayout({ ...DEFAULT_SIDEBAR_NAV_LAYOUT })}
               />
 

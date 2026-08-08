@@ -5,11 +5,21 @@
 
 // The Home sidebar's main nav rows, made customizable.
 //
-// Rows keep the exact look they had as a plain list; customization is additive
-// and invisible until the user reaches for it — right-click for the menu, or
-// press-and-drag to reorder. When the rollout gate is off this renders the same
-// buttons with no drag sensors and no context menu, so the sidebar behaves
-// exactly as it did before.
+// Design notes, because the first pass got this wrong:
+//
+//   * Drag and right-click are affordances with no signifier — nothing on a
+//     plain row tells you it can move. On hover the leading icon becomes a grip
+//     and a "…" button appears, the same two cues Notion/Linear/Slack use, and
+//     the "…" opens the identical menu right-click does (one menu, two ways in
+//     — mirroring RowMenuItems in chat-sidebar.tsx).
+//   * Hiding a row used to make it vanish with no trace, and the only way back
+//     was right-clicking a *different* row to find "Show X". Hidden rows now
+//     have a home: a quiet disclosure under the nav listing exactly what is
+//     hidden, one click to bring it back. The control sits next to the thing it
+//     affects instead of inside an unrelated row's menu.
+//
+// When the rollout gate is off this renders plain, non-draggable rows with no
+// menu and no disclosure, so the sidebar is byte-for-byte what it was.
 
 import React from "react";
 import {
@@ -28,7 +38,15 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowDown, ArrowUp, EyeOff, Plus, RotateCcw } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  EyeOff,
+  GripVertical,
+  MoreHorizontal,
+  Plus,
+  RotateCcw,
+} from "lucide-react";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -36,6 +54,13 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import type { SidebarNavId } from "@/lib/utils/sidebar-nav-layout";
 
@@ -49,11 +74,11 @@ export type SidebarNavItem = {
 
 export type SidebarNavListProps = {
   items: SidebarNavItem[];
-  /** Ids the user can bring back, with their labels, for the "Show" entries. */
+  /** Ids the user can bring back, with their labels, for the hidden strip. */
   hiddenItems: Array<{ id: SidebarNavId; label: string }>;
   activeId: string;
   isTranslucent: boolean;
-  /** Rollout gate — false renders plain, non-draggable rows with no menu. */
+  /** Rollout gate — false renders plain rows with no menu and no strip. */
   customizable: boolean;
   canReset: boolean;
   onSelect: (id: SidebarNavId) => void;
@@ -63,9 +88,12 @@ export type SidebarNavListProps = {
   onReset: () => void;
 };
 
+const ITEM_CLS =
+  "flex cursor-pointer items-center gap-2 text-xs [&>svg]:h-3 [&>svg]:w-3 [&>svg]:text-muted-foreground";
+
 function rowClassName(isActive: boolean, isTranslucent: boolean) {
   return cn(
-    "relative w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg border border-transparent transition-all duration-150 text-left group",
+    "relative w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg border border-transparent transition-all duration-150 text-left group/navrow",
     isActive
       ? isTranslucent
         ? "vibrant-nav-active"
@@ -76,43 +104,60 @@ function rowClassName(isActive: boolean, isTranslucent: boolean) {
   );
 }
 
-function RowBody({
-  item,
-  isActive,
-  isTranslucent,
+/**
+ * One menu, rendered into either the right-click surface or the "…" dropdown.
+ * Actions are scoped to this row only — restoring a hidden row belongs to the
+ * hidden strip, next to the row it affects.
+ */
+function RowMenuItems({
+  variant,
+  index,
+  total,
+  canReset,
+  onShift,
+  onHide,
+  onReset,
 }: {
-  item: SidebarNavItem;
-  isActive: boolean;
-  isTranslucent: boolean;
+  variant: "context" | "dropdown";
+  index: number;
+  total: number;
+  canReset: boolean;
+  onShift: (direction: -1 | 1) => void;
+  onHide: () => void;
+  onReset: () => void;
 }) {
+  const Item = variant === "context" ? ContextMenuItem : DropdownMenuItem;
+  const Separator =
+    variant === "context" ? ContextMenuSeparator : DropdownMenuSeparator;
   return (
     <>
-      <div
-        className={cn(
-          "transition-colors flex-shrink-0",
-          isActive
-            ? isTranslucent
-              ? "vibrant-sidebar-fg"
-              : "text-primary"
-            : isTranslucent
-              ? "vibrant-sidebar-fg-muted"
-              : "text-muted-foreground group-hover:text-foreground",
-        )}
+      <Item className={ITEM_CLS} disabled={index === 0} onSelect={() => onShift(-1)}>
+        <ArrowUp />
+        Move up
+      </Item>
+      <Item
+        className={ITEM_CLS}
+        disabled={index === total - 1}
+        onSelect={() => onShift(1)}
       >
-        {item.icon}
-      </div>
-      <span
-        className={cn(
-          "text-xs truncate",
-          item.trailing && "flex-1",
-          isActive && isTranslucent
-            ? "font-semibold vibrant-sidebar-fg"
-            : "font-medium",
-        )}
-      >
-        {item.label}
-      </span>
-      {item.trailing}
+        <ArrowDown />
+        Move down
+      </Item>
+      <Separator />
+      {/* The last remaining row cannot be hidden — an empty nav has no way back. */}
+      <Item className={ITEM_CLS} disabled={total <= 1} onSelect={onHide}>
+        <EyeOff />
+        Hide from sidebar
+      </Item>
+      {canReset && (
+        <>
+          <Separator />
+          <Item className={ITEM_CLS} data-testid="sidebar-reset" onSelect={onReset}>
+            <RotateCcw />
+            Reset sidebar
+          </Item>
+        </>
+      )}
     </>
   );
 }
@@ -123,7 +168,6 @@ function SortableRow({
   total,
   activeId,
   isTranslucent,
-  hiddenItems,
   canReset,
   onSelect,
   onShift,
@@ -137,7 +181,6 @@ function SortableRow({
   SidebarNavListProps,
   | "activeId"
   | "isTranslucent"
-  | "hiddenItems"
   | "canReset"
   | "onSelect"
   | "onShift"
@@ -147,11 +190,19 @@ function SortableRow({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: item.id });
   const isActive = activeId === item.id;
+  const menuProps = {
+    index,
+    total,
+    canReset,
+    onShift: (direction: -1 | 1) => onShift(item.id, direction),
+    onHide: () => onSetHidden(item.id, true),
+    onReset,
+  };
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <button
+        <div
           ref={setNodeRef}
           style={{
             // Lock horizontal travel without pulling in @dnd-kit/modifiers:
@@ -161,72 +212,130 @@ function SortableRow({
             ),
             transition,
           }}
-          data-testid={`nav-${item.id}`}
-          data-announcement-anchor={`sidebar-${item.id}`}
-          onClick={() => onSelect(item.id)}
           className={cn(
-            rowClassName(isActive, isTranslucent),
-            // Lift the dragged row above its neighbours without changing the
-            // resting appearance of any row.
-            isDragging && "z-10 opacity-80 shadow-md cursor-grabbing",
+            "relative",
+            isDragging && "z-10 opacity-90 [&>button]:shadow-md",
           )}
-          {...attributes}
-          {...listeners}
         >
-          <RowBody item={item} isActive={isActive} isTranslucent={isTranslucent} />
-        </button>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="w-52">
-        <ContextMenuItem
-          disabled={index === 0}
-          onSelect={() => onShift(item.id, -1)}
-        >
-          <ArrowUp className="mr-2 h-3.5 w-3.5" />
-          Move up
-        </ContextMenuItem>
-        <ContextMenuItem
-          disabled={index === total - 1}
-          onSelect={() => onShift(item.id, 1)}
-        >
-          <ArrowDown className="mr-2 h-3.5 w-3.5" />
-          Move down
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem
-          // The last remaining row cannot be hidden — an empty sidebar has no
-          // way back.
-          disabled={total <= 1}
-          onSelect={() => onSetHidden(item.id, true)}
-        >
-          <EyeOff className="mr-2 h-3.5 w-3.5" />
-          Hide from sidebar
-        </ContextMenuItem>
-        {hiddenItems.length > 0 && (
-          <>
-            <ContextMenuSeparator />
-            {hiddenItems.map((hidden) => (
-              <ContextMenuItem
-                key={hidden.id}
-                data-testid={`sidebar-show-${hidden.id}`}
-                onSelect={() => onSetHidden(hidden.id, false)}
+          <button
+            data-testid={`nav-${item.id}`}
+            data-announcement-anchor={`sidebar-${item.id}`}
+            onClick={() => onSelect(item.id)}
+            className={cn(
+              rowClassName(isActive, isTranslucent),
+              isDragging ? "cursor-grabbing" : "cursor-pointer",
+            )}
+            {...attributes}
+            {...listeners}
+          >
+            <div
+              className={cn(
+                "relative transition-colors flex-shrink-0",
+                isActive
+                  ? isTranslucent
+                    ? "vibrant-sidebar-fg"
+                    : "text-primary"
+                  : isTranslucent
+                    ? "vibrant-sidebar-fg-muted"
+                    : "text-muted-foreground group-hover/navrow:text-foreground",
+              )}
+            >
+              {/* Signifier: on hover the section icon becomes a grip, so "this
+                  row can be moved" is visible instead of folklore. */}
+              <span className="block transition-opacity duration-150 group-hover/navrow:opacity-0">
+                {item.icon}
+              </span>
+              <GripVertical
+                aria-hidden="true"
+                className="absolute inset-0 h-3.5 w-3.5 opacity-0 transition-opacity duration-150 group-hover/navrow:opacity-100"
+              />
+            </div>
+            <span
+              className={cn(
+                "text-xs truncate flex-1",
+                isActive && isTranslucent
+                  ? "font-semibold vibrant-sidebar-fg"
+                  : "font-medium",
+              )}
+            >
+              {item.label}
+            </span>
+            {/* The adornment yields to the "…" while hovered — same trade the
+                chat rows make between unread state and row actions. */}
+            {item.trailing && (
+              <span className="shrink-0 transition-opacity duration-150 group-hover/navrow:opacity-0">
+                {item.trailing}
+              </span>
+            )}
+          </button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={`${item.label} options`}
+                data-testid={`nav-${item.id}-options`}
+                onClick={(event) => event.stopPropagation()}
+                className={cn(
+                  "absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity duration-150",
+                  "hover:text-foreground focus-visible:opacity-100 group-hover/navrow:opacity-100 data-[state=open]:opacity-100",
+                )}
               >
-                <Plus className="mr-2 h-3.5 w-3.5" />
-                Show {hidden.label}
-              </ContextMenuItem>
-            ))}
-          </>
-        )}
-        {canReset && (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem data-testid="sidebar-reset" onSelect={onReset}>
-              <RotateCcw className="mr-2 h-3.5 w-3.5" />
-              Reset sidebar
-            </ContextMenuItem>
-          </>
-        )}
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-48">
+              <RowMenuItems variant="dropdown" {...menuProps} />
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-48">
+        <RowMenuItems variant="context" {...menuProps} />
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+/**
+ * Where hidden rows live. Without this, hiding a row is a one-way door: it
+ * vanishes and the user has no visible path back. Rendered only when something
+ * is actually hidden, so a stock sidebar carries no extra chrome.
+ */
+function HiddenStrip({
+  hiddenItems,
+  isTranslucent,
+  onShow,
+}: {
+  hiddenItems: SidebarNavListProps["hiddenItems"];
+  isTranslucent: boolean;
+  onShow: (id: SidebarNavId) => void;
+}) {
+  if (hiddenItems.length === 0) return null;
+  return (
+    <div className="mt-1 space-y-0.5" data-testid="sidebar-hidden-strip">
+      <p className="px-2.5 pt-1 text-[10px] uppercase tracking-wide text-muted-foreground/60">
+        Hidden
+      </p>
+      {hiddenItems.map((hidden) => (
+        <button
+          key={hidden.id}
+          type="button"
+          data-testid={`sidebar-show-${hidden.id}`}
+          onClick={() => onShow(hidden.id)}
+          title={`Show ${hidden.label} in the sidebar`}
+          className={cn(
+            "w-full flex items-center gap-2.5 px-2.5 py-1 rounded-lg transition-colors duration-150 text-left",
+            isTranslucent
+              ? "vibrant-nav-item vibrant-nav-hover"
+              : "text-muted-foreground/70 hover:bg-card/50 hover:text-foreground",
+          )}
+        >
+          <Plus className="h-3.5 w-3.5 shrink-0" />
+          <span className="text-xs truncate">{hidden.label}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -261,11 +370,32 @@ export function SidebarNavList({
             onClick={() => onSelect(item.id)}
             className={rowClassName(activeId === item.id, isTranslucent)}
           >
-            <RowBody
-              item={item}
-              isActive={activeId === item.id}
-              isTranslucent={isTranslucent}
-            />
+            <div
+              className={cn(
+                "transition-colors flex-shrink-0",
+                activeId === item.id
+                  ? isTranslucent
+                    ? "vibrant-sidebar-fg"
+                    : "text-primary"
+                  : isTranslucent
+                    ? "vibrant-sidebar-fg-muted"
+                    : "text-muted-foreground group-hover/navrow:text-foreground",
+              )}
+            >
+              {item.icon}
+            </div>
+            <span
+              className={cn(
+                "text-xs truncate",
+                item.trailing && "flex-1",
+                activeId === item.id && isTranslucent
+                  ? "font-semibold vibrant-sidebar-fg"
+                  : "font-medium",
+              )}
+            >
+              {item.label}
+            </span>
+            {item.trailing}
           </button>
         ))}
       </div>
@@ -281,34 +411,40 @@ export function SidebarNavList({
   };
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCenter}
-      onDragEnd={handleDragEnd}
-    >
-      <SortableContext
-        items={items.map((item) => item.id)}
-        strategy={verticalListSortingStrategy}
+    <div className="shrink-0">
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
       >
-        <div className="space-y-0.5 shrink-0">
-          {items.map((item, index) => (
-            <SortableRow
-              key={item.id}
-              item={item}
-              index={index}
-              total={items.length}
-              activeId={activeId}
-              isTranslucent={isTranslucent}
-              hiddenItems={hiddenItems}
-              canReset={canReset}
-              onSelect={onSelect}
-              onShift={onShift}
-              onSetHidden={onSetHidden}
-              onReset={onReset}
-            />
-          ))}
-        </div>
-      </SortableContext>
-    </DndContext>
+        <SortableContext
+          items={items.map((item) => item.id)}
+          strategy={verticalListSortingStrategy}
+        >
+          <div className="space-y-0.5">
+            {items.map((item, index) => (
+              <SortableRow
+                key={item.id}
+                item={item}
+                index={index}
+                total={items.length}
+                activeId={activeId}
+                isTranslucent={isTranslucent}
+                canReset={canReset}
+                onSelect={onSelect}
+                onShift={onShift}
+                onSetHidden={onSetHidden}
+                onReset={onReset}
+              />
+            ))}
+          </div>
+        </SortableContext>
+      </DndContext>
+      <HiddenStrip
+        hiddenItems={hiddenItems}
+        isTranslucent={isTranslucent}
+        onShow={(id) => onSetHidden(id, false)}
+      />
+    </div>
   );
 }
