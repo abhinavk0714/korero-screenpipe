@@ -450,6 +450,7 @@
         "src/mcp_servers_api.rs",
         "src/meeting_export.rs",
         "src/people/calendar_source.rs",
+        "src/people/linking.rs",
         "src/people/messages_macos.rs",
         "src/pipe_store.rs",
         "src/pipes_api.rs",

@@ -10,5 +10,6 @@
 //! evidence that attaches to a person; they never create one.
 
 pub mod calendar_source;
+pub mod linking;
 #[cfg(target_os = "macos")]
 pub mod messages_macos;

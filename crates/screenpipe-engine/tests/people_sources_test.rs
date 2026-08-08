@@ -235,3 +235,161 @@ async fn ingest_stats_never_carry_identities() {
     assert!(!rendered.contains('@'), "stats must not carry addresses");
     assert!(!rendered.contains('+'), "stats must not carry numbers");
 }
+
+/// The full loop this feature exists to close: a calendar invite becomes people,
+/// the meeting's voices get linked, and an anonymous speaker id now resolves to
+/// a named human. Before the people graph this was impossible: naming wrote a
+/// string into `speakers.name`, which is why one person existed three times as
+/// "Louis", "Louis Beaumont" and "louis@screenpi.pe".
+#[tokio::test]
+async fn a_one_on_one_meeting_turns_an_anonymous_voice_into_a_named_person() {
+    use screenpipe_db::PersonTarget;
+    use screenpipe_engine::people::linking::{
+        decide_speaker_links, PersonCandidate, VoiceObservation,
+    };
+
+    let db = people_db().await;
+
+    // 1. The account owner is established from the signed-in account, not from
+    //    the invite. The calendar adapter deliberately refuses to infer "me".
+    let louis = screenpipe_engine::people::calendar_source::ensure_current_user(
+        &db,
+        "louis@screenpi.pe",
+        Some("Louis Beaumont"),
+    )
+    .await
+    .expect("account owner must be establishable");
+
+    // 2. The invite establishes everyone else.
+    ingest_attendees(
+        &db,
+        vec![
+            (Some("Louis"), Some("louis@screenpi.pe"), true),
+            (Some("Drew Thomas"), Some("drew@example.com"), false),
+        ],
+    )
+    .await;
+
+    let PersonResolution::Resolved { person_id: drew } = db
+        .resolve_person_by_handle(&PersonHandle::email("drew@example.com").unwrap())
+        .await
+        .unwrap()
+    else {
+        panic!("attendee must resolve");
+    };
+
+    // 3. The meeting produced two unnamed voices, one per device.
+    let decisions = decide_speaker_links(
+        &[
+            PersonCandidate {
+                person_id: louis,
+                is_current_user: true,
+            },
+            PersonCandidate {
+                person_id: drew,
+                is_current_user: false,
+            },
+        ],
+        &[
+            VoiceObservation {
+                speaker_id: 501,
+                is_input_device: true,
+                already_linked: false,
+            },
+            VoiceObservation {
+                speaker_id: 502,
+                is_input_device: false,
+                already_linked: false,
+            },
+        ],
+    );
+    assert_eq!(decisions.links.len(), 2);
+
+    // 4. Apply them.
+    for link in &decisions.links {
+        assert!(db
+            .link_person(
+                link.person_id,
+                PersonTarget::Speaker,
+                link.speaker_id,
+                link.confidence,
+                link.evidence,
+            )
+            .await
+            .unwrap());
+    }
+
+    // 5. An anonymous speaker id now resolves to a named human.
+    let voice = db
+        .person_for_target(PersonTarget::Speaker, 502)
+        .await
+        .unwrap()
+        .expect("output voice must resolve to a person");
+    assert_eq!(voice.id, drew);
+    assert_eq!(voice.display_name.as_deref(), Some("Drew Thomas"));
+
+    let mic = db
+        .person_for_target(PersonTarget::Speaker, 501)
+        .await
+        .unwrap()
+        .expect("microphone voice must resolve to the account owner");
+    assert_eq!(mic.id, louis);
+}
+
+/// A group meeting must leave the voice unnamed rather than guess, because a
+/// wrong voice binding is inherited by every future meeting.
+#[tokio::test]
+async fn a_group_meeting_leaves_the_voice_unlinked() {
+    use screenpipe_db::PersonTarget;
+    use screenpipe_engine::people::linking::{
+        decide_speaker_links, PersonCandidate, VoiceObservation,
+    };
+
+    let db = people_db().await;
+    ingest_attendees(
+        &db,
+        vec![
+            (Some("Louis"), Some("louis@screenpi.pe"), true),
+            (Some("Drew"), Some("drew@example.com"), false),
+            (Some("Alice"), Some("alice@example.com"), false),
+            (Some("Bob"), Some("bob@example.com"), false),
+        ],
+    )
+    .await;
+
+    let candidates: Vec<PersonCandidate> =
+        ["drew@example.com", "alice@example.com", "bob@example.com"]
+            .iter()
+            .map(|email| {
+                let PersonResolution::Resolved { person_id } = futures::executor::block_on(
+                    db.resolve_person_by_handle(&PersonHandle::email(email).unwrap()),
+                )
+                .unwrap() else {
+                    panic!("attendee must resolve");
+                };
+                PersonCandidate {
+                    person_id,
+                    is_current_user: false,
+                }
+            })
+            .collect();
+
+    let decisions = decide_speaker_links(
+        &candidates,
+        &[VoiceObservation {
+            speaker_id: 601,
+            is_input_device: false,
+            already_linked: false,
+        }],
+    );
+
+    assert!(decisions.links.is_empty(), "must not guess in a group");
+    assert_eq!(decisions.proposals.len(), 3, "all three are proposed");
+
+    // Nothing was written, so the voice stays anonymous until someone confirms.
+    assert!(db
+        .person_for_target(PersonTarget::Speaker, 601)
+        .await
+        .unwrap()
+        .is_none());
+}

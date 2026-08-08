@@ -103,6 +103,36 @@ pub async fn ingest_attendees<'a>(
     stats
 }
 
+/// Establish the account owner as a person.
+///
+/// The calendar adapter deliberately skips the current user: "me" must come
+/// from the signed-in account, not from whoever an invite happens to mark as
+/// the organizer. But the owner still has to exist in the graph, because they
+/// are the person every microphone voice belongs to.
+///
+/// Called with the account's own address, so the handle is authoritative and
+/// the name is recorded at `Confirmed`.
+pub async fn ensure_current_user(
+    db: &DatabaseManager,
+    account_email: &str,
+    display_name: Option<&str>,
+) -> Option<i64> {
+    let handle = PersonHandle::email(account_email)?;
+    let name = display_name
+        .map(str::trim)
+        .filter(|n| !n.is_empty() && !n.contains('@'));
+    match db
+        .upsert_person_by_handle(&handle, "account", name, PersonConfidence::Confirmed)
+        .await
+    {
+        Ok(person_id) => Some(person_id),
+        Err(error) => {
+            debug!("could not establish current user as a person: {error}");
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
