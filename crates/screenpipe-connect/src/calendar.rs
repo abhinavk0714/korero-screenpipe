@@ -31,6 +31,42 @@ use tracing::{info, warn};
 /// access. Once we've seen a grant, we trust it and let the query run.
 static ACCESS_GRANTED_THIS_SESSION: AtomicBool = AtomicBool::new(false);
 
+/// One invited participant, with the addressable handle EventKit exposes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CalendarParticipant {
+    pub name: Option<String>,
+    /// Normalized lowercase email, parsed from the participant's `mailto:` URL.
+    /// `None` when the calendar provider exposes no address.
+    pub email: Option<String>,
+    pub is_current_user: bool,
+}
+
+/// Extract an email from an EventKit participant URL.
+///
+/// EventKit hands back `mailto:someone@example.com`. Anything else (a room
+/// resource, an `https:` conferencing link, a malformed value) yields `None`
+/// rather than a guess, because this feeds identity joins.
+pub(crate) fn email_from_participant_url(url: &str) -> Option<String> {
+    let rest = url
+        .trim()
+        .strip_prefix("mailto:")
+        .or_else(|| url.trim().strip_prefix("MAILTO:"))?;
+    // Strip any ?subject=... style suffix EventKit may carry through.
+    let address = rest.split('?').next()?.trim();
+    if address.is_empty()
+        || address.len() > 254
+        || address.contains(char::is_whitespace)
+        || address.matches('@').count() != 1
+    {
+        return None;
+    }
+    let (local, domain) = address.split_once('@')?;
+    if local.is_empty() || domain.is_empty() || !domain.contains('.') {
+        return None;
+    }
+    Some(address.to_ascii_lowercase())
+}
+
 /// A calendar event with attendee information.
 /// Times are stored in both UTC (for comparison) and Local (for display).
 #[derive(Debug, Clone)]
@@ -46,6 +82,13 @@ pub struct CalendarEvent {
     /// Local time — use for display formatting.
     pub end_local: DateTime<Local>,
     pub attendees: Vec<String>,
+    /// Attendees with their addressable handle preserved.
+    ///
+    /// `attendees` keeps only display names, which are deliberately never valid
+    /// identity join keys. EventKit does expose each participant's `mailto:`
+    /// URL, so this carries it through for the people graph. Kept as a separate
+    /// field so existing name-based consumers are untouched.
+    pub participants: Vec<CalendarParticipant>,
     pub location: Option<String>,
     pub meeting_url: Option<String>,
     pub calendar_name: String,
@@ -230,7 +273,20 @@ impl ScreenpipeCalendar {
                     end: event.end_date.with_timezone(&Utc),
                     start_local: event.start_date,
                     end_local: event.end_date,
-                    attendees: event.attendees.into_iter().filter_map(|a| a.name).collect(),
+                    attendees: event
+                        .attendees
+                        .iter()
+                        .filter_map(|a| a.name.clone())
+                        .collect(),
+                    participants: event
+                        .attendees
+                        .into_iter()
+                        .map(|a| CalendarParticipant {
+                            name: a.name,
+                            email: a.URL.as_deref().and_then(email_from_participant_url),
+                            is_current_user: a.is_current_user,
+                        })
+                        .collect(),
                     location: event.location,
                     meeting_url,
                     calendar_name: event.calendar_title.unwrap_or_default(),
@@ -362,5 +418,48 @@ mod tests {
             Some("https://acme.zoom.us/j/123456789?pwd=x".to_string())
         );
         assert!(extract_meeting_url(Some("office")).is_none());
+    }
+}
+
+#[cfg(test)]
+mod participant_tests {
+    use super::email_from_participant_url;
+
+    #[test]
+    fn extracts_lowercased_mailto_addresses() {
+        assert_eq!(
+            email_from_participant_url("mailto:Alice@Example.COM"),
+            Some("alice@example.com".to_string())
+        );
+        assert_eq!(
+            email_from_participant_url("  mailto:bob@example.com  "),
+            Some("bob@example.com".to_string())
+        );
+        assert_eq!(
+            email_from_participant_url("mailto:carol@example.com?subject=hi"),
+            Some("carol@example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_everything_that_is_not_an_address() {
+        // Room resources, conferencing links and malformed values must abstain
+        // rather than become identity join keys.
+        for bad in [
+            "https://meet.example.com/abc",
+            "mailto:",
+            "mailto:not-an-email",
+            "mailto:a@b@c.com",
+            "mailto:ali ce@example.com",
+            "mailto:@example.com",
+            "mailto:alice@example",
+            "conference-room-4",
+            "",
+        ] {
+            assert!(
+                email_from_participant_url(bad).is_none(),
+                "{bad} must not yield a handle"
+            );
+        }
     }
 }

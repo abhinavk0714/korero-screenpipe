@@ -449,6 +449,8 @@
         "src/live_views.rs",
         "src/mcp_servers_api.rs",
         "src/meeting_export.rs",
+        "src/people/calendar_source.rs",
+        "src/people/messages_macos.rs",
         "src/pipe_store.rs",
         "src/pipes_api.rs",
         "src/privacy_filter.rs",
@@ -457,7 +459,8 @@
         "src/sync_api.rs",
         "src/sync_provider.rs",
         "src/ui_recorder.rs",
-        "src/workflow_classifier.rs"
+        "src/workflow_classifier.rs",
+        "tests/people_sources_test.rs"
       ],
       "platforms": [
         "windows",
