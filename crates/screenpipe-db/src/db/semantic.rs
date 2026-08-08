@@ -568,8 +568,13 @@ impl DatabaseManager {
         self.get_semantic_actor(id).await
     }
 
-    /// Rename the canonical display identity without changing immutable parser
-    /// observations or the aliases used for future heuristic assignment.
+    /// Rename this label without changing immutable parser observations or the
+    /// aliases used for future heuristic assignment.
+    ///
+    /// When the actor is linked to a person, the rename is a statement about
+    /// that human, so it is applied to the person at `Confirmed` confidence and
+    /// the cached label follows. Otherwise it renames the label alone. This is
+    /// what keeps one naming semantics after the actor merge was removed.
     pub async fn update_semantic_actor_name(
         &self,
         actor_id: i64,
@@ -583,66 +588,74 @@ impl DatabaseManager {
                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                WHERE id = ?2"#,
         )
-        .bind(name)
+        .bind(&name)
         .bind(actor_id)
         .execute(&mut **tx.conn())
         .await?;
         if updated.rows_affected() != 1 {
             return Err(sqlx::Error::RowNotFound);
         }
+        let person_id: Option<(Option<i64>,)> =
+            sqlx::query_as("SELECT person_id FROM semantic_actors WHERE id = ?1")
+                .bind(actor_id)
+                .fetch_optional(&mut **tx.conn())
+                .await?;
+        if let Some((Some(person_id),)) = person_id {
+            // A user renaming a linked actor is naming the human, not the cache.
+            sqlx::query(
+                r#"UPDATE people
+                   SET display_name = ?1,
+                       display_name_confidence = 'confirmed',
+                       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                   WHERE id = ?2"#,
+            )
+            .bind(&name)
+            .bind(person_id)
+            .execute(&mut **tx.conn())
+            .await?;
+        }
         tx.commit().await?;
         self.get_semantic_actor(actor_id).await
     }
 
-    /// Merge one provisional actor into another. Moving aliases is what makes
-    /// the correction durable: future observations of either heuristic label
-    /// resolve to the retained actor.
-    pub async fn merge_semantic_actors(
+    /// Point this label cache entry at a canonical person.
+    ///
+    /// This replaces the old actor-level merge. An actor is the label one app
+    /// showed for someone; deciding that two labels are the same human is a
+    /// people-graph decision, made against exact handles and reversible there.
+    /// Passing `None` unlinks without destroying the actor or its aliases.
+    pub async fn link_semantic_actor_to_person(
         &self,
-        actor_to_keep_id: i64,
-        actor_to_merge_id: i64,
+        actor_id: i64,
+        person_id: Option<i64>,
     ) -> Result<SemanticActor, sqlx::Error> {
-        if actor_to_keep_id == actor_to_merge_id {
-            return Err(sqlx::Error::Protocol(
-                "semantic actor merge requires two different ids".to_string(),
-            ));
-        }
         let mut tx = self.begin_immediate_with_retry().await?;
-        let existing: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM semantic_actors WHERE id IN (?1, ?2)")
-                .bind(actor_to_keep_id)
-                .bind(actor_to_merge_id)
-                .fetch_one(&mut **tx.conn())
-                .await?;
-        if existing != 2 {
+        let updated = sqlx::query(
+            r#"UPDATE semantic_actors
+               SET person_id = ?1,
+                   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+               WHERE id = ?2"#,
+        )
+        .bind(person_id)
+        .bind(actor_id)
+        .execute(&mut **tx.conn())
+        .await?;
+        if updated.rows_affected() == 0 {
             tx.rollback().await?;
             return Err(sqlx::Error::RowNotFound);
         }
-
-        sqlx::query("UPDATE semantic_actor_aliases SET actor_id = ?1 WHERE actor_id = ?2")
-            .bind(actor_to_keep_id)
-            .bind(actor_to_merge_id)
-            .execute(&mut **tx.conn())
-            .await?;
-        sqlx::query("UPDATE semantic_item_actors SET actor_id = ?1 WHERE actor_id = ?2")
-            .bind(actor_to_keep_id)
-            .bind(actor_to_merge_id)
-            .execute(&mut **tx.conn())
-            .await?;
-        sqlx::query("DELETE FROM semantic_actors WHERE id = ?1")
-            .bind(actor_to_merge_id)
-            .execute(&mut **tx.conn())
-            .await?;
-        sqlx::query(
-            r#"UPDATE semantic_actors
-               SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-               WHERE id = ?1"#,
-        )
-        .bind(actor_to_keep_id)
-        .execute(&mut **tx.conn())
-        .await?;
         tx.commit().await?;
-        self.get_semantic_actor(actor_to_keep_id).await
+        self.get_semantic_actor(actor_id).await
+    }
+
+    /// The person this actor resolves to, if any.
+    pub async fn semantic_actor_person(&self, actor_id: i64) -> Result<Option<i64>, sqlx::Error> {
+        let row: Option<(Option<i64>,)> =
+            sqlx::query_as("SELECT person_id FROM semantic_actors WHERE id = ?1")
+                .bind(actor_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.and_then(|(person_id,)| person_id))
     }
 
     /// Correct one immutable semantic item's actor assignment. The observed

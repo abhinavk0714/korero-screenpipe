@@ -447,13 +447,6 @@ async fn semantic_actors_are_heuristic_correctable_and_durable() {
     assert_eq!(bob_contexts.len(), 1);
     assert_eq!(bob_contexts[0].frame_id, second_frame);
 
-    let merged = db
-        .merge_semantic_actors(alice_id, bob.id)
-        .await
-        .expect("merge corrected actor");
-    assert_eq!(merged.id, alice_id);
-    assert_eq!(merged.item_count, 2);
-
     let discord_frame = insert_frame(&db, now - ChronoDuration::minutes(1)).await;
     db.store_semantic_projection(
         discord_frame,
@@ -472,11 +465,24 @@ async fn semantic_actors_are_heuristic_correctable_and_durable() {
         .expect("discord context exists");
     let discord_actor_id = discord_context.actors[0].actor_id;
     assert_ne!(discord_actor_id, alice_id);
-    let merged = db
-        .merge_semantic_actors(alice_id, discord_actor_id)
+    // Cross-source unification without deleting anything: move the Discord
+    // alias onto the retained actor. The old actor row survives, which is the
+    // whole point of demoting actors to a label cache.
+    let discord_alias_to_move = db
+        .get_semantic_actor(discord_actor_id)
         .await
-        .expect("merge cross-source aliases");
+        .expect("read discord actor")
+        .aliases[0]
+        .id;
+    let merged = db
+        .reassign_semantic_actor_alias(discord_alias_to_move, alice_id)
+        .await
+        .expect("move cross-source alias");
     assert_eq!(merged.aliases.len(), 2);
+    assert!(
+        db.get_semantic_actor(discord_actor_id).await.is_ok(),
+        "the other actor must survive: label caches are not destroyed by a correction"
+    );
 
     let future_discord_frame = insert_frame(&db, now).await;
     db.store_semantic_projection(
@@ -562,7 +568,10 @@ async fn semantic_actors_are_heuristic_correctable_and_durable() {
         .await
         .expect("read explicitly corrected slack context")
         .expect("explicitly corrected slack context exists");
-    assert_eq!(explicitly_corrected_slack.actors[0].actor_id, alice_id);
+    // The user's explicit reassignment to Bob stands. It used to be folded away
+    // by the destructive actor merge; with that gone, an explicit correction is
+    // no longer silently undone by a later identity claim.
+    assert_eq!(explicitly_corrected_slack.actors[0].actor_id, bob.id);
     assert_eq!(
         explicitly_corrected_slack.actors[0].assignment_source,
         "reconciled"

@@ -410,7 +410,10 @@ Actor reconciliation uses the same local API shape as speaker correction:
 - `GET /semantic/actors/search?q=...` searches canonical and observed names.
 - `POST /semantic/actors/create` creates an intentionally separate identity.
 - `POST /semantic/actors/update` renames a canonical actor.
-- `POST /semantic/actors/merge` merges identities and their future aliases.
+- `POST /semantic/actors/link-person` points an app label at a canonical person (`null` unlinks).
+  Actors are a per-app label cache; identity lives in `people`, where merges are soft and reversible.
+  To unify a source's future observations onto one label, move its alias with
+  `POST /semantic/actors/aliases/reassign`.
 - `POST /semantic/actors/reassign` corrects one canonical semantic item by ID.
 - `POST /semantic/actors/aliases/reassign` moves one observed alias and its
   heuristic history, so a reconciliation affects future captures or can split

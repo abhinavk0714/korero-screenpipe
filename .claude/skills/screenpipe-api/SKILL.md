@@ -470,8 +470,11 @@ Results contain compact corrected `text`, typed `items`, parser provenance, and
 a separate `actors` array for correctable identities. Filter one frame with
 `frame_id` or one resolved identity with `actor_id`. Actor edits remain explicit:
 `GET /semantic/actors/search`, then `POST /semantic/actors/create`, `update`,
-`merge`, `reassign`, or `aliases/reassign`. Never merge actors by display name
-alone; the parser label is observed evidence, while the actor record is mutable.
+`reassign`, `aliases/reassign`, or `link-person`. Never join actors by display
+name alone; the parser label is observed evidence, while the actor record is a
+mutable per-app label cache. Deciding that two labels are the same human belongs
+to the people graph, matched on exact handles, so use `link-person` to point an
+actor at a person instead of combining actors directly.
 
 ---
 

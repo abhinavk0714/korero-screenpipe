@@ -314,7 +314,7 @@ that a user or Pipe can correct without overwriting source evidence.
 - `GET /search?content_type=parsed&actor_id=12&limit=20` — parsed app data assigned to an actor
 - `POST /semantic/actors/create` `{"name":"Alice Smith"}` — create a separate identity
 - `POST /semantic/actors/update` `{"id":12,"name":"Alice Smith"}` — rename
-- `POST /semantic/actors/merge` `{"actor_to_keep_id":12,"actor_to_merge_id":31}` — merge current and future aliases
+- `POST /semantic/actors/link-person` `{"actor_id":12,"person_id":7}` — point an app label at a person (`null` unlinks). Deciding two labels are the same human is a people-graph decision; actors are a per-app label cache.
 - `POST /semantic/actors/reassign` `{"item_id":902,"actor_id":12}` — correct one semantic item
 - `POST /semantic/actors/aliases/reassign` `{"alias_id":44,"actor_id":12}` — move one alias, its heuristic history, and future observations
 

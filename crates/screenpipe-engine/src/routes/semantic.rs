@@ -37,10 +37,15 @@ pub(crate) struct UpdateSemanticActorRequest {
     name: String,
 }
 
+/// Point a label-cache actor at a canonical person, or unlink it with `null`.
+///
+/// This replaced `MergeSemanticActorsRequest`. Deciding that two labels are the
+/// same human belongs to the people graph, where it is matched on exact handles
+/// and is reversible.
 #[derive(Debug, Deserialize, OaSchema)]
-pub(crate) struct MergeSemanticActorsRequest {
-    actor_to_keep_id: i64,
-    actor_to_merge_id: i64,
+pub(crate) struct LinkSemanticActorPersonRequest {
+    actor_id: i64,
+    person_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, OaSchema)]
@@ -111,21 +116,20 @@ pub(crate) async fn update_semantic_actor(
 }
 
 #[oasgen]
-pub(crate) async fn merge_semantic_actors(
+pub(crate) async fn link_semantic_actor_person(
     State(state): State<Arc<AppState>>,
-    Json(payload): Json<MergeSemanticActorsRequest>,
+    Json(payload): Json<LinkSemanticActorPersonRequest>,
 ) -> Result<JsonResponse<SemanticActor>, (StatusCode, JsonResponse<Value>)> {
-    validate_positive_id(payload.actor_to_keep_id, "actor_to_keep_id")?;
-    validate_positive_id(payload.actor_to_merge_id, "actor_to_merge_id")?;
-    if payload.actor_to_keep_id == payload.actor_to_merge_id {
-        return Err(bad_request("actor ids must be different"));
+    validate_positive_id(payload.actor_id, "actor_id")?;
+    if let Some(person_id) = payload.person_id {
+        validate_positive_id(person_id, "person_id")?;
     }
     state
         .db
-        .merge_semantic_actors(payload.actor_to_keep_id, payload.actor_to_merge_id)
+        .link_semantic_actor_to_person(payload.actor_id, payload.person_id)
         .await
         .map(JsonResponse)
-        .map_err(|error| semantic_actor_error("merge", error))
+        .map_err(|error| semantic_actor_error("link", error))
 }
 
 #[oasgen]

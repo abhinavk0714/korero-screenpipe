@@ -59,7 +59,7 @@ use crate::{
         retranscribe::retranscribe_meeting_handler,
         search::{keyword_search_handler, search},
         semantic::{
-            create_semantic_actor, merge_semantic_actors, reassign_semantic_actor,
+            create_semantic_actor, link_semantic_actor_person, reassign_semantic_actor,
             reassign_semantic_actor_alias, search_semantic_actors, update_semantic_actor,
         },
         speakers::{
@@ -882,7 +882,7 @@ impl SCServer {
             .get("/semantic/actors/search", search_semantic_actors)
             .post("/semantic/actors/create", create_semantic_actor)
             .post("/semantic/actors/update", update_semantic_actor)
-            .post("/semantic/actors/merge", merge_semantic_actors)
+            .post("/semantic/actors/link-person", link_semantic_actor_person)
             .post("/semantic/actors/reassign", reassign_semantic_actor)
             .post(
                 "/semantic/actors/aliases/reassign",

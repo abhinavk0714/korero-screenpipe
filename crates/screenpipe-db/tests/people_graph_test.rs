@@ -382,3 +382,139 @@ async fn repeated_observation_is_idempotent() {
     ids.dedup();
     assert_eq!(ids.len(), 1, "repeated observation must be idempotent");
 }
+
+/// `semantic_actors` is now a per-app label cache that points at a person.
+/// Two app labels for the same human converge by both pointing at one person,
+/// not by deleting one of them the way the old actor merge did.
+#[tokio::test]
+async fn app_labels_converge_on_a_person_without_destroying_either() {
+    let db = test_db().await;
+
+    let slack_label = db
+        .create_semantic_actor("A. Smith")
+        .await
+        .expect("slack label");
+    let discord_label = db
+        .create_semantic_actor("alice")
+        .await
+        .expect("discord label");
+
+    let person = db
+        .upsert_person_by_handle(
+            &PersonHandle::email("alice@example.com").unwrap(),
+            "calendar",
+            Some("Alice Smith"),
+            PersonConfidence::Strong,
+        )
+        .await
+        .unwrap();
+
+    db.link_semantic_actor_to_person(slack_label.id, Some(person))
+        .await
+        .expect("link slack label");
+    db.link_semantic_actor_to_person(discord_label.id, Some(person))
+        .await
+        .expect("link discord label");
+
+    assert_eq!(
+        db.semantic_actor_person(slack_label.id).await.unwrap(),
+        Some(person)
+    );
+    assert_eq!(
+        db.semantic_actor_person(discord_label.id).await.unwrap(),
+        Some(person)
+    );
+
+    // Both labels still exist. The old merge deleted the losing row, which made
+    // the correction irreversible and lost what each app actually displayed.
+    assert!(db.get_semantic_actor(slack_label.id).await.is_ok());
+    assert!(db.get_semantic_actor(discord_label.id).await.is_ok());
+}
+
+/// Renaming through a linked label names the human, so there is one naming
+/// semantics rather than a per-app label drifting away from the person.
+#[tokio::test]
+async fn renaming_a_linked_label_names_the_person() {
+    let db = test_db().await;
+    let label = db.create_semantic_actor("alice").await.expect("label");
+    let person = db
+        .upsert_person_by_handle(
+            &PersonHandle::email("alice@example.com").unwrap(),
+            "calendar",
+            Some("alice"),
+            PersonConfidence::Weak,
+        )
+        .await
+        .unwrap();
+    db.link_semantic_actor_to_person(label.id, Some(person))
+        .await
+        .expect("link");
+
+    db.update_semantic_actor_name(label.id, "Alice Smith")
+        .await
+        .expect("rename through the label");
+
+    // The person now carries the corrected name at confirmed confidence, so a
+    // later weak heuristic cannot undo the user's correction.
+    let overwritten = db
+        .set_display_name_if_better(person, "alice", PersonConfidence::Weak)
+        .await
+        .unwrap();
+    assert!(!overwritten, "a heuristic must not undo the rename");
+}
+
+/// An unlinked label must not touch anyone: renaming it is a label edit only.
+#[tokio::test]
+async fn renaming_an_unlinked_label_touches_no_person() {
+    let db = test_db().await;
+    let label = db.create_semantic_actor("[contact]").await.expect("label");
+    let person = db
+        .upsert_person_by_handle(
+            &PersonHandle::email("alice@example.com").unwrap(),
+            "calendar",
+            Some("Alice Smith"),
+            PersonConfidence::Confirmed,
+        )
+        .await
+        .unwrap();
+
+    db.update_semantic_actor_name(label.id, "Someone Else")
+        .await
+        .expect("rename unlinked label");
+
+    assert_eq!(db.semantic_actor_person(label.id).await.unwrap(), None);
+    // The unrelated person is untouched.
+    assert!(!db
+        .set_display_name_if_better(person, "Alice Smith", PersonConfidence::Confirmed)
+        .await
+        .unwrap());
+}
+
+/// Unlinking is non-destructive, so a wrong claim is reversible.
+#[tokio::test]
+async fn unlinking_a_label_is_reversible() {
+    let db = test_db().await;
+    let label = db.create_semantic_actor("alice").await.expect("label");
+    let person = db
+        .upsert_person_by_handle(
+            &PersonHandle::email("alice@example.com").unwrap(),
+            "calendar",
+            None,
+            PersonConfidence::Weak,
+        )
+        .await
+        .unwrap();
+
+    db.link_semantic_actor_to_person(label.id, Some(person))
+        .await
+        .expect("link");
+    db.link_semantic_actor_to_person(label.id, None)
+        .await
+        .expect("unlink");
+
+    assert_eq!(db.semantic_actor_person(label.id).await.unwrap(), None);
+    assert!(
+        db.get_semantic_actor(label.id).await.is_ok(),
+        "unlinking must not destroy the label"
+    );
+}
