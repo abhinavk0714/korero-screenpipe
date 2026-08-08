@@ -16,6 +16,7 @@ use chrono::{DateTime, Utc};
 use image::{DynamicImage, GenericImageView};
 use once_cell::sync::Lazy;
 use regex::Regex;
+use screenpipe_a11y::events::{EventData, UiEvent};
 use screenpipe_a11y::tree::{create_tree_walker, TreeSnapshot, TreeWalkerConfig};
 use screenpipe_core::pii_removal::remove_pii;
 use screenpipe_db::DatabaseManager;
@@ -26,8 +27,7 @@ use screenpipe_screen::text_regions::{
 use screenpipe_screen::OcrGateDecision;
 
 use crate::ocr_gate::{OcrDecision, OcrGate};
-use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use tokio::sync::Semaphore;
 use tracing::{debug, warn};
@@ -84,6 +84,165 @@ pub struct FocusedWindowBounds {
     pub y: i32,
     pub width: u32,
     pub height: u32,
+}
+
+/// Native app/window focus observed by the UI event stream.
+///
+/// The generation advances for every app or window focus notification, even
+/// when the reported strings are unchanged. A capture can therefore prove
+/// that focus did not move while pixels and AX were sampled without relying
+/// on title equality alone.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NativeFocusSnapshot {
+    pub generation: u64,
+    pub app_name: Option<String>,
+    pub window_name: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct NativeFocusState {
+    generation: u64,
+    app_name: Option<String>,
+    window_name: Option<String>,
+}
+
+/// Shared, low-cost focus epoch used by every capture loop fed by one native
+/// UI event stream.
+#[derive(Clone, Debug, Default)]
+pub struct FocusEpoch {
+    inner: Arc<Mutex<NativeFocusState>>,
+}
+
+impl FocusEpoch {
+    pub fn observe(&self, event: &UiEvent) {
+        let Ok(mut state) = self.inner.lock() else {
+            return;
+        };
+        match &event.data {
+            EventData::AppSwitch { name, .. } => {
+                state.generation = state.generation.wrapping_add(1);
+                state.app_name = Some(name.clone());
+                // The following WindowFocus event will fill this. Retaining
+                // the previous app's title would manufacture false coherence.
+                state.window_name = None;
+            }
+            EventData::WindowFocus { app, title } => {
+                state.generation = state.generation.wrapping_add(1);
+                state.app_name = Some(app.clone());
+                state.window_name = title.clone();
+            }
+            _ => {}
+        }
+    }
+
+    pub fn snapshot(&self) -> NativeFocusSnapshot {
+        self.inner
+            .lock()
+            .map(|state| NativeFocusSnapshot {
+                generation: state.generation,
+                app_name: state.app_name.clone(),
+                window_name: state.window_name.clone(),
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// Monitor identity from the same focus source used by capture scheduling.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CaptureMonitorIdentity {
+    pub id: u32,
+    pub stable_id: Option<String>,
+}
+
+impl CaptureMonitorIdentity {
+    pub fn matches(&self, other: &Self) -> bool {
+        match (&self.stable_id, &other.stable_id) {
+            (Some(a), Some(b)) if !a.is_empty() && a == b => true,
+            (Some(a), Some(b)) if !a.is_empty() && !b.is_empty() => false,
+            _ => self.id == other.id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CaptureFocusSnapshot {
+    pub native: NativeFocusSnapshot,
+    pub monitor: Option<CaptureMonitorIdentity>,
+}
+
+/// One measured screenshot/AX bundle. These timestamps deliberately describe
+/// separate operations; no supported desktop OS offers an atomic transaction
+/// spanning pixels and accessibility state.
+#[derive(Clone, Debug)]
+pub struct CaptureBundleObservation {
+    pub screenshot_captured_at: DateTime<Utc>,
+    pub ax_walk_started_at: DateTime<Utc>,
+    pub ax_walk_ended_at: DateTime<Utc>,
+    pub focus_before_screenshot: CaptureFocusSnapshot,
+    pub focus_after_ax: CaptureFocusSnapshot,
+    pub capture_monitor: CaptureMonitorIdentity,
+    pub ax_identity: Option<(String, String)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AxCoherenceDecision {
+    Accept,
+    RejectFocusChanged,
+    RejectMonitorUnknown,
+    RejectMonitorChanged,
+    RejectWrongMonitor,
+}
+
+impl CaptureBundleObservation {
+    pub fn decision(&self) -> AxCoherenceDecision {
+        if self.focus_before_screenshot.native.generation != self.focus_after_ax.native.generation {
+            return AxCoherenceDecision::RejectFocusChanged;
+        }
+        let (Some(before), Some(after)) = (
+            self.focus_before_screenshot.monitor.as_ref(),
+            self.focus_after_ax.monitor.as_ref(),
+        ) else {
+            return AxCoherenceDecision::RejectMonitorUnknown;
+        };
+        if !before.matches(after) {
+            return AxCoherenceDecision::RejectMonitorChanged;
+        }
+        if !before.matches(&self.capture_monitor) {
+            return AxCoherenceDecision::RejectWrongMonitor;
+        }
+        AxCoherenceDecision::Accept
+    }
+
+    pub fn screenshot_to_ax_start_ms(&self) -> i64 {
+        self.ax_walk_started_at
+            .signed_duration_since(self.screenshot_captured_at)
+            .num_milliseconds()
+    }
+
+    pub fn ax_walk_duration_ms(&self) -> u64 {
+        self.ax_walk_ended_at
+            .signed_duration_since(self.ax_walk_started_at)
+            .num_milliseconds()
+            .max(0) as u64
+    }
+
+    /// Compare every native identity field present in both sources. `None`
+    /// means the screenshot-side event stream had no comparable field yet.
+    pub fn native_identity_matches_ax(&self) -> Option<bool> {
+        let (ax_app, ax_window) = self.ax_identity.as_ref()?;
+        let native = &self.focus_before_screenshot.native;
+        let mut compared = false;
+        let mut matches = true;
+        if let Some(app) = native.app_name.as_deref() {
+            compared = true;
+            matches &= app.trim().eq_ignore_ascii_case(ax_app.trim());
+        }
+        if let Some(window) = native.window_name.as_deref() {
+            compared = true;
+            matches &= window.trim().eq_ignore_ascii_case(ax_window.trim());
+        }
+        compared.then_some(matches)
+    }
 }
 
 /// Reject window crops smaller than this on either side — resize/move races
@@ -1039,6 +1198,117 @@ mod tests {
 
     fn test_image() -> Arc<DynamicImage> {
         Arc::new(DynamicImage::ImageRgb8(RgbImage::new(100, 100)))
+    }
+
+    fn focus_event(data: EventData) -> UiEvent {
+        UiEvent {
+            id: None,
+            timestamp: Utc::now(),
+            relative_ms: 0,
+            data,
+            app_name: None,
+            window_title: None,
+            browser_url: None,
+            element: None,
+            frame_id: None,
+        }
+    }
+
+    fn observation(
+        before: CaptureFocusSnapshot,
+        after: CaptureFocusSnapshot,
+    ) -> CaptureBundleObservation {
+        let screenshot_captured_at = Utc::now();
+        CaptureBundleObservation {
+            screenshot_captured_at,
+            ax_walk_started_at: screenshot_captured_at + chrono::Duration::milliseconds(4),
+            ax_walk_ended_at: screenshot_captured_at + chrono::Duration::milliseconds(24),
+            focus_before_screenshot: before,
+            focus_after_ax: after,
+            capture_monitor: CaptureMonitorIdentity {
+                id: 7,
+                stable_id: Some("display-7".into()),
+            },
+            ax_identity: Some(("Code".into(), "main.rs".into())),
+        }
+    }
+
+    #[test]
+    fn focus_epoch_tracks_native_app_and_window_changes() {
+        let epoch = FocusEpoch::default();
+        epoch.observe(&focus_event(EventData::AppSwitch {
+            name: "Code".into(),
+            pid: 42,
+        }));
+        let app = epoch.snapshot();
+        assert_eq!(app.generation, 1);
+        assert_eq!(app.app_name.as_deref(), Some("Code"));
+        assert_eq!(app.window_name, None);
+
+        epoch.observe(&focus_event(EventData::WindowFocus {
+            app: "Code".into(),
+            title: Some("main.rs".into()),
+        }));
+        let window = epoch.snapshot();
+        assert_eq!(window.generation, 2);
+        assert_eq!(window.window_name.as_deref(), Some("main.rs"));
+    }
+
+    #[test]
+    fn coherent_bundle_requires_stable_generation_and_monitor() {
+        let monitor = Some(CaptureMonitorIdentity {
+            id: 7,
+            stable_id: Some("display-7".into()),
+        });
+        let native = NativeFocusSnapshot {
+            generation: 9,
+            app_name: Some("Code".into()),
+            window_name: Some("main.rs".into()),
+        };
+        let accepted = observation(
+            CaptureFocusSnapshot {
+                native: native.clone(),
+                monitor: monitor.clone(),
+            },
+            CaptureFocusSnapshot {
+                native: native.clone(),
+                monitor: monitor.clone(),
+            },
+        );
+        assert_eq!(accepted.decision(), AxCoherenceDecision::Accept);
+        assert_eq!(accepted.screenshot_to_ax_start_ms(), 4);
+        assert_eq!(accepted.ax_walk_duration_ms(), 20);
+        assert_eq!(accepted.native_identity_matches_ax(), Some(true));
+
+        let mut changed = native;
+        changed.generation += 1;
+        let rejected = observation(
+            accepted.focus_before_screenshot.clone(),
+            CaptureFocusSnapshot {
+                native: changed,
+                monitor,
+            },
+        );
+        assert_eq!(rejected.decision(), AxCoherenceDecision::RejectFocusChanged);
+    }
+
+    #[test]
+    fn unknown_monitor_rejects_ax_pairing() {
+        let native = NativeFocusSnapshot::default();
+        let rejected = observation(
+            CaptureFocusSnapshot {
+                native: native.clone(),
+                monitor: None,
+            },
+            CaptureFocusSnapshot {
+                native,
+                monitor: None,
+            },
+        );
+        assert_eq!(
+            rejected.decision(),
+            AxCoherenceDecision::RejectMonitorUnknown
+        );
     }
 
     #[tokio::test]

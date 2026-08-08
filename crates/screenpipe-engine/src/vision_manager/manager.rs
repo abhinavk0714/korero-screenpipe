@@ -18,7 +18,7 @@ use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
-use crate::event_driven_capture::{CaptureTriggerMsg, TriggerSender};
+use crate::event_driven_capture::{trigger_channel, TriggerSender};
 use crate::focus_aware_controller::FocusAwareController;
 use crate::frame_linker_actor::{linker_channel, spawn_frame_linker, LinkerSender};
 use crate::high_fps_controller::HighFpsController;
@@ -174,9 +174,7 @@ impl VisionManager {
         vision_handle: Handle,
     ) -> Self {
         // Single broadcast channel shared across all monitors + UI recorder.
-        let (trigger_tx, _rx) = tokio::sync::broadcast::channel::<CaptureTriggerMsg>(
-            crate::event_driven_capture::TRIGGER_CHANNEL_BUFFER,
-        );
+        let (trigger_tx, _rx) = trigger_channel();
 
         // Frame-linker actor: pairs UI events with the frames they
         // caused us to capture. Single shared instance across all

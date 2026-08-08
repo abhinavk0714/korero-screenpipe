@@ -18,7 +18,10 @@ use chrono::Utc;
 use screenpipe_a11y::tree::TreeWalkerConfig;
 use screenpipe_a11y::ActivityFeed;
 use screenpipe_capture::ocr_gate::OcrGate;
-use screenpipe_capture::paired_capture::{paired_capture, CaptureContext, PairedCaptureResult};
+use screenpipe_capture::paired_capture::{
+    paired_capture, AxCoherenceDecision, CaptureBundleObservation, CaptureContext,
+    CaptureFocusSnapshot, CaptureMonitorIdentity, FocusEpoch, PairedCaptureResult,
+};
 use screenpipe_core::window_pattern::{self, WindowPattern};
 use screenpipe_db::DatabaseManager;
 use screenpipe_screen::capture_screenshot_by_window::WindowFilters;
@@ -671,10 +674,61 @@ impl EventDrivenCapture {
 
 /// Channel-based trigger sender for external event sources (UI events).
 ///
-/// Uses `broadcast` so multiple receivers (one per monitor) can subscribe
-/// to a single sender shared with the UI recorder.
-pub type TriggerSender = broadcast::Sender<CaptureTriggerMsg>;
-pub type TriggerReceiver = broadcast::Receiver<CaptureTriggerMsg>;
+/// The focus epoch is shared with every receiver so a capture can compare the
+/// exact native focus generation before screenshot acquisition and after the
+/// AX walk without another OS query.
+#[derive(Clone)]
+pub struct TriggerSender {
+    tx: broadcast::Sender<CaptureTriggerMsg>,
+    focus_epoch: FocusEpoch,
+}
+
+pub struct TriggerReceiver {
+    rx: broadcast::Receiver<CaptureTriggerMsg>,
+    focus_epoch: FocusEpoch,
+}
+
+impl TriggerSender {
+    pub fn observe_focus(&self, event: &screenpipe_a11y::events::UiEvent) {
+        self.focus_epoch.observe(event);
+    }
+
+    pub fn send(
+        &self,
+        msg: CaptureTriggerMsg,
+    ) -> std::result::Result<usize, broadcast::error::SendError<CaptureTriggerMsg>> {
+        self.tx.send(msg)
+    }
+
+    pub fn subscribe(&self) -> TriggerReceiver {
+        TriggerReceiver {
+            rx: self.tx.subscribe(),
+            focus_epoch: self.focus_epoch.clone(),
+        }
+    }
+
+    pub fn receiver_count(&self) -> usize {
+        self.tx.receiver_count()
+    }
+}
+
+impl TriggerReceiver {
+    pub async fn recv(
+        &mut self,
+    ) -> std::result::Result<CaptureTriggerMsg, broadcast::error::RecvError> {
+        self.rx.recv().await
+    }
+
+    pub fn try_recv(
+        &mut self,
+    ) -> std::result::Result<CaptureTriggerMsg, broadcast::error::TryRecvError> {
+        self.rx.try_recv()
+    }
+
+    pub fn focus_epoch(&self) -> FocusEpoch {
+        self.focus_epoch.clone()
+    }
+}
 
 /// Broadcast buffer for capture triggers. Sized to absorb a typing
 /// burst (Arc/Claude routinely emit 100+ Text/Click events in <200ms)
@@ -687,7 +741,14 @@ pub const TRIGGER_CHANNEL_BUFFER: usize = 4096;
 /// Create a trigger channel pair.
 pub fn trigger_channel() -> (TriggerSender, TriggerReceiver) {
     let (tx, rx) = broadcast::channel(TRIGGER_CHANNEL_BUFFER);
-    (tx, rx)
+    let focus_epoch = FocusEpoch::default();
+    (
+        TriggerSender {
+            tx,
+            focus_epoch: focus_epoch.clone(),
+        },
+        TriggerReceiver { rx, focus_epoch },
+    )
 }
 
 /// Edge-triggered bookkeeping for the high-FPS override.
@@ -906,6 +967,7 @@ pub(crate) async fn event_driven_capture_loop(
     high_fps_controller: Option<Arc<crate::high_fps_controller::HighFpsController>>,
     semantic_tx: Option<SemanticProjectionSender>,
 ) -> Result<()> {
+    let focus_epoch = trigger_rx.focus_epoch();
     info!(
         "event-driven capture started for monitor {} (device: {})",
         monitor_id, device_name
@@ -1066,7 +1128,10 @@ pub(crate) async fn event_driven_capture_loop(
                 screenshot_disabled,
                 false, // hd not active at startup (Manual is dedup-exempt anyway)
                 false, // not in a meeting at startup
-                true,  // focus unknown at startup — controller defaults to Active
+                &focus_epoch,
+                &focus_controller,
+                &vision_metrics,
+                &monitor_liveness,
             ),
         )
         .await
@@ -1827,10 +1892,10 @@ pub(crate) async fn event_driven_capture_loop(
                         screenshot_disabled,
                         hd_active,
                         in_meeting,
-                        // AX pairing requires confirmed focus ownership.
-                        // CaptureState::Active is broader: it also covers
-                        // hysteresis and unknown/stale focus fallbacks.
-                        focus_controller.hosts_focus_for_monitor(&monitor),
+                        &focus_epoch,
+                        &focus_controller,
+                        &vision_metrics,
+                        &monitor_liveness,
                     ),
                 )
                 .await;
@@ -2599,11 +2664,16 @@ async fn do_capture(
     screenshot_disabled: bool,
     hd_active: bool,
     in_meeting: bool,
-    monitor_hosts_focus: bool,
+    focus_epoch: &FocusEpoch,
+    focus_controller: &crate::focus_aware_controller::FocusAwareController,
+    vision_metrics: &screenpipe_screen::PipelineMetrics,
+    monitor_liveness: &screenpipe_screen::PipelineMetrics,
 ) -> Result<CaptureOutput> {
-    let captured_at = Utc::now();
     let bypass_capture_throttles = bypasses_capture_throttles(trigger);
-
+    let capture_monitor = CaptureMonitorIdentity {
+        id: params.monitor.id(),
+        stable_id: Some(params.monitor.stable_id()),
+    };
     // Resolve ignored windows to SCK window IDs so ScreenCaptureKit excludes
     // them from the capture buffer (zero overhead, pixel-perfect). Sorted +
     // deduped so the persistent stream isn't needlessly recreated when
@@ -2637,13 +2707,31 @@ async fn do_capture(
         }
     }
 
-    let image = if screenshot_disabled || skip_pixels_for_unknown_exclusions {
+    // Sample immediately before pixel acquisition. Exclusion resolution above
+    // can block on WindowServer; including that time would inflate coherence
+    // rejections without describing screenshot/AX skew.
+    let focus_before_screenshot = CaptureFocusSnapshot {
+        native: focus_epoch.snapshot(),
+        monitor: focus_controller.confirmed_focus_identity().map(|identity| {
+            CaptureMonitorIdentity {
+                id: identity.id,
+                stable_id: identity.stable_id,
+            }
+        }),
+    };
+    let monitor_hosts_focus = focus_before_screenshot
+        .monitor
+        .as_ref()
+        .is_some_and(|identity| identity.matches(&capture_monitor));
+    let pixels_available = !screenshot_disabled && !skip_pixels_for_unknown_exclusions;
+
+    let (image, captured_at) = if screenshot_disabled || skip_pixels_for_unknown_exclusions {
         debug!(
             "screenshot capture skipped for monitor {} (trigger={})",
             params.monitor_id,
             trigger.as_str()
         );
-        image::DynamicImage::new_rgba8(1, 1)
+        (image::DynamicImage::new_rgba8(1, 1), Utc::now())
     } else {
         let excluded_ids = storage_exclusions.unwrap_or_default();
 
@@ -2653,7 +2741,7 @@ async fn do_capture(
             "screenshot captured in {:?} for monitor {}",
             capture_dur, params.monitor_id
         );
-        image
+        (image, Utc::now())
     };
 
     // Skip frames that are unusable for indexing.  Two cases:
@@ -2722,12 +2810,23 @@ async fn do_capture(
     } else {
         None
     };
+    let native_screenshot_metadata = LightweightFocusedMetadata {
+        app_name: focus_before_screenshot.native.app_name.clone(),
+        window_name: focus_before_screenshot.native.window_name.clone(),
+    };
+    let focused_metadata = if native_screenshot_metadata.app_name.is_some()
+        || native_screenshot_metadata.window_name.is_some()
+    {
+        Some(&native_screenshot_metadata)
+    } else {
+        lightweight_focused_metadata.as_ref()
+    };
     let trigger_app = if monitor_hosts_focus {
         match trigger {
-            CaptureTrigger::AppSwitch { app_name, .. } => Some(app_name.clone()),
-            _ => lightweight_focused_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.app_name.clone()),
+            CaptureTrigger::AppSwitch { app_name, .. } => focused_metadata
+                .and_then(|metadata| metadata.app_name.clone())
+                .or_else(|| Some(app_name.clone())),
+            _ => focused_metadata.and_then(|metadata| metadata.app_name.clone()),
         }
     } else {
         None
@@ -2794,6 +2893,7 @@ async fn do_capture(
     // different monitor would both waste work and pair unrelated pixels with
     // that window's tree, identity, and dedup hash. Non-focused monitors use
     // the screenshot/OCR path below instead.
+    let ax_walk_started_at = Utc::now();
     let tree_walk_result = if monitor_hosts_focus {
         Some(
             tokio::task::spawn_blocking(move || {
@@ -2804,6 +2904,70 @@ async fn do_capture(
     } else {
         None
     };
+    let ax_walk_ended_at = Utc::now();
+    let focus_after_ax = CaptureFocusSnapshot {
+        native: focus_epoch.snapshot(),
+        monitor: focus_controller.confirmed_focus_identity().map(|identity| {
+            CaptureMonitorIdentity {
+                id: identity.id,
+                stable_id: identity.stable_id,
+            }
+        }),
+    };
+    let coherence = pixels_available
+        .then(|| {
+            tree_walk_result.as_ref().and_then(|result| match result {
+                TreeWalkResult::Found(snapshot) => Some(CaptureBundleObservation {
+                    screenshot_captured_at: captured_at,
+                    ax_walk_started_at,
+                    ax_walk_ended_at,
+                    focus_before_screenshot: focus_before_screenshot.clone(),
+                    focus_after_ax: focus_after_ax.clone(),
+                    capture_monitor: capture_monitor.clone(),
+                    ax_identity: Some((snapshot.app_name.clone(), snapshot.window_name.clone())),
+                }),
+                TreeWalkResult::Skipped(_) | TreeWalkResult::NotFound => None,
+            })
+        })
+        .flatten();
+    let coherence_decision = coherence.as_ref().map(CaptureBundleObservation::decision);
+    if let (Some(observation), Some(decision)) = (&coherence, coherence_decision) {
+        let metrics_decision = match decision {
+            AxCoherenceDecision::Accept => screenpipe_screen::AxBundleDecision::Accept,
+            AxCoherenceDecision::RejectFocusChanged => {
+                screenpipe_screen::AxBundleDecision::RejectFocusChanged
+            }
+            AxCoherenceDecision::RejectMonitorUnknown => {
+                screenpipe_screen::AxBundleDecision::RejectMonitorUnknown
+            }
+            AxCoherenceDecision::RejectMonitorChanged => {
+                screenpipe_screen::AxBundleDecision::RejectMonitorChanged
+            }
+            AxCoherenceDecision::RejectWrongMonitor => {
+                screenpipe_screen::AxBundleDecision::RejectWrongMonitor
+            }
+        };
+        let skew_ms = observation.screenshot_to_ax_start_ms().max(0) as u64;
+        let identity_matches = observation.native_identity_matches_ax();
+        vision_metrics.record_ax_bundle(metrics_decision, skew_ms, identity_matches);
+        monitor_liveness.record_ax_bundle(metrics_decision, skew_ms, identity_matches);
+        debug!(
+            monitor_id = params.monitor_id,
+            screenshot_captured_at = %observation.screenshot_captured_at,
+            ax_walk_started_at = %observation.ax_walk_started_at,
+            ax_walk_ended_at = %observation.ax_walk_ended_at,
+            ax_walk_duration_ms = observation.ax_walk_duration_ms(),
+            focus_generation_before = observation.focus_before_screenshot.native.generation,
+            focus_generation_after = observation.focus_after_ax.native.generation,
+            screenshot_app = ?observation.focus_before_screenshot.native.app_name,
+            screenshot_window = ?observation.focus_before_screenshot.native.window_name,
+            ax_identity = ?observation.ax_identity,
+            decision = ?decision,
+            "screenshot/AX coherence bundle"
+        );
+    }
+    let ax_rejected =
+        coherence_decision.is_some_and(|decision| !matches!(decision, AxCoherenceDecision::Accept));
 
     // If the window was skipped (incognito/private browsing or user filter),
     // bail out entirely — don't OCR the screenshot.
@@ -2850,7 +3014,17 @@ async fn do_capture(
                     dedup_applies(trigger, hd_active, in_meeting, last_db_write.elapsed())
                         && previous_content_hash
                             .is_some_and(|prev| prev == snap.content_hash as i64 && prev != 0);
-                let outcome = if is_dedup {
+                let outcome = if ax_rejected {
+                    crate::ui_recorder::TreeWalkOutcome::RejectedCoherence {
+                        duration_ms,
+                        node_count,
+                        max_depth,
+                        text_chars,
+                        truncated,
+                        truncated_timeout,
+                        truncated_max_nodes,
+                    }
+                } else if is_dedup {
                     crate::ui_recorder::TreeWalkOutcome::Deduped {
                         duration_ms,
                         node_count,
@@ -2882,6 +3056,7 @@ async fn do_capture(
     }
 
     let tree_snapshot = match tree_walk_result {
+        Some(TreeWalkResult::Found(_)) if ax_rejected => None,
         Some(TreeWalkResult::Found(snap)) => Some(snap),
         Some(TreeWalkResult::Skipped(reason)) => {
             debug!(
@@ -2956,11 +3131,7 @@ async fn do_capture(
     // Use tree metadata by default, but for focus-change triggers prefer the
     // event payload when the tree lags or reports the wrong frontmost target.
     let (app_name_owned, window_name_owned, browser_url_owned, document_path_owned) =
-        resolve_capture_metadata(
-            tree_snapshot.as_ref(),
-            trigger,
-            lightweight_focused_metadata.as_ref(),
-        );
+        resolve_capture_metadata(tree_snapshot.as_ref(), trigger, focused_metadata);
 
     // Skip lock screen / screensaver — these waste disk and pollute timeline.
     // Also update the global SCREEN_IS_LOCKED flag so subsequent loop iterations
@@ -4274,6 +4445,30 @@ mod tests {
             CaptureTrigger::AppSwitch { app_name, .. } => assert_eq!(app_name, "Code"),
             _ => panic!("expected AppSwitch"),
         }
+    }
+
+    #[test]
+    fn trigger_channel_shares_native_focus_epoch_with_receivers() {
+        let (tx, rx) = trigger_channel();
+        tx.observe_focus(&screenpipe_a11y::events::UiEvent {
+            id: None,
+            timestamp: Utc::now(),
+            relative_ms: 0,
+            data: screenpipe_a11y::events::EventData::WindowFocus {
+                app: "Code".into(),
+                title: Some("main.rs".into()),
+            },
+            app_name: None,
+            window_title: None,
+            browser_url: None,
+            element: None,
+            frame_id: None,
+        });
+
+        let focus = rx.focus_epoch().snapshot();
+        assert_eq!(focus.generation, 1);
+        assert_eq!(focus.app_name.as_deref(), Some("Code"));
+        assert_eq!(focus.window_name.as_deref(), Some("main.rs"));
     }
 
     #[test]

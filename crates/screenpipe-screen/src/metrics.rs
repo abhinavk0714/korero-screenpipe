@@ -54,6 +54,16 @@ pub enum OcrGateDecision {
     CropOcr,
 }
 
+/// Why a screenshot/accessibility bundle was accepted or rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AxBundleDecision {
+    Accept,
+    RejectFocusChanged,
+    RejectMonitorUnknown,
+    RejectMonitorChanged,
+    RejectWrongMonitor,
+}
+
 /// Thread-safe pipeline metrics shared across capture, OCR, and DB writer.
 /// All counters use relaxed ordering — we care about approximate accuracy, not exact sequencing.
 #[derive(Debug)]
@@ -157,6 +167,18 @@ pub struct PipelineMetrics {
     /// field signal for the green-corruption reports.
     pub frames_corrupt_green: AtomicU64,
 
+    // --- Screenshot / AX coherence ---
+    pub ax_bundles_total: AtomicU64,
+    pub ax_bundles_accepted: AtomicU64,
+    pub ax_rejected_focus_changed: AtomicU64,
+    pub ax_rejected_monitor_unknown: AtomicU64,
+    pub ax_rejected_monitor_changed: AtomicU64,
+    pub ax_rejected_wrong_monitor: AtomicU64,
+    pub ax_bundle_skew_total_ms: AtomicU64,
+    pub ax_bundle_skew_max_ms: AtomicU64,
+    pub ax_identity_compared: AtomicU64,
+    pub ax_identity_mismatched: AtomicU64,
+
     // --- Rolling window for DB latency ---
     /// Recent DB write latencies in microseconds (rolling window, not lifetime accumulator).
     /// Prevents early spikes from permanently inflating the average.
@@ -196,6 +218,16 @@ impl PipelineMetrics {
             dedup_skips: AtomicU64::new(0),
             frames_corrupt_black: AtomicU64::new(0),
             frames_corrupt_green: AtomicU64::new(0),
+            ax_bundles_total: AtomicU64::new(0),
+            ax_bundles_accepted: AtomicU64::new(0),
+            ax_rejected_focus_changed: AtomicU64::new(0),
+            ax_rejected_monitor_unknown: AtomicU64::new(0),
+            ax_rejected_monitor_changed: AtomicU64::new(0),
+            ax_rejected_wrong_monitor: AtomicU64::new(0),
+            ax_bundle_skew_total_ms: AtomicU64::new(0),
+            ax_bundle_skew_max_ms: AtomicU64::new(0),
+            ax_identity_compared: AtomicU64::new(0),
+            ax_identity_mismatched: AtomicU64::new(0),
             db_latency_window: Mutex::new(RollingLatencyWindow::new()),
         }
     }
@@ -316,6 +348,49 @@ impl PipelineMetrics {
         }
     }
 
+    /// Record one bundle after both the screenshot and AX walk completed.
+    /// This is intentionally aggregate-only: app/window strings remain in the
+    /// normal frame data and are never copied into health telemetry.
+    pub fn record_ax_bundle(
+        &self,
+        decision: AxBundleDecision,
+        screenshot_to_ax_start_ms: u64,
+        identity_matches: Option<bool>,
+    ) {
+        self.ax_bundles_total.fetch_add(1, Ordering::Relaxed);
+        match decision {
+            AxBundleDecision::Accept => {
+                self.ax_bundles_accepted.fetch_add(1, Ordering::Relaxed);
+            }
+            AxBundleDecision::RejectFocusChanged => {
+                self.ax_rejected_focus_changed
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            AxBundleDecision::RejectMonitorUnknown => {
+                self.ax_rejected_monitor_unknown
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            AxBundleDecision::RejectMonitorChanged => {
+                self.ax_rejected_monitor_changed
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            AxBundleDecision::RejectWrongMonitor => {
+                self.ax_rejected_wrong_monitor
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        self.ax_bundle_skew_total_ms
+            .fetch_add(screenshot_to_ax_start_ms, Ordering::Relaxed);
+        self.ax_bundle_skew_max_ms
+            .fetch_max(screenshot_to_ax_start_ms, Ordering::Relaxed);
+        if let Some(matches) = identity_matches {
+            self.ax_identity_compared.fetch_add(1, Ordering::Relaxed);
+            if !matches {
+                self.ax_identity_mismatched.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
     /// Record a frame inserted into DB.
     pub fn record_db_write(&self, latency: std::time::Duration) {
         let count = self.frames_db_written.fetch_add(1, Ordering::Relaxed);
@@ -400,6 +475,8 @@ impl PipelineMetrics {
         let frames_db_written = self.frames_db_written.load(Ordering::Relaxed);
         let ocr_completed = self.ocr_completed.load(Ordering::Relaxed);
         let uptime_secs = self.started_at.elapsed().as_secs_f64();
+        let ax_bundles_total = self.ax_bundles_total.load(Ordering::Relaxed);
+        let ax_bundles_accepted = self.ax_bundles_accepted.load(Ordering::Relaxed);
 
         // Loss accounting. Every counted capture attempt resolves to exactly
         // one of: persisted (frames_db_written), a static-screen dedup
@@ -532,6 +609,26 @@ impl PipelineMetrics {
             dedup_skips,
             frames_corrupt_black,
             frames_corrupt_green,
+            ax_bundles_total,
+            ax_bundles_accepted,
+            ax_bundle_rejection_rate: if ax_bundles_total > 0 {
+                (ax_bundles_total - ax_bundles_accepted) as f64 / ax_bundles_total as f64
+            } else {
+                0.0
+            },
+            ax_rejected_focus_changed: self.ax_rejected_focus_changed.load(Ordering::Relaxed),
+            ax_rejected_monitor_unknown: self.ax_rejected_monitor_unknown.load(Ordering::Relaxed),
+            ax_rejected_monitor_changed: self.ax_rejected_monitor_changed.load(Ordering::Relaxed),
+            ax_rejected_wrong_monitor: self.ax_rejected_wrong_monitor.load(Ordering::Relaxed),
+            avg_screenshot_to_ax_start_ms: if ax_bundles_total > 0 {
+                self.ax_bundle_skew_total_ms.load(Ordering::Relaxed) as f64
+                    / ax_bundles_total as f64
+            } else {
+                0.0
+            },
+            max_screenshot_to_ax_start_ms: self.ax_bundle_skew_max_ms.load(Ordering::Relaxed),
+            ax_identity_compared: self.ax_identity_compared.load(Ordering::Relaxed),
+            ax_identity_mismatched: self.ax_identity_mismatched.load(Ordering::Relaxed),
         }
     }
 }
@@ -605,6 +702,17 @@ pub struct MetricsSnapshot {
     /// Frames skipped because of a flat green decode-garbage band (truncated /
     /// partial capture). Subset of capture attempts; the green-corruption signal.
     pub frames_corrupt_green: u64,
+    pub ax_bundles_total: u64,
+    pub ax_bundles_accepted: u64,
+    pub ax_bundle_rejection_rate: f64,
+    pub ax_rejected_focus_changed: u64,
+    pub ax_rejected_monitor_unknown: u64,
+    pub ax_rejected_monitor_changed: u64,
+    pub ax_rejected_wrong_monitor: u64,
+    pub avg_screenshot_to_ax_start_ms: f64,
+    pub max_screenshot_to_ax_start_ms: u64,
+    pub ax_identity_compared: u64,
+    pub ax_identity_mismatched: u64,
 }
 
 #[cfg(test)]
@@ -623,6 +731,23 @@ mod tests {
         assert!(snapshot.last_capture_loop_heartbeat_ts > 0);
         assert_eq!(snapshot.capture_attempts, 0);
         assert_eq!(snapshot.last_capture_attempt_ts, 0);
+    }
+
+    #[test]
+    fn ax_bundle_metrics_report_rejections_skew_and_identity() {
+        let metrics = PipelineMetrics::new();
+        metrics.record_ax_bundle(AxBundleDecision::Accept, 4, Some(true));
+        metrics.record_ax_bundle(AxBundleDecision::RejectFocusChanged, 10, Some(false));
+        let snapshot = metrics.snapshot();
+
+        assert_eq!(snapshot.ax_bundles_total, 2);
+        assert_eq!(snapshot.ax_bundles_accepted, 1);
+        assert_eq!(snapshot.ax_rejected_focus_changed, 1);
+        assert_eq!(snapshot.ax_bundle_rejection_rate, 0.5);
+        assert_eq!(snapshot.avg_screenshot_to_ax_start_ms, 7.0);
+        assert_eq!(snapshot.max_screenshot_to_ax_start_ms, 10);
+        assert_eq!(snapshot.ax_identity_compared, 2);
+        assert_eq!(snapshot.ax_identity_mismatched, 1);
     }
 
     #[test]
