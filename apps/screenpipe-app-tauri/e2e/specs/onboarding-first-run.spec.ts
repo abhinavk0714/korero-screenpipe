@@ -70,6 +70,11 @@ const waitForBodyText = async (needle: string, timeout = 10_000) => {
  * dependencies. Same shape as screen-recording-restart.spec.ts.
  */
 const gotoSlide = async (step: string) => {
+  // Reset before rewinding: `set_onboarding_step` writes only `currentStep`, so
+  // once a run has reached the last slide `isCompleted` stays true and
+  // ShowRewindWindow::Onboarding opens Home instead — the onboarding handle
+  // never appears and the failure reads as a timeout rather than a stale flag.
+  await invokeOrThrow("reset_onboarding");
   await invokeOrThrow("set_onboarding_step", { step });
 
   // Destroy and recreate rather than just showing: showWindow on a live

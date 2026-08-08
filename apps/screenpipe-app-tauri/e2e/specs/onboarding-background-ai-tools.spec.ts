@@ -238,6 +238,14 @@ async function callActivitySummaryThroughMcp(
     });
 
     it("migrates a saved connection slide directly to the goal step", async () => {
+      // Clear completion before rewinding the step. `set_onboarding_step` only
+      // writes `currentStep`, so a flow that already finished leaves
+      // `isCompleted` true — and ShowRewindWindow::Onboarding silently opens
+      // Home instead of onboarding when it is, so the handle never appears.
+      // Setup now completes at its last slide (#6013), which it did not before,
+      // so this precondition has to be explicit. Same shape as
+      // screen-recording-restart.spec.ts.
+      await invokeOrThrow("reset_onboarding");
       await invokeOrThrow("set_onboarding_step", { step: "connect-apps" });
       await showWindow({ Home: { page: "home" } });
       await waitForWindowHandle("home", t(10_000));
