@@ -75,7 +75,15 @@ export function FirstRunPeopleStep(props: PeopleStepProps) {
   const enableMessages = async () => {
     posthog.capture("first_run_people_enabled", { source: "messages" });
     if (offer.messagesNeedsPermission) {
-      await onOpenFullDiskAccess?.(FULL_DISK_ACCESS_URL);
+      // Best effort. Opening System Settings is a convenience, not the
+      // consent: a host that cannot handle the deep link must not stop the
+      // user from choosing the source, and must not leave the rejection
+      // unhandled.
+      try {
+        await onOpenFullDiskAccess?.(FULL_DISK_ACCESS_URL);
+      } catch {
+        // The user can still reach the pane manually.
+      }
     }
     await onEnableMessages();
   };

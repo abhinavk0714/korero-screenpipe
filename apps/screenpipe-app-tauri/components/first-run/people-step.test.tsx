@@ -120,6 +120,65 @@ describe("first-run people step", () => {
     );
   });
 
+  it("keeps the offer honest on Windows and Linux", () => {
+    // No message store exists off macOS, so the step must reduce to the
+    // cross-platform path rather than advertising something unavailable.
+    for (const platform of ["windows", "linux"] as const) {
+      const { unmount } = render(
+        <FirstRunPeopleStep
+          {...props({ platform, messagesState: "available" })}
+        />,
+      );
+      expect(
+        screen.getByTestId("first-run-people-enable-sources"),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByTestId("first-run-people-enable-messages"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("first-run-people-messages-note"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByTestId("first-run-people-dismiss"),
+      ).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("counts one impression per step, not one per render", () => {
+    // The funnel divides declines by impressions. A re-render that re-fires
+    // the shown event would silently deflate the decline rate.
+    const { rerender } = render(<FirstRunPeopleStep {...props()} />);
+    rerender(<FirstRunPeopleStep {...props()} />);
+    rerender(<FirstRunPeopleStep {...props()} />);
+
+    const shown = mocks.capture.mock.calls.filter(
+      ([event]) => event === "first_run_people_shown",
+    );
+    expect(shown).toHaveLength(1);
+  });
+
+  it("still enables Messages after the permission pane is opened", async () => {
+    // Opening System Settings is a step toward the grant, not a substitute for
+    // it: the caller must still be told to start using the source.
+    const p = props();
+    render(<FirstRunPeopleStep {...p} />);
+    fireEvent.click(screen.getByTestId("first-run-people-enable-messages"));
+    expect(p.onOpenFullDiskAccess).toHaveBeenCalled();
+    await vi.waitFor(() => expect(p.onEnableMessages).toHaveBeenCalled());
+  });
+
+  it("survives a host that cannot open the permission pane", async () => {
+    // A rejected deep link must not strand the step or swallow the enable.
+    const p = props({
+      onOpenFullDiskAccess: vi.fn().mockRejectedValue(new Error("no handler")),
+    });
+    render(<FirstRunPeopleStep {...p} />);
+    fireEvent.click(screen.getByTestId("first-run-people-enable-messages"));
+    await vi.waitFor(() => expect(p.onEnableMessages).toHaveBeenCalled());
+    expect(screen.getByTestId("first-run-people-step")).toBeInTheDocument();
+  });
+
   it("never sends anything that could identify a person", () => {
     render(<FirstRunPeopleStep {...props()} />);
     fireEvent.click(screen.getByTestId("first-run-people-enable-sources"));
