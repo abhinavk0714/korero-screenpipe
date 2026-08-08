@@ -30,6 +30,7 @@ import {
   loadConversationFile,
 } from "@/lib/chat-storage";
 import { cn } from "@/lib/utils";
+import { resolveMeetingsNavPlacement } from "@/lib/utils/meetings-nav-placement";
 import { AppSidebar, useSidebarContext } from "@/components/app-sidebar";
 import { UpdateBanner } from "@/components/update-banner";
 import { usePlatform } from "@/lib/hooks/use-platform";
@@ -958,6 +959,16 @@ function HomeContent() {
     }
   };
 
+  // Meetings can live either in the top-left chrome strip (default, compact
+  // icon) or as a labelled sidebar row — Settings → Display owns the choice.
+  // Both placements share the same hidden-section policy check, so exactly one
+  // of them renders and neither can resurrect a section the admin hid.
+  const { inToolbar: meetingsInToolbar, inSidebar: meetingsInSidebar } =
+    resolveMeetingsNavPlacement({
+      placement: settings.meetingsNavPlacement,
+      hidden: isSectionHidden("meetings"),
+    });
+
   // Top-level nav items (filtered by enterprise policy)
   const mainSections = [
     // The first nav item doubles as "go to chat view + start a fresh
@@ -965,6 +976,9 @@ function HomeContent() {
     // rows are not reused — that felt like opening an old recent).
     { id: "home", label: "Chat", icon: <Plus className="h-3.5 w-3.5" /> },
     { id: "brain", label: "Brain", icon: <Brain className="h-3.5 w-3.5" /> },
+    ...(meetingsInSidebar
+      ? [{ id: "meetings", label: "Meetings", icon: <CalendarClock className="h-3.5 w-3.5" /> }]
+      : []),
     { id: "pipes", label: "Scheduled", icon: <TimerReset className="h-3.5 w-3.5" /> },
     { id: "timeline", label: "Timeline", icon: <MonitorPlay className="h-3.5 w-3.5" /> },
     { id: "connections", label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
@@ -1084,7 +1098,7 @@ function HomeContent() {
               </Tooltip>
             )}
 
-            {!sidebarCollapsed && !isSectionHidden("meetings") && (
+            {!sidebarCollapsed && meetingsInToolbar && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -1185,6 +1199,17 @@ function HomeContent() {
                         {section.icon}
                       </div>
                       <span className={cn("text-xs truncate", section.id === "pipes" && runningPipeCount > 0 && "flex-1", isActive && isTranslucent ? "font-semibold vibrant-sidebar-fg" : "font-medium")}>{section.label}</span>
+                      {/* Same live-recording dot the toolbar placement shows,
+                          so moving Meetings into the sidebar loses no signal. */}
+                      {section.id === "meetings" && meetingState.active && (
+                        <>
+                          <span
+                            aria-hidden="true"
+                            className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-red-500"
+                          />
+                          <span className="sr-only">meeting recording active</span>
+                        </>
+                      )}
                       {section.id === "pipes" && runningPipeCount > 0 && (
                         <PipeActivityIndicator
                           kind="running"

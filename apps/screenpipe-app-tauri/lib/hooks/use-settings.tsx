@@ -407,6 +407,12 @@ export type Settings = SettingsStore & {
 	localRetentionMode?: "media" | "lean" | "all";
 	/** Apply macOS vibrancy effect to sidebar for a translucent glass look */
 	translucentSidebar?: boolean;
+	/** Where the Meetings entry lives in Home navigation.
+	 *  - "toolbar" (default): compact icon in the top-left chrome strip, next
+	 *    to search — keeps the sidebar to the five main sections.
+	 *  - "sidebar": a labelled row in the sidebar nav, like it was before the
+	 *    toolbar demotion. Either way the recording dot rides along. */
+	meetingsNavPlacement?: "toolbar" | "sidebar";
 	/** Show the chat suggestion chips above the input — the "follow up"
 	 *  questions and the connection-aware suggested prompts. The single inline
 	 *  X on the chips flips this to false; re-enable from Settings → Display.

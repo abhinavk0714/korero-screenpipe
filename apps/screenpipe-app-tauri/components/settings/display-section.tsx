@@ -9,7 +9,7 @@ import { commands } from "@/lib/utils/tauri";
 import { useTheme } from "@/components/theme-provider";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
-import { Moon, Sun, Monitor, Layers, MessageSquare, PanelLeft, Maximize2, EyeOff, MinusSquare, Type } from "lucide-react";
+import { Moon, Sun, Monitor, Layers, MessageSquare, PanelLeft, Maximize2, EyeOff, MinusSquare, Type, CalendarClock } from "lucide-react";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { useToast } from "@/components/ui/use-toast";
@@ -30,6 +30,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Overlay Size" },
   { label: "Show Overlay in Screen Recording", keywords: ["capture", "obs", "screen share"] },
   { label: "Sidebar translucency", keywords: ["vibrancy", "translucent"] },
+  { label: "Meetings Button", keywords: ["meeting", "meetings", "sidebar", "toolbar", "nav", "navigation", "icon"] },
 ];
 
 export function DisplaySection() {
@@ -353,6 +354,52 @@ export function DisplaySection() {
                   }
                 }}
               />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Where the Meetings entry lives in Home navigation. The toolbar icon
+            is the default (compact, next to search); "Sidebar" restores the
+            labelled row it had before the toolbar demotion. Purely a frontend
+            preference — nothing in Rust reads it. */}
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="space-y-2.5">
+              <div className="flex items-center space-x-2.5">
+                <CalendarClock className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    Meetings Button
+                    <HelpTooltip text="Choose where the Meetings entry appears in the Home window: the compact icon in the top-left strip next to search, or a labelled row in the sidebar. The live-recording dot shows in either place." />
+                  </h3>
+                  <p className="text-xs text-muted-foreground">Where the meetings entry appears in Home</p>
+                </div>
+              </div>
+              <div className="flex gap-2 ml-[26px]">
+                {([
+                  { value: "toolbar" as const, label: "Toolbar", desc: "Icon next to search" },
+                  { value: "sidebar" as const, label: "Sidebar", desc: "Labelled nav row" },
+                ]).map((option) => {
+                  const isActive = (settings?.meetingsNavPlacement ?? "toolbar") === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      data-testid={`meetings-placement-${option.value}`}
+                      aria-pressed={isActive}
+                      onClick={() => handleSettingsChange({ meetingsNavPlacement: option.value })}
+                      className={`flex-1 px-2.5 py-1.5 rounded-md border-2 transition-all text-left cursor-pointer ${
+                        isActive
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-muted-foreground/30"
+                      }`}
+                    >
+                      <div className="font-medium text-xs text-foreground">{option.label}</div>
+                      <div className="text-xs text-muted-foreground">{option.desc}</div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </CardContent>
         </Card>
