@@ -6,6 +6,7 @@
 
 import React from "react";
 import { emit } from "@tauri-apps/api/event";
+import posthog from "posthog-js";
 import { Clock, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -77,12 +78,17 @@ export function FirstRunLearningBanner(props: LearningWindowOptions = {}) {
 
   const openSummary = async () => {
     if (!chatId) return;
+    // Distinct from dismiss(). Opening the summary and clicking "Later" both
+    // close the banner, so without this they collapse into one event and the
+    // activation question this whole flow exists to answer — did the user read
+    // what we found? — becomes unmeasurable.
+    posthog.capture("first_run_summary_opened");
     try {
       await emit("chat-load-conversation", { conversationId: chatId });
     } catch {
       // The chat is still in the sidebar even if the focus hint does not land.
     }
-    dismiss();
+    dismiss({ opened: true });
   };
 
   return (
@@ -150,7 +156,7 @@ export function FirstRunLearningBanner(props: LearningWindowOptions = {}) {
               size="sm"
               variant="ghost"
               className="h-7 text-[11px]"
-              onClick={dismiss}
+              onClick={() => dismiss()}
             >
               Later
             </Button>
@@ -175,7 +181,7 @@ export function FirstRunLearningBanner(props: LearningWindowOptions = {}) {
               variant="outline"
               className="h-7 text-[11px]"
               data-testid="first-run-dismiss-empty"
-              onClick={dismiss}
+              onClick={() => dismiss()}
             >
               Got it
             </Button>

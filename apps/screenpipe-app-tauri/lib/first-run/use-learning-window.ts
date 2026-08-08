@@ -38,7 +38,7 @@ import type { AIPreset } from "@/lib/utils/tauri";
 
 export type LearningWindowView = FirstRunLearningState & {
   remainingMs: number;
-  dismiss: () => void;
+  dismiss: (options?: { opened?: boolean }) => void;
 };
 
 export type LearningWindowOptions = {
@@ -198,6 +198,10 @@ export function useLearningWindow(
         frame_count: Number(activity.total_frames ?? 0),
         // Whether the model wrote it or we fell back. Content is never sent.
         summary_source: written ? "ai" : "deterministic",
+        // Whether the proof made it in. Media is the strongest part of the
+        // first impression and the part most likely to be silently absent.
+        has_media: Boolean(media),
+        media_kind: media?.kind ?? "none",
       });
       setState(markLearningReady(chatId));
     };
@@ -233,10 +237,19 @@ export function useLearningWindow(
     return () => clearTimeout(timer);
   }, [isLearning, startedAt]);
 
-  const dismiss = useCallback(() => {
-    posthog.capture("first_run_learning_dismissed", { phase: state.phase });
-    setState(markLearningDone());
-  }, [state.phase]);
+  const dismiss = useCallback(
+    (options: { opened?: boolean } = {}) => {
+      posthog.capture("first_run_learning_dismissed", {
+        phase: state.phase,
+        // Opening the summary also closes the banner. Without this the two
+        // exits are indistinguishable and "reached ready but never looked" —
+        // the failure worth knowing about — cannot be counted.
+        opened: Boolean(options.opened),
+      });
+      setState(markLearningDone());
+    },
+    [state.phase],
+  );
 
   return { ...state, capturedApps, remainingMs, dismiss };
 }
