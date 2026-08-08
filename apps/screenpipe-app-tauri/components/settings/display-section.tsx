@@ -19,6 +19,14 @@ import { FONT_SIZE_DEFAULT, FONT_SIZE_OPTIONS } from "@/lib/utils/font-size";
 import { open } from "@tauri-apps/plugin-shell";
 import type { SettingsField } from "./settings-search";
 import { ManagedSwitch } from "@/components/enterprise-locked-setting";
+import {
+  DEFAULT_SIDEBAR_NAV_LAYOUT,
+  SIDEBAR_NAV_ORDER,
+  isSidebarNavLayoutDefault,
+  normalizeSidebarNavLayout,
+  resolveVisibleSidebarNavIds,
+  setSidebarNavItemHidden,
+} from "@/lib/utils/sidebar-nav-layout";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
@@ -30,7 +38,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Overlay Size" },
   { label: "Show Overlay in Screen Recording", keywords: ["capture", "obs", "screen share"] },
   { label: "Sidebar translucency", keywords: ["vibrancy", "translucent"] },
-  { label: "Meetings Button", keywords: ["meeting", "meetings", "sidebar", "toolbar", "nav", "navigation", "icon"] },
+  { label: "Meetings in Sidebar", keywords: ["meeting", "meetings", "sidebar", "toolbar", "nav", "navigation", "icon", "reorder", "customize"] },
 ];
 
 export function DisplaySection() {
@@ -41,6 +49,11 @@ export function DisplaySection() {
   // Guards the Disable-Timeline toggle against double-invoke (rapid toggle /
   // re-render) so we never fire two overlapping screenpipe restarts.
   const timelineRestartingRef = React.useRef(false);
+  const sidebarLayout = normalizeSidebarNavLayout(settings?.sidebarNavLayout);
+  const meetingsInSidebar = resolveVisibleSidebarNavIds(
+    sidebarLayout,
+    SIDEBAR_NAV_ORDER,
+  ).includes("meetings");
 
   const handleSettingsChange = (newSettings: Partial<Settings>) => {
     if (settings) {
@@ -357,53 +370,70 @@ export function DisplaySection() {
             </div>
           </CardContent>
         </Card>
-
-        {/* Where the Meetings entry lives in Home navigation. The toolbar icon
-            is the default (compact, next to search); "Sidebar" restores the
-            labelled row it had before the toolbar demotion. Purely a frontend
-            preference — nothing in Rust reads it. */}
+        {/* Home sidebar layout. Meetings ships hidden from the sidebar, which
+            is what puts its compact icon in the top-left chrome strip — so
+            this switch and the right-click menu drive the same layout state
+            rather than two competing preferences. */}
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="space-y-2.5">
-              <div className="flex items-center space-x-2.5">
-                <CalendarClock className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    Meetings Button
-                    <HelpTooltip text="Choose where the Meetings entry appears in the Home window: the compact icon in the top-left strip next to search, or a labelled row in the sidebar. The live-recording dot shows in either place." />
-                  </h3>
-                  <p className="text-xs text-muted-foreground">Where the meetings entry appears in Home</p>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <CalendarClock className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                      Meetings in Sidebar
+                      <HelpTooltip text="Show Meetings as a labelled row in the Home sidebar. Off keeps it as the compact icon in the top-left strip next to search. The live-recording dot shows either way." />
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      {meetingsInSidebar
+                        ? "Labelled row in the sidebar"
+                        : "Compact icon next to search"}
+                    </p>
+                  </div>
                 </div>
+                <Switch
+                  id="meetingsInSidebar"
+                  data-testid="meetings-in-sidebar"
+                  checked={meetingsInSidebar}
+                  onCheckedChange={(checked) =>
+                    handleSettingsChange({
+                      sidebarNavLayout: setSidebarNavItemHidden(
+                        sidebarLayout,
+                        SIDEBAR_NAV_ORDER,
+                        "meetings",
+                        !checked,
+                      ),
+                    })
+                  }
+                />
               </div>
-              <div className="flex gap-2 ml-[26px]">
-                {([
-                  { value: "toolbar" as const, label: "Toolbar", desc: "Icon next to search" },
-                  { value: "sidebar" as const, label: "Sidebar", desc: "Labelled nav row" },
-                ]).map((option) => {
-                  const isActive = (settings?.meetingsNavPlacement ?? "toolbar") === option.value;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      data-testid={`meetings-placement-${option.value}`}
-                      aria-pressed={isActive}
-                      onClick={() => handleSettingsChange({ meetingsNavPlacement: option.value })}
-                      className={`flex-1 px-2.5 py-1.5 rounded-md border-2 transition-all text-left cursor-pointer ${
-                        isActive
-                          ? "border-primary bg-primary/5"
-                          : "border-border hover:border-muted-foreground/30"
-                      }`}
-                    >
-                      <div className="font-medium text-xs text-foreground">{option.label}</div>
-                      <div className="text-xs text-muted-foreground">{option.desc}</div>
-                    </button>
-                  );
-                })}
-              </div>
+              <p className="ml-[26px] text-xs text-muted-foreground">
+                {settings?.enableSidebarCustomization
+                  ? "Drag sidebar rows to reorder them, or right-click one to move, hide, or restore it."
+                  : "Reordering and hiding other sidebar rows is rolling out."}
+              </p>
+              {!isSidebarNavLayoutDefault(sidebarLayout) && (
+                <div className="ml-[26px]">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    data-testid="reset-sidebar-layout"
+                    onClick={() => {
+                      handleSettingsChange({
+                        sidebarNavLayout: { ...DEFAULT_SIDEBAR_NAV_LAYOUT },
+                      });
+                      toast({ title: "sidebar layout reset" });
+                    }}
+                  >
+                    Reset sidebar layout
+                  </Button>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
-
         {isMac && (
           <Card className="border-border bg-card">
             <CardContent className="px-3 py-2.5">
