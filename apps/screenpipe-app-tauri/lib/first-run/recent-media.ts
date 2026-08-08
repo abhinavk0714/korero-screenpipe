@@ -78,7 +78,10 @@ export async function fetchFirstRunMedia(
     const response = await localFetch(`/search?${params.toString()}`, {
       signal: options.signal,
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.warn("[first-run] media search failed", { status: response.status });
+      return null;
+    }
     const body = (await response.json()) as { data?: SearchItem[] };
     const items = Array.isArray(body?.data) ? body.data : [];
 
@@ -93,8 +96,25 @@ export async function fetchFirstRunMedia(
         windowName: item.content?.window_name?.trim() || undefined,
       };
     }
+
+    // Nothing embeddable. Distinguish "search returned nothing" from "search
+    // returned rows whose files we rejected" — those need opposite fixes, and
+    // without this the summary just silently arrives without proof. Extensions
+    // only; no paths, so this cannot leak what the user was looking at.
+    console.warn("[first-run] no embeddable media", {
+      items: items.length,
+      types: Array.from(new Set(items.map((i) => i?.type ?? "unknown"))),
+      extensions: Array.from(
+        new Set(
+          items
+            .map((i) => i?.content?.file_path?.match(/\.[a-z0-9]+$/i)?.[0] ?? "none")
+            .filter(Boolean),
+        ),
+      ),
+    });
     return null;
-  } catch {
+  } catch (error) {
+    console.warn("[first-run] media search threw", error);
     return null;
   }
 }
