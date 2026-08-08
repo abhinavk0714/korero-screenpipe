@@ -75,12 +75,27 @@ export const LEARNING_WINDOW_CEILING_MS = 5 * 60 * 1_000;
 export const LEARNING_POLL_INTERVAL_MS = 3_000;
 
 /**
- * Below this we keep waiting even though the engine reports `ok`. One app and
- * a couple of frames is technically "data" but produces a summary that reads
- * as broken.
+ * Below this we keep waiting even though the engine reports `ok`.
+ *
+ * There is a hard frame floor because app names alone are not evidence: an
+ * earlier version resolved on "two distinct apps" and produced "I watched
+ * Google Chrome and Claude … 2 screens indexed", which is true, useless, and
+ * reads as broken. Seeing a second app is a quality signal that lets us
+ * resolve sooner, never a substitute for having actually captured something.
  */
-export const MIN_EVIDENCE_FRAMES = 8;
+export const MIN_EVIDENCE_FRAMES = 10;
+export const MIN_MULTI_APP_FRAMES = 6;
 export const MIN_EVIDENCE_APPS = 2;
+
+/**
+ * Floor on how early the window may resolve.
+ *
+ * Independent of the evidence gate: a burst of frames in the first seconds can
+ * clear the frame floor while the summary still has to say "for under a
+ * minute", which makes the whole moment look trivial. Waiting a little buys a
+ * summary worth reading.
+ */
+export const MIN_LEARNING_MS = 90 * 1_000;
 
 /** Apps shown in the live readout. More than this reads as noise. */
 export const MAX_TRACKED_APPS = 5;
@@ -106,11 +121,19 @@ export type ActivityEditedFile = {
   path?: string;
 };
 
+export type ActivityWindow = {
+  app_name?: string;
+  window_name?: string;
+  browser_url?: string;
+  minutes?: number;
+};
+
 export type ActivitySnapshot = {
   data_status?: string;
   total_frames?: number;
   total_active_minutes?: number;
   apps?: ActivityApp[] | null;
+  windows?: ActivityWindow[] | null;
   edited_files?: ActivityEditedFile[] | null;
   audio_summary?: {
     speaker_count?: number;
@@ -163,7 +186,20 @@ export function hasEnoughEvidence(activity: ActivitySnapshot): boolean {
   if (activity.data_status !== "ok") return false;
   const frames = Number(activity.total_frames ?? 0);
   const appCount = capturedAppsFrom(activity, 0).length;
-  return frames >= MIN_EVIDENCE_FRAMES || appCount >= MIN_EVIDENCE_APPS;
+  if (frames >= MIN_EVIDENCE_FRAMES) return true;
+  // Moving between apps says more per frame than sitting in one, so a couple
+  // of apps lowers the bar — but never below a real capture floor.
+  return frames >= MIN_MULTI_APP_FRAMES && appCount >= MIN_EVIDENCE_APPS;
+}
+
+/** Whether the window is old enough to resolve at all. */
+export function canResolveYet(
+  startedAt: string | null,
+  now = Date.now(),
+): boolean {
+  if (!startedAt) return false;
+  const elapsed = now - Date.parse(startedAt);
+  return Number.isFinite(elapsed) && elapsed >= MIN_LEARNING_MS;
 }
 
 function formatMinutes(minutes: number): string {
@@ -192,9 +228,75 @@ function fileName(path: string): string {
  * ("here is what I saw") rather than achievement ("here is what you did") —
  * over a few minutes the former is true and the latter would not be.
  */
-export function buildLearningSummary(activity: ActivitySnapshot): string {
+/** Shorten a window title without cutting mid-word where avoidable. */
+function trimTitle(value: string, max = 60): string {
+  const clean = value
+    .replace(/\s+/g, " ")
+    // Apps prefix titles with status glyphs — a bullet for unread (Discord,
+    // Slack), a dot or asterisk for unsaved. They are chrome from another
+    // app's UI, and reading them back verbatim looks like a parsing bug.
+    .replace(/^[\s•·∙‣▪●○*+\-–—|>]+/, "")
+    .trim();
+  if (clean.length <= max) return clean;
+  const cut = clean.slice(0, max);
+  const lastSpace = cut.lastIndexOf(" ");
+  const kept = lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut;
+  // Trailing separators before an ellipsis read as a rendering bug
+  // ("…for AI agents -…"), so strip them.
+  return `${kept.replace(/[\s\-–—·,:;|]+$/, "")}…`;
+}
+
+/**
+ * The specific things that were on screen, longest first.
+ *
+ * App names alone describe the container, not the work — "Chrome and Slack"
+ * is true of almost any day. Window titles are what make the summary read as
+ * "it really was watching me" rather than a generic report.
+ */
+function focusLines(activity: ActivitySnapshot): string[] {
+  const windows = Array.isArray(activity.windows) ? activity.windows : [];
+  const seen = new Set<string>();
+  return windows
+    .filter((w) => typeof w?.window_name === "string" && w.window_name.trim())
+    // A window titled after its own app ("Claude" in Claude) adds nothing the
+    // opening sentence has not already said.
+    .filter((w) => {
+      const title = (w.window_name as string).trim().toLowerCase();
+      const app = (w.app_name ?? "").trim().toLowerCase();
+      return !app || title !== app;
+    })
+    .sort((left, right) => Number(right.minutes ?? 0) - Number(left.minutes ?? 0))
+    .map((w) => ({
+      title: trimTitle(w.window_name as string),
+      app: typeof w.app_name === "string" ? w.app_name.trim() : "",
+    }))
+    // Dedupe on the title alone, not the rendered line. The same document open
+    // in a browser and its native app is two rows with different app names but
+    // one title, and listing it twice reads as a bug rather than as detail.
+    .filter(({ title }) => {
+      const key = title.toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map(({ title, app }) => (app ? `${title} — ${app}` : title))
+    .slice(0, 3);
+}
+
+export function buildLearningSummary(
+  activity: ActivitySnapshot,
+  options: { elapsedMs?: number } = {},
+): string {
   const apps = capturedAppsFrom(activity, 0);
-  const minutes = Number(activity.total_active_minutes ?? 0);
+  // Wall time since setup, NOT `total_active_minutes`. The engine computes the
+  // latter by summing gaps between frames with idle excluded, so a few minutes
+  // of real work sums to well under a minute and the summary says "under a
+  // minute" about a window the user just watched run for three. Elapsed time
+  // is what "since setup ended" actually means.
+  const elapsedMinutes = Number.isFinite(options.elapsedMs)
+    ? (options.elapsedMs as number) / 60_000
+    : Number(activity.total_active_minutes ?? 0);
+  const minutes = elapsedMinutes;
   const frames = Number(activity.total_frames ?? 0);
   const files = (Array.isArray(activity.edited_files) ? activity.edited_files : [])
     .map((file) => (typeof file?.path === "string" ? fileName(file.path) : ""))
@@ -203,6 +305,7 @@ export function buildLearningSummary(activity: ActivitySnapshot): string {
   const transcriptions = Number(
     activity.audio_summary?.transcription_count ?? 0,
   );
+  const focus = focusLines(activity);
 
   const lines: string[] = [];
 
@@ -216,22 +319,41 @@ export function buildLearningSummary(activity: ActivitySnapshot): string {
     lines.push(`Since setup ended I recorded ${formatMinutes(minutes)}.`);
   }
 
-  const details: string[] = [];
-  details.push(`${frames} screen${frames === 1 ? "" : "s"} indexed`);
+  // What was actually on screen. This is the part worth reading.
+  if (focus.length > 0) {
+    lines.push(focus.map((line) => `- ${line}`).join("\n"));
+  }
+
+  const details: string[] = [`${frames} screen${frames === 1 ? "" : "s"} indexed`];
   if (files.length > 0) details.push(`files open: ${formatList(files)}`);
   if (transcriptions > 0) {
     details.push(
       `${transcriptions} audio transcript${transcriptions === 1 ? "" : "s"}`,
     );
   }
-  lines.push(details.join(" · "));
+  // A bare count on its own line reads as a stray fragment, but it must never
+  // simply disappear — it is the proof that something was captured. Give it
+  // its own paragraph only when it has company; otherwise fold it into the
+  // opening sentence.
+  if (details.length > 1) {
+    lines.push(details.join(" · "));
+  } else {
+    lines[0] = `${lines[0].slice(0, -1)}, and indexed ${frames} screen${
+      frames === 1 ? "" : "s"
+    }.`;
+  }
 
   lines.push(
-    "That is the raw material. Ask me anything you saw, said, or heard from here on — I keep recording in the background.",
+    focus.length > 0
+      ? `Ask me about any of it — "what was I doing in ${
+          apps[0]?.name ?? "that app"
+        }?" works. I keep recording in the background.`
+      : "Ask me anything you saw, said, or heard from here on — I keep recording in the background.",
   );
 
   return lines.join("\n\n");
 }
+
 
 // --- persisted state --------------------------------------------------------
 

@@ -18,10 +18,14 @@ export async function fetchRecentActivity(
   sinceISO: string,
   options: { signal?: AbortSignal; withDetail?: boolean } = {},
 ): Promise<ActivitySnapshot | null> {
+  // Two tiers on purpose. The poll runs every few seconds and only needs app
+  // names, so everything optional is off. The summary runs once and wants the
+  // window list, which is what lets it name the actual work instead of the
+  // container app — worth one richer call, not worth it 100 times.
   const params = new URLSearchParams({
     start_time: sinceISO,
     end_time: new Date().toISOString(),
-    include_windows: "false",
+    include_windows: options.withDetail ? "true" : "false",
     include_key_texts: "false",
     include_recording: "false",
     include_memories: "false",

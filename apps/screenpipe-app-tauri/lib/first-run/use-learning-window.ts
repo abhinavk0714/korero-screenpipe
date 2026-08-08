@@ -7,10 +7,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
 
+import { commands } from "@/lib/utils/tauri";
 import {
   LEARNING_POLL_INTERVAL_MS,
   LEARNING_WINDOW_CEILING_MS,
+  beginLearningWindow,
   buildLearningSummary,
+  canResolveYet,
   capturedAppsFrom,
   claimLearningSeed,
   hasEnoughEvidence,
@@ -25,10 +28,20 @@ import {
 } from "@/lib/first-run/learning-window";
 import { fetchRecentActivity } from "@/lib/first-run/recent-activity";
 import { seedFirstRunSummaryChat } from "@/lib/first-run/seed-summary-chat";
+import { summarizeFirstRunWithAi } from "@/lib/first-run/summarize-with-ai";
+import type { AIPreset } from "@/lib/utils/tauri";
 
 export type LearningWindowView = FirstRunLearningState & {
   remainingMs: number;
   dismiss: () => void;
+};
+
+export type LearningWindowOptions = {
+  /** Preset used to write the summary. Omit to force the deterministic one,
+   *  which is also the fallback whenever the model is unavailable or answers
+   *  with something we will not show. */
+  aiPreset?: AIPreset | null;
+  userToken?: string | null;
 };
 
 /**
@@ -38,10 +51,49 @@ export type LearningWindowView = FirstRunLearningState & {
  * a deterministic summary of what we saw. Mount this once from a surface the
  * user actually lands on after onboarding.
  */
-export function useLearningWindow(): LearningWindowView {
+export function useLearningWindow(
+  options: LearningWindowOptions = {},
+): LearningWindowView {
   const [state, setState] = useState<FirstRunLearningState>(() =>
     readLearningWindow(),
   );
+  // Read through a ref so a settings refresh cannot restart the polling effect
+  // mid-window and re-run the resolve from the top.
+  const aiRef = useRef(options);
+  aiRef.current = options;
+
+  // Open the window from `completedAt`, which Rust persists.
+  //
+  // Setup runs in its own webview and webviews do not share a localStorage
+  // partition, so a window started at completion time would be written into
+  // the onboarding partition and be invisible here. Deriving it from a fact
+  // the backend already owns removes the cross-window write entirely, and the
+  // cutoff stays exactly right because `completedAt` IS the moment setup
+  // ended — everything summarized was captured after it.
+  useEffect(() => {
+    if (state.phase !== "idle") return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await commands.getOnboardingStatus();
+        if (cancelled || result.status !== "ok") return;
+        const completedAt = result.data.completedAt;
+        if (!completedAt) return;
+        const elapsed = Date.now() - Date.parse(completedAt);
+        // Only a setup that just finished opens a window. Anything older is a
+        // returning user, who must never see a first-run banner.
+        if (!Number.isFinite(elapsed) || elapsed < 0) return;
+        if (elapsed > LEARNING_WINDOW_CEILING_MS) return;
+        if (readLearningWindow().phase !== "idle") return;
+        setState(beginLearningWindow(completedAt));
+      } catch {
+        // Without a status read there is no window; the app is unaffected.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [state.phase]);
   const [capturedApps, setCapturedApps] = useState<FirstRunCapturedApp[]>([]);
   const [remainingMs, setRemainingMs] = useState(() =>
     learningWindowRemainingMs(readLearningWindow().startedAt),
@@ -78,16 +130,32 @@ export function useLearningWindow(): LearningWindowView {
 
       setCapturedApps(capturedAppsFrom(activity, Date.now()));
 
-      if (!hasEnoughEvidence(activity)) return;
+      // Both gates: enough captured, and old enough that the summary is not
+      // reporting on a few seconds of work.
+      if (!hasEnoughEvidence(activity) || !canResolveYet(startedAt)) return;
       if (seedingRef.current || !claimLearningSeed()) return;
       seedingRef.current = true;
 
-      const elapsedSeconds = Math.round(
-        (Date.now() - Date.parse(startedAt)) / 1_000,
-      );
-      const chatId = await seedFirstRunSummaryChat(
-        buildLearningSummary(activity),
-      );
+      // Re-fetch with detail now that we are committing to a summary.
+      const detailed =
+        (await fetchRecentActivity(startedAt, { withDetail: true })) ?? activity;
+
+      const elapsedMs = Date.now() - Date.parse(startedAt);
+      const elapsedSeconds = Math.round(elapsedMs / 1_000);
+
+      // Deterministic first: it is always true, always available, and costs
+      // nothing. The model then gets a chance to say it better, grounded on
+      // the same facts. If it declines, errors, times out, or answers with
+      // something we will not show, the user still gets a real summary.
+      const fallback = buildLearningSummary(detailed, { elapsedMs });
+      const written = await summarizeFirstRunWithAi(detailed, {
+        elapsedMs,
+        preset: aiRef.current.aiPreset,
+        userToken: aiRef.current.userToken,
+      });
+      if (cancelled) return;
+
+      const chatId = await seedFirstRunSummaryChat(written ?? fallback);
       if (cancelled) return;
 
       if (!chatId) {
@@ -101,6 +169,8 @@ export function useLearningWindow(): LearningWindowView {
         seconds_to_summary: elapsedSeconds,
         app_count: capturedAppsFrom(activity, 0).length,
         frame_count: Number(activity.total_frames ?? 0),
+        // Whether the model wrote it or we fell back. Content is never sent.
+        summary_source: written ? "ai" : "deterministic",
       });
       setState(markLearningReady(chatId));
     };

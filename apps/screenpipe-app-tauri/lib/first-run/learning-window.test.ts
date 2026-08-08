@@ -5,7 +5,9 @@
 import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
 import {
   LEARNING_WINDOW_CEILING_MS,
+  MIN_LEARNING_MS,
   beginLearningWindow,
+  canResolveYet,
   buildLearningSummary,
   capturedAppsFrom,
   claimLearningSeed,
@@ -29,6 +31,10 @@ const ok = (over: Partial<ActivitySnapshot> = {}): ActivitySnapshot => ({
   apps: [
     { name: "Arc", frame_count: 22 },
     { name: "Cursor", frame_count: 9 },
+  ],
+  windows: [
+    { app_name: "Cursor", window_name: "learning-window.ts", minutes: 3 },
+    { app_name: "Arc", window_name: "screenpipe/screenpipe · PR", minutes: 1 },
   ],
   ...over,
 });
@@ -85,13 +91,44 @@ describe("evidence gate", () => {
     ).toBe(false);
   });
 
-  it("resolves on either enough frames or enough distinct apps", () => {
+  it("never treats app names as a substitute for captured frames", () => {
+    // The shipped regression: two apps with one frame each resolved, and
+    // produced "I watched Google Chrome and Claude … 2 screens indexed".
+    expect(
+      hasEnoughEvidence(
+        ok({
+          total_frames: 2,
+          apps: [
+            { name: "Google Chrome", frame_count: 1 },
+            { name: "Claude", frame_count: 1 },
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("resolves on plenty of frames, or fewer frames across several apps", () => {
     expect(
       hasEnoughEvidence(
         ok({ total_frames: 20, apps: [{ name: "Cursor", frame_count: 20 }] }),
       ),
     ).toBe(true);
-    expect(hasEnoughEvidence(ok({ total_frames: 3 }))).toBe(true);
+    expect(hasEnoughEvidence(ok({ total_frames: 7 }))).toBe(true);
+    // Same frame count, only one app: not enough.
+    expect(
+      hasEnoughEvidence(
+        ok({ total_frames: 7, apps: [{ name: "Cursor", frame_count: 7 }] }),
+      ),
+    ).toBe(false);
+  });
+
+  it("refuses to resolve before the window is old enough to be worth reading", () => {
+    const now = Date.now();
+    const justStarted = new Date(now).toISOString();
+    expect(canResolveYet(justStarted, now)).toBe(false);
+    expect(canResolveYet(justStarted, now + MIN_LEARNING_MS - 1)).toBe(false);
+    expect(canResolveYet(justStarted, now + MIN_LEARNING_MS)).toBe(true);
+    expect(canResolveYet(null)).toBe(false);
   });
 });
 
@@ -124,8 +161,99 @@ describe("deterministic summary", () => {
     const summary = buildLearningSummary(ok());
     expect(summary).toContain("Arc");
     expect(summary).toContain("Cursor");
-    expect(summary).toContain("31 screens indexed");
+    expect(summary).toContain("31 screens");
     expect(summary).toContain("4 minutes");
+  });
+
+  it("names what was actually on screen, not just the container app", () => {
+    const summary = buildLearningSummary(ok());
+    expect(summary).toContain("learning-window.ts");
+    expect(summary).toContain("screenpipe/screenpipe · PR");
+  });
+
+  it("drops a window titled after its own app", () => {
+    // Live output produced "- Claude — Claude", which says nothing the opening
+    // sentence has not already said.
+    const summary = buildLearningSummary(
+      ok({
+        windows: [
+          { app_name: "Claude", window_name: "Claude", minutes: 5 },
+          { app_name: "Arc", window_name: "a real page title", minutes: 1 },
+        ],
+      }),
+    );
+    expect(summary).not.toContain("Claude — Claude");
+    expect(summary).toContain("a real page title");
+  });
+
+  it("does not end a truncated title on a dangling separator", () => {
+    const summary = buildLearningSummary(
+      ok({
+        windows: [
+          {
+            app_name: "Google Chrome",
+            window_name:
+              "screenpipe — local-first context layer for AI agents - docs and more",
+            minutes: 4,
+          },
+        ],
+      }),
+    );
+    expect(summary).not.toMatch(/[-–—·,:;|]\s*…/);
+    expect(summary).toContain("…");
+  });
+
+  it("does not leave a bare screen count stranded as its own paragraph", () => {
+    // "2 screens indexed" alone on a line read as a broken fragment.
+    const summary = buildLearningSummary(
+      ok({ windows: [], edited_files: [], audio_summary: null }),
+    );
+    const paragraphs = summary.split("\n\n");
+    expect(paragraphs.some((p) => /^\d+ screens? indexed$/.test(p.trim()))).toBe(
+      false,
+    );
+    expect(summary).toContain("31 screens");
+  });
+
+  it("reports elapsed wall time, not the engine's gap-allocated active time", () => {
+    // Live output said "for under a minute" about a window the user had just
+    // watched run for three: total_active_minutes sums gaps between frames
+    // with idle excluded, so it is near zero over a short window.
+    const summary = buildLearningSummary(ok({ total_active_minutes: 0.2 }), {
+      elapsedMs: 3 * 60_000,
+    });
+    expect(summary).toContain("3 minutes");
+    expect(summary).not.toContain("under a minute");
+  });
+
+  it("falls back to active minutes when elapsed time is not supplied", () => {
+    expect(buildLearningSummary(ok())).toContain("4 minutes");
+  });
+
+  it("lists one title once even when two apps report it", () => {
+    // A note open in both its native app and a browser is one thing on screen,
+    // and printing it twice reads as a bug rather than as detail.
+    const summary = buildLearningSummary(
+      ok({
+        windows: [
+          { app_name: "Arc", window_name: "080726 - brain", minutes: 3 },
+          { app_name: "Obsidian", window_name: "080726 - brain", minutes: 2 },
+        ],
+      }),
+    );
+    expect(summary.match(/080726 - brain/g)).toHaveLength(1);
+  });
+
+  it("strips another app's status glyphs from a title", () => {
+    const summary = buildLearningSummary(
+      ok({
+        windows: [
+          { app_name: "Arc", window_name: "• Discord | general", minutes: 3 },
+        ],
+      }),
+    );
+    expect(summary).toContain("Discord | general");
+    expect(summary).not.toContain("• Discord");
   });
 
   it("mentions files and audio only when they exist", () => {
@@ -161,7 +289,7 @@ describe("deterministic summary", () => {
       ok({ apps: [], total_frames: 0, total_active_minutes: 0 }),
     );
     expect(summary).toContain("under a minute");
-    expect(summary).toContain("0 screens indexed");
+    expect(summary).toContain("0 screens");
   });
 });
 

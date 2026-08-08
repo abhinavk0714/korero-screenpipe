@@ -5,17 +5,17 @@
 // The learning window that runs immediately after setup ends.
 //
 // Runs with `SCREENPIPE_E2E_SEED=onboarding,no-recording` — the authenticated
-// seed — on purpose. The window renders inside Brain, and Brain sits behind
-// the account gate: on a signed-out install the whole section is replaced by
-// "sign in required", so none of this is reachable. Real users arrive here
-// having just signed in during setup, which is what this seed reproduces.
+// seed — on purpose. The ENTIRE app shell sits behind AppEntitlementGate
+// (app/providers.tsx): with no account every surface is replaced by "sign in
+// required", so none of this is reachable. Real users arrive here having just
+// signed in during setup, which is what this seed reproduces.
 //
 // `no-recording` is load-bearing for the empty-path test: with capture off the
 // engine genuinely reports that it is not recording, so the assertion runs
 // against a real engine answer rather than a stubbed one.
 //
 // What this proves that unit tests cannot:
-//   1. The banner mounts on the surface setup actually routes to, and its
+//   1. The banner mounts on Home — the surface setup now routes to — and its
 //      countdown is live rather than a frozen first render.
 //   2. The empty state names the REAL reason the REAL engine gave. This is
 //      the most likely first-run outcome on a machine where capture failed,
@@ -23,9 +23,9 @@
 //      is the entire point of the state.
 //   3. Dismissal is durable across a reload. A banner that comes back after
 //      being closed is worse than never showing it.
-//   4. It renders nothing outside the window. It is mounted unconditionally
-//      on Brain, so an idle or done state that leaked a banner would show it
-//      to every existing user forever.
+//   4. It renders nothing outside the window. It is mounted on the empty chat
+//      surface, so an idle or done state that leaked a banner would show it to
+//      every existing user forever.
 //
 // The summary text and the seed-once rules are pure functions covered in
 // lib/first-run/learning-window.test.ts. This spec drives the state machine
@@ -34,7 +34,11 @@
 import { existsSync } from "node:fs";
 import { E2E_SEED_FLAGS } from "../helpers/app-launcher.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
-import { showWindow, waitForWindowHandle } from "../helpers/tauri.js";
+import {
+  invokeOrThrow,
+  showWindow,
+  waitForWindowHandle,
+} from "../helpers/tauri.js";
 import { t, waitForAppReady } from "../helpers/test-utils.js";
 
 const seedFlags = E2E_SEED_FLAGS.split(",")
@@ -66,14 +70,14 @@ const bannerPhase = async (): Promise<string | null> =>
   )) as string | null;
 
 /**
- * Seed window state and land on Brain.
+ * Seed window state and land on Home.
  *
  * Sets storage and navigates in one step so the banner mounts already reading
  * the seeded state rather than briefly rendering the previous test's.
  */
-const openBrainWith = async (state: Record<string, unknown>) => {
-  // Same route setup completion uses: show_window(Home { page: "brain" }).
-  await showWindow({ Home: { page: "brain" } });
+const openHomeWith = async (state: Record<string, unknown>) => {
+  // Same route setup completion uses: show_window(Home { page: "home" }).
+  await showWindow({ Home: { page: "home" } });
   await waitForWindowHandle("home", t(20_000));
   await browser.switchToWindow("home");
   await browser.execute(
@@ -98,26 +102,27 @@ const openBrainWith = async (state: Record<string, unknown>) => {
       );
       window.localStorage.setItem(learningKey, learningValue);
       // Set both before navigating so the fresh mount reads them on boot.
-      window.location.href = "/home?section=brain";
+      window.location.href = "/home?section=home";
     },
     E2E_ACCOUNT_USER_KEY,
     LEARNING_STORAGE_KEY,
     JSON.stringify(state),
   );
   await browser.waitUntil(
-    async () => (await browser.getUrl()).includes("section=brain"),
-    { timeout: t(20_000), timeoutMsg: "never routed to Brain" },
+    async () => (await browser.getUrl()).includes("section=home"),
+    { timeout: t(20_000), timeoutMsg: "never routed to Home" },
   );
-  // Assert the section itself mounted before looking for anything inside it,
-  // so a routing failure reports as a routing failure.
+  // Assert the shell rendered before looking for anything inside it, so an
+  // account-gate or routing failure reports as itself rather than as a
+  // missing banner.
   await browser.waitUntil(
     async () =>
       Boolean(
         await browser.execute(
-          () => !!document.querySelector('[data-testid="section-brain"]'),
+          () => !!document.querySelector('[data-testid="chat-sidebar"]'),
         ),
       ),
-    { timeout: t(30_000), timeoutMsg: "Brain section never mounted" },
+    { timeout: t(30_000), timeoutMsg: "Home shell never mounted" },
   );
 };
 
@@ -138,11 +143,11 @@ const learningState = (over: Record<string, unknown> = {}) => ({
   });
 
   it("shows a live countdown while it is learning", async () => {
-    await openBrainWith(learningState());
+    await openHomeWith(learningState());
 
     await browser.waitUntil(async () => (await bannerCount()) === 1, {
       timeout: t(30_000),
-      timeoutMsg: "learning banner never mounted on Brain",
+      timeoutMsg: "learning banner never mounted on Home",
     });
     expect(await bannerPhase()).toBe("learning");
 
@@ -170,7 +175,7 @@ const learningState = (over: Record<string, unknown> = {}) => ({
     // Ceiling already elapsed, so the window must settle on this mount. With
     // recording off the engine answers that it is not recording, and that
     // exact reason has to reach the user because it is the one they can fix.
-    await openBrainWith(
+    await openHomeWith(
       learningState({
         startedAt: new Date(Date.now() - 10 * 60 * 1_000).toISOString(),
       }),
@@ -207,14 +212,14 @@ const learningState = (over: Record<string, unknown> = {}) => ({
     await showWindow({ Home: { page: null } });
     await browser.switchToWindow("home");
     await browser.execute(() => {
-      window.location.href = "/home?section=brain";
+      window.location.href = "/home?section=home";
     });
     await browser.pause(t(4_000));
     expect(await bannerCount()).toBe(0);
   });
 
   it("offers the summary once one is ready, then gets out of the way", async () => {
-    await openBrainWith(
+    await openHomeWith(
       learningState({
         phase: "ready",
         seededAt: new Date().toISOString(),
@@ -240,9 +245,44 @@ const learningState = (over: Record<string, unknown> = {}) => ({
     expect(existsSync(filepath)).toBe(true);
   });
 
-  it("never renders outside the window", async () => {
+  // Regression guard for the bug this spec originally missed: the window used
+  // to be opened by setup's own webview, and webviews do not share a
+  // localStorage partition, so Home never saw it. Nothing is seeded here — the
+  // window has to appear from a real completion alone.
+  it("opens from a real setup completion, with nothing seeded", async () => {
+    await browser.execute((key: string) => {
+      window.localStorage.removeItem(key);
+    }, LEARNING_STORAGE_KEY);
+
+    // Re-complete setup through the real command, exactly as the last slide
+    // does, then land on Home the way Rust routes it.
+    await invokeOrThrow("reset_onboarding");
+    await invokeOrThrow("complete_onboarding");
+
+    await showWindow({ Home: { page: "home" } });
+    await waitForWindowHandle("home", t(20_000));
+    await browser.switchToWindow("home");
+    await browser.execute(() => {
+      window.location.href = "/home?section=home";
+    });
+
+    await browser.waitUntil(async () => (await bannerCount()) === 1, {
+      timeout: t(40_000),
+      timeoutMsg:
+        "no learning window after a real completion — the cross-window handoff regressed",
+    });
+    expect(await bannerPhase()).toBe("learning");
+  });
+
+  it("never renders for a user who did not just finish setup", async () => {
+    // No recent completion is what every existing user looks like. `idle` is
+    // included deliberately: it re-opens the window while a completion is
+    // fresh, so the guard that matters is that it does NOT once the
+    // completion is gone.
+    await invokeOrThrow("reset_onboarding");
+
     for (const phase of ["idle", "done"]) {
-      await openBrainWith(learningState({ phase }));
+      await openHomeWith(learningState({ phase }));
       await browser.pause(t(3_000));
       expect(await bannerCount()).toBe(0);
     }

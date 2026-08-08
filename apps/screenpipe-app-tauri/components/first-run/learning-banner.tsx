@@ -14,7 +14,10 @@ import {
   type FirstRunEmptyReason,
 } from "@/lib/first-run/learning-window";
 import { appIconUrl } from "@/lib/first-run/recent-activity";
-import { useLearningWindow } from "@/lib/first-run/use-learning-window";
+import {
+  useLearningWindow,
+  type LearningWindowOptions,
+} from "@/lib/first-run/use-learning-window";
 
 /**
  * Why the window closed with nothing, in the user's terms.
@@ -64,9 +67,9 @@ function CapturedAppIcon({ app }: { app: FirstRunCapturedApp }) {
  * Renders nothing outside the window, so it is safe to mount unconditionally
  * on the surface the user lands on after onboarding.
  */
-export function FirstRunLearningBanner() {
+export function FirstRunLearningBanner(props: LearningWindowOptions = {}) {
   const { phase, capturedApps, remainingMs, chatId, emptyReason, dismiss } =
-    useLearningWindow();
+    useLearningWindow(props);
 
   if (phase !== "learning" && phase !== "ready" && phase !== "empty") {
     return null;

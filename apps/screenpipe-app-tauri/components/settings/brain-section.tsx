@@ -59,7 +59,6 @@ import { SafArtifactBody } from "@/components/settings/saf-sop-view";
 import { ArtifactHtmlBody } from "@/components/settings/artifact-html-body";
 import { ConfirmDeleteDialog } from "@/components/settings/confirm-delete-dialog";
 import { BrainOverview } from "@/components/settings/brain-overview";
-import { FirstRunLearningBanner } from "@/components/first-run/learning-banner";
 import { isHtmlFileName } from "@/lib/utils/html-sandbox";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { localFetch } from "@/lib/api";
@@ -1609,11 +1608,6 @@ export function BrainSection() {
           </Popover>
         )}
       </div>
-
-      {/* Renders only during the post-onboarding learning window. It sits
-          outside the overview branch on purpose: the window is about capture
-          being alive, which is true whether or not a Live View was built. */}
-      <FirstRunLearningBanner />
 
       {typeFilter === "overview" ? (
         <BrainOverview

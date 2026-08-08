@@ -7,12 +7,16 @@ import * as React from "react";
 import { ChevronDown, Loader2, Settings, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SummaryCards } from "@/components/chat/summary-cards";
+import { FirstRunLearningBanner } from "@/components/first-run/learning-banner";
 import { HomeStarterSurface } from "@/components/chat/home-starter-surface";
 import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { InlineChatHistory } from "@/components/chat/standalone/inline-chat-history";
 import { ChatMessageList, type ChatMessageListProps } from "@/components/chat/standalone/chat-message-list";
 import type { ConversationMeta } from "@/lib/chat-storage";
+import { useSettings } from "@/lib/hooks/use-settings";
+import { pickPipePreset } from "@/lib/utils/pick-pipe-preset";
+import type { AIPreset } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
 import type { Message } from "@/lib/chat/types";
 import type { ContinuousPipeChatPolicy } from "@/lib/pipe-chat-policy";
@@ -96,6 +100,14 @@ export function ChatMainPane({
   isUserScrolledUp,
   scrollToBottom,
 }: ChatMainPaneProps) {
+  // Sourced here rather than inside the banner so the banner stays a pure
+  // presentational component with no settings-provider requirement.
+  const { settings } = useSettings();
+  const firstRunPreset = React.useMemo(
+    () => pickPipePreset((settings?.aiPresets ?? []) as AIPreset[]),
+    [settings?.aiPresets],
+  );
+
   return (
     <div className="flex-1 flex overflow-hidden">
       <InlineChatHistory
@@ -238,6 +250,18 @@ export function ChatMainPane({
                   )}
                 </div>
               )}
+            {/* Post-setup learning window. Renders only while the window is
+                open, so it is inert for everyone else. It sits on the empty
+                chat because that is where setup now lands and where the
+                summary chat appears once the window resolves. */}
+            {messages.length === 0 && !activePipeExecution && (
+              <div className="mx-auto w-full max-w-3xl px-4 pb-4">
+                <FirstRunLearningBanner
+                  aiPreset={firstRunPreset}
+                  userToken={settings?.user?.token ?? null}
+                />
+              </div>
+            )}
             {messages.length === 0 &&
               !isPreparingPrefill &&
               !activePipeExecution &&
