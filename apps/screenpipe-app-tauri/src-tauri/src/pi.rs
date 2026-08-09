@@ -1129,6 +1129,16 @@ fn seed_pi_package_json(install_dir: &std::path::Path) {
         Ok(_) => info!("Seeded pi-agent package.json with direct deps + overrides"),
         Err(e) => warn!("Failed to seed pi-agent package.json: {}", e),
     }
+
+    // Write a local .npmrc that pins the registry to the public npm registry.
+    // This prevents corporate ~/.npmrc overrides (e.g. pointing to an internal
+    // Artifactory/Nexus mirror) from causing 404s for public packages like
+    // @anthropic-ai/sdk. Both bun and npm honour a project-local .npmrc.
+    let npmrc_path = install_dir.join(".npmrc");
+    match std::fs::write(&npmrc_path, "registry=https://registry.npmjs.org/\n") {
+        Ok(_) => info!("Wrote .npmrc with public registry to pi-agent dir"),
+        Err(e) => warn!("Failed to write .npmrc to pi-agent dir: {}", e),
+    }
 }
 
 /// Check if the locally-installed pi version matches the expected version.
@@ -1279,7 +1289,8 @@ fn npm_install_command(install_dir: &Path) -> Command {
     {
         let mut cmd = Command::new("cmd.exe");
         cmd.args(["/C", "npm", "install", "--no-audit", "--no-fund"])
-            .current_dir(install_dir);
+            .current_dir(install_dir)
+            .env("npm_config_registry", "https://registry.npmjs.org/");
         cmd
     }
 
@@ -1287,7 +1298,8 @@ fn npm_install_command(install_dir: &Path) -> Command {
     {
         let mut cmd = Command::new("npm");
         cmd.args(["install", "--no-audit", "--no-fund"])
-            .current_dir(install_dir);
+            .current_dir(install_dir)
+            .env("npm_config_registry", "https://registry.npmjs.org/");
         cmd
     }
 }
@@ -1366,6 +1378,11 @@ fn run_pi_package_install_once(install_dir: &Path, bun: &str) -> Result<(), Stri
     bun_cmd
         .current_dir(install_dir)
         .env("BUN_INSTALL_CACHE_DIR", &cache_dir)
+        // Force the public npm registry so that corporate ~/.npmrc overrides
+        // (e.g. pointing to an internal Artifactory/Nexus mirror that doesn't
+        // carry public packages like @anthropic-ai/sdk) cannot cause 404s.
+        .env("BUN_CONFIG_REGISTRY", "https://registry.npmjs.org/")
+        .env("npm_config_registry", "https://registry.npmjs.org/")
         .args(["install"]);
 
     match run_command_output(bun_cmd) {
