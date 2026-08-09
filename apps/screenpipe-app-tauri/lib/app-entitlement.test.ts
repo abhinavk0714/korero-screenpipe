@@ -14,6 +14,7 @@ import {
   hasConsumerAppSubscription,
   hasFreePlanPolicy,
   hasPersistedEntitlementEvidence,
+  hasStalePaidEvidence,
   hasVerifiedPaidPlan,
   isAuthenticatedFreeUser,
   isSignedInCloudSubscriber,
@@ -81,6 +82,124 @@ describe("app entitlement", () => {
         }),
       ),
     ).toBe(true);
+  });
+
+  describe("hasStalePaidEvidence", () => {
+    const staleCheckedAt = new Date(
+      NOW.getTime() - APP_ENTITLEMENT_MAX_STALE_MS - 1,
+    ).toISOString();
+
+    function stalePaid(entitlementOverrides: Record<string, any> = {}) {
+      return user({
+        app_entitled: true,
+        subscription_plan: "pro",
+        entitlement: {
+          active: true,
+          plan: "pro",
+          source: "subscription",
+          checked_at: staleCheckedAt,
+          features: { app: true },
+          ...entitlementOverrides,
+        },
+      });
+    }
+
+    it("recognizes paid evidence whose only defect is freshness", () => {
+      const offline = stalePaid();
+      // The account really is no longer verified-paid...
+      expect(hasVerifiedPaidPlan(offline)).toBe(false);
+      expect(getLocalPlanPolicy(offline)).toBe("unknown");
+      // ...but we can tell it merely went stale rather than being denied.
+      expect(hasStalePaidEvidence(offline)).toBe(true);
+    });
+
+    it("is false while the evidence is still fresh", () => {
+      const fresh = user({
+        app_entitled: true,
+        subscription_plan: "pro",
+        entitlement: {
+          active: true,
+          plan: "pro",
+          source: "subscription",
+          checked_at: NOW.toISOString(),
+          features: { app: true },
+        },
+      });
+      expect(hasVerifiedPaidPlan(fresh)).toBe(true);
+      expect(hasStalePaidEvidence(fresh)).toBe(false);
+    });
+
+    it("is false for accounts that were never paid", () => {
+      expect(hasStalePaidEvidence(null)).toBe(false);
+      expect(hasStalePaidEvidence(user({}))).toBe(false);
+      expect(
+        hasStalePaidEvidence(
+          user({
+            subscription_plan: "none",
+            entitlement: {
+              active: true,
+              plan: "none",
+              source: "none",
+              checked_at: staleCheckedAt,
+              features: { app: true },
+            },
+          }),
+        ),
+      ).toBe(false);
+    });
+
+    it("does not rescue inconsistent or inactive evidence", () => {
+      // plan disagrees with the account plan
+      expect(hasStalePaidEvidence(stalePaid({ plan: "standard" }))).toBe(false);
+      // inactive at the moment the server checked it
+      expect(hasStalePaidEvidence(stalePaid({ active: false }))).toBe(false);
+      // no app feature granted
+      expect(
+        hasStalePaidEvidence(
+          user({
+            app_entitled: false,
+            subscription_plan: "pro",
+            entitlement: {
+              active: true,
+              plan: "pro",
+              source: "subscription",
+              checked_at: staleCheckedAt,
+              features: { app: false },
+            },
+          }),
+        ),
+      ).toBe(false);
+      // rolled-back clock: verify in the "future", then jump back
+      expect(
+        hasStalePaidEvidence(
+          stalePaid({
+            checked_at: new Date(
+              NOW.getTime() + APP_ENTITLEMENT_CLOCK_SKEW_MS + 1_000,
+            ).toISOString(),
+          }),
+        ),
+      ).toBe(false);
+      // unparseable timestamp carries no evidence at all
+      expect(hasStalePaidEvidence(stalePaid({ checked_at: "not-a-date" }))).toBe(
+        false,
+      );
+    });
+
+    it("never reports stale for a lifetime grant, which stays verified-paid", () => {
+      const lifetime = user({
+        app_entitled: true,
+        subscription_plan: "lifetime",
+        entitlement: {
+          active: true,
+          plan: "lifetime",
+          source: "lifetime",
+          checked_at: staleCheckedAt,
+          features: { app: true },
+        },
+      });
+      expect(hasVerifiedPaidPlan(lifetime)).toBe(true);
+      expect(hasStalePaidEvidence(lifetime)).toBe(false);
+    });
   });
 
   it("blocks stale cached app access", () => {

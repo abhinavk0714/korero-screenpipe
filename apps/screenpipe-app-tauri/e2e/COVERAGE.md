@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 104
-- Declared test blocks: 301
-- Weighted coverage points: 235.3
+- Mapped specs: 105
+- Declared test blocks: 304
+- Weighted coverage points: 238.3
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -20,8 +20,8 @@ can execute more runtime cases than this number shows.
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
 | windows | 81 | 262 | 214.4 | 15 | 89 | 91% |
-| macos | 100 | 264 | 206.1 | 17 | 91 | 90% |
-| linux | 71 | 222 | 184.2 | 14 | 84 | 88% |
+| macos | 101 | 267 | 209.1 | 17 | 91 | 90% |
+| linux | 72 | 225 | 187.2 | 14 | 84 | 88% |
 
 ## Runtime Results
 
@@ -35,18 +35,18 @@ pass/fail/skip counts.
 | --- | --- | --- | --- |
 | audio-device | 3 specs / 29 tests / 20.6 pts | 3 specs / 3 tests / 1.7 pts | - |
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
-| billing | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts |
+| billing | 4 specs / 6 tests / 5.7 pts | 5 specs / 9 tests / 8.7 pts | 5 specs / 9 tests / 8.7 pts |
 | capture-ocr | 2 specs / 16 tests / 6.4 pts | 8 specs / 12 tests / 4.8 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 25 specs / 50 tests / 36.9 pts | 34 specs / 69 tests / 48.5 pts | 24 specs / 49 tests / 36.4 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 21 specs / 106 tests / 88.8 pts | 26 specs / 91 tests / 76.8 pts | 17 specs / 77 tests / 68.2 pts |
+| local-api | 21 specs / 106 tests / 88.8 pts | 27 specs / 94 tests / 79.8 pts | 18 specs / 80 tests / 71.2 pts |
 | notifications | 4 specs / 25 tests / 16.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
 | onboarding | 6 specs / 26 tests / 23.0 pts | 7 specs / 27 tests / 23.4 pts | 6 specs / 26 tests / 23.0 pts |
 | os-integration | 7 specs / 29 tests / 24.8 pts | 13 specs / 25 tests / 14.8 pts | 2 specs / 12 tests / 8.7 pts |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
 | pipes | 6 specs / 19 tests / 19.0 pts | 7 specs / 24 tests / 24.0 pts | 6 specs / 19 tests / 19.0 pts |
-| real-ui-e2e | 56 specs / 167 tests / 138.8 pts | 65 specs / 166 tests / 137.9 pts | 52 specs / 145 tests / 125.2 pts |
-| settings | 14 specs / 38 tests / 35.0 pts | 16 specs / 33 tests / 28.7 pts | 13 specs / 30 tests / 27.0 pts |
+| real-ui-e2e | 56 specs / 167 tests / 138.8 pts | 66 specs / 169 tests / 140.9 pts | 53 specs / 148 tests / 128.2 pts |
+| settings | 14 specs / 38 tests / 35.0 pts | 17 specs / 36 tests / 31.7 pts | 14 specs / 33 tests / 30.0 pts |
 | storage-privacy | 9 specs / 40 tests / 31.3 pts | 9 specs / 26 tests / 25.1 pts | 6 specs / 19 tests / 18.1 pts |
 | tauri-command | 16 specs / 42 tests / 31.4 pts | 20 specs / 47 tests / 34.3 pts | 15 specs / 41 tests / 30.4 pts |
 | window-lifecycle | 18 specs / 63 tests / 53.0 pts | 18 specs / 44 tests / 31.4 pts | 13 specs / 39 tests / 29.9 pts |
@@ -71,8 +71,8 @@ pass/fail/skip counts.
 | Audio device health | audio-device | covered (strong; windows-system-integration, windows-core-recording) | weak (conditional; meetings-only-audio-lifecycle, audio-fallback) | gap |
 | Meetings-only audio device ownership | audio-device, local-api, real-ui-e2e | weak (conditional; meetings-only-audio-lifecycle) | weak (conditional; meetings-only-audio-lifecycle) | - |
 | Window lifecycle, focus, and dedupe | window-lifecycle | covered (strong; windows-system-integration, window-lifecycle) | covered (strong; window-lifecycle, viewer-deeplink) | covered (strong; window-lifecycle, viewer-deeplink) |
-| Meeting note creation and editing | real-ui-e2e | covered (strong; windows-user-journey, meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click, meeting-workspace-tabs) | covered (strong; meeting-note-bottom-click, meeting-workspace-tabs) |
-| Pipes discover, install, and play | pipes | covered (strong; pipes, brain-overview) | covered (strong; pipes, pipe-continuous-chat) | covered (strong; pipes, brain-overview) |
+| Meeting note creation and editing | real-ui-e2e | covered (strong; windows-user-journey, meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click, meeting-summary-recovery) | covered (strong; meeting-note-bottom-click, meeting-summary-recovery) |
+| Pipes discover, install, and play | pipes | covered (strong; pipes, brain-overview) | covered (strong; pipes, brain-overview) | covered (strong; pipes, brain-overview) |
 | Chat window, composer, and streaming state | chat-ai | covered (strong; acp-backend, chat-sidebar-groups) | covered (strong; acp-backend, chat-sidebar-groups) | covered (strong; acp-backend, chat-sidebar-groups) |
 | Tray/search window behavior | window-lifecycle | covered (strong; window-lifecycle, tray-search) | covered (strong; window-lifecycle, tray-search) | covered (strong; window-lifecycle, tray-search) |
 | Native tray recording status refresh | os-integration | covered (strong; tray-recording-status) | - | - |
@@ -89,7 +89,7 @@ pass/fail/skip counts.
 
 ## Execution Integrity
 
-- Specs that claim coverage but contain zero executable test blocks: zzz-browser-state-chat-switch.spec.ts, zz-owned-browser-background-nav.spec.ts, zzz-owned-browser-headless.spec.ts. They assert nothing and no longer count toward any critical feature.
+- Specs that claim coverage but contain zero executable test blocks: zz-owned-browser-background-nav.spec.ts, zzz-browser-state-chat-switch.spec.ts, zzz-owned-browser-headless.spec.ts. They assert nothing and no longer count toward any critical feature.
 - Declared coverage below is NOT reconciled against execution: no runtime results
   were supplied. Specs can self-skip on hosted runners (no display, vision off,
   recording disabled) and still read as covered. Run `e2e:coverage:runtime` (or pass
@@ -200,6 +200,7 @@ pass/fail/skip counts.
 | zz-audio-fallback-reverify.spec.ts | macos | auth, entitlement, audio-device, settings | cloud-entitlement-reverify, audio-engine-fallback, settings-recording | high | strong | real-user-flow | 1 | AuthGuard re-verifies cloud entitlement on window focus so a freshly-subscribed user gets cloud transcription without restart (#4339). |
 | zz-enterprise-license-prompt.spec.ts | windows, macos, linux | settings, billing, real-ui-e2e | app-entitlement-gate, billing-gate | high | strong | real-user-flow | 2 | Enterprise license prompt handles invalid keys, full-seat errors, and retry success after seats are added without staying stuck in validating state. |
 | zz-logout-resurrect.spec.ts | windows, macos, linux | real-ui-e2e, settings | account-logout, auth-session | high | strong | synthetic | 1 | Logout must not be resurrected by an in-flight loadUser. Logs in via a synthetic deep-link (?api_key=) with a mocked /api/user fetch, makes the fetch slow, fires it, then clicks logout while it is pending and asserts the slow response cannot re-write the user (the 'logout needs two clicks' bug). Covers the auth-generation guard in use-settings.tsx. |
+| zz-offline-resilience.spec.ts | macos, linux | settings, billing, real-ui-e2e, local-api | app-entitlement-gate, billing-gate | high | strong | real-user-flow | 3 | Losing the internet must not look like a broken app. Forces the billing gate on, seeds a paid account past the 72h freshness window, cuts the webview off from every non-loopback host, and asserts the app still renders, no refresh-access wall appears, and the local engine is never torn down. |
 | zz-owned-browser-background-nav.spec.ts | windows, macos | os-integration, window-lifecycle | owned-browser, window-lifecycle | low | smoke | command | 0 | Owned browser background navigation visibility. |
 | zzz-browser-state-chat-switch.spec.ts | windows, macos | real-ui-e2e, storage-privacy | chat, owned-browser | high | strong | synthetic | 0 | Synthetic E2E (zzz- prefix, search-driven): starts from a fresh chat with no conversation file, seeds browser state before the first durable save, then verifies auto-save persists that state and it survives a switch away and back. Keeps native visibility assertions out of this spec because post-zz window state is too brittle; deeper save/merge coverage lives in focused tests. |
 | zzz-owned-browser-headless.spec.ts | windows, macos | os-integration, window-lifecycle, local-api | owned-browser, window-lifecycle | high | strong | mixed | 0 | Headless owned browser for background pipes (#4248): with the sidebar never opened, a background eval and navigate-and-scrape over the local API lazily create a hidden offscreen child webview, return a real JS result (6*7 -> 42; document.readyState), and stay invisible; is_ready reflects real serviceability; the same singleton is then adopted into the sidebar panel (page state survives, no second webview). Search-driven and runs last because attaching the child to home tears down home's WebDriver handle. |

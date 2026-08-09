@@ -313,6 +313,39 @@ export function hasVerifiedPaidPlan(user: AppUser | null | undefined): boolean {
   return hasVerifiedPaidPlanAt(user, Date.now());
 }
 
+/**
+ * True when an account carries internally consistent, previously server-verified
+ * paid evidence whose ONLY defect is freshness — i.e. we could not reach
+ * `/api/user` recently (the machine is offline, DNS is flapping, or the API is
+ * down). This is deliberately narrower than `getLocalPlanPolicy() === "unknown"`,
+ * which also covers missing, conflicting, malformed, and inactive evidence: those
+ * stay walled.
+ *
+ * Callers must never read this as paid. It only says "we cannot verify right
+ * now", which downgrades the account to the free plan rather than locking it out.
+ * Local capture is a free-plan capability, and `hasVerifiedFreePlan` never
+ * expires, so walling a stale-paid account protects no revenue — it only breaks
+ * the app for a paying customer who lost wifi.
+ */
+export function hasStalePaidEvidence(
+  user: AppUser | null | undefined,
+): boolean {
+  // Still fresh (or lifetime/grace) — not stale, nothing to downgrade.
+  if (hasVerifiedPaidPlan(user)) return false;
+  const entitlement = asEntitlement(user?.entitlement);
+  const checkedAt = parseEntitlementTime(entitlement?.checked_at);
+  if (checkedAt === null) return false;
+  // Future-dated evidence is a rolled-back clock, not an offline gap. Rolling
+  // the clock forward, verifying, then rolling it back must not buy an offline
+  // downgrade, so those keep walling.
+  if (checkedAt > Date.now() + APP_ENTITLEMENT_CLOCK_SKEW_MS) return false;
+  // Re-run the full consistency check at the instant the server verified it.
+  // Freshness is trivially satisfied there, so anything that still fails is a
+  // genuine defect (plan mismatch, no app feature, inactive at check time) and
+  // must keep walling.
+  return hasVerifiedPaidPlanAt(user, checkedAt);
+}
+
 function hasFutureGraceAt(
   entitlement: AppEntitlement | null,
   nowMs: number,

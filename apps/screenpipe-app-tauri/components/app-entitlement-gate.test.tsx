@@ -90,6 +90,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 import { AppEntitlementGate } from "./app-entitlement-gate";
+import { hasVerifiedPaidPlan } from "@/lib/app-entitlement";
 
 // Build timestamps relative to the real clock so freshness checks are stable
 // without fake timers.
@@ -412,7 +413,12 @@ describe("AppEntitlementGate", () => {
     expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
   });
 
-  it("gates and stops when paid freshness expires without an API response", async () => {
+  // Offline downgrade, not lockout. Paid freshness expiring means "we could not
+  // reach /api/user", not "this account lost access". Local capture is a
+  // free-plan capability and verified-free never expires, so walling here only
+  // punished paying customers with bad wifi. Paid features stay capped via the
+  // unknown-plan restrictions in use-settings.
+  it("keeps the app open and recording when paid freshness expires offline", async () => {
     vi.useFakeTimers();
     try {
       const now = new Date("2026-06-05T12:00:00.000Z");
@@ -432,6 +438,47 @@ describe("AppEntitlementGate", () => {
       });
       render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
       expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_001);
+      });
+
+      // Freshness really did lapse...
+      expect(mocks.state.user).toBeTruthy();
+      expect(hasVerifiedPaidPlan(mocks.state.user)).toBe(false);
+      // ...but the app stays usable and the recorder is left alone.
+      expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: /refresh access/i }),
+      ).not.toBeInTheDocument();
+      expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The downgrade is narrow: only freshness may be missing. Evidence that is
+  // internally inconsistent is a real denial and must still wall + stop.
+  it("still walls and stops when stale paid evidence is also inconsistent", async () => {
+    vi.useFakeTimers();
+    try {
+      const now = new Date("2026-06-05T12:00:00.000Z");
+      vi.setSystemTime(now);
+      const checkedAt = now.getTime() - 72 * 60 * 60 * 1000 + 1_000;
+      mocks.state.user = baseUser({
+        id: "paid-expiring-inconsistent",
+        app_entitled: true,
+        subscription_plan: "pro",
+        entitlement: {
+          active: true,
+          // plan disagrees with subscription_plan → not merely stale
+          plan: "standard",
+          source: "subscription",
+          checked_at: new Date(checkedAt).toISOString(),
+          features: { app: true },
+        },
+      });
+      render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1_001);

@@ -22,6 +22,7 @@ import {
   getPaidPlanPolicyDeadlineMs,
   hasAppEntitlement,
   hasConsumerAppSubscription,
+  hasStalePaidEvidence,
   isDevBillingBypassEnabled,
   isDevLoginEnabled,
   isTokenHydrationCandidate,
@@ -250,6 +251,25 @@ export function AppEntitlementGate({
     !hasConsumerSubscription &&
     enterpriseAccount?.requires_enterprise_app === true;
   const shouldGateForEntitlement = shouldGateForUnknownConsumerPolicy;
+  // Offline downgrade instead of lockout. When the ONLY thing wrong with a paid
+  // account is that we could not reach /api/user recently, keep the app open at
+  // free-plan capability: local capture keeps running and the UI renders. Paid
+  // features stay capped, because `localPlanPolicy` is still "unknown" and
+  // use-settings applies the unknown-plan restrictions; hosted AI is enforced
+  // server-side by the gateway, so being offline can never unlock it.
+  //
+  // Walling here dated from the paid-only build (#3846). Since #5191 shipped the
+  // free plan, `hasVerifiedFreePlan` never expires — so a free account records
+  // offline forever while a *paying* one got locked out after 72h. The wall
+  // protected no revenue and only punished customers with bad wifi.
+  //
+  // Requires a live token: a tokenless shell cannot be re-verified when the
+  // network returns, and trusting its cached paid evidence would turn "delete
+  // the token" into permanent offline access. Those stay walled.
+  const shouldDegradeToFreeOffline =
+    shouldGateForUnknownConsumerPolicy &&
+    Boolean(user?.token) &&
+    hasStalePaidEvidence(user);
   const shouldGate = isOnboardingRoute
     ? false
     : !isManagedDeploymentResolved
@@ -258,7 +278,7 @@ export function AppEntitlementGate({
         ? !isManagedAuthenticated
         : shouldGateForEnterpriseApp ||
           shouldGateForConsumerLogin ||
-          shouldGateForUnknownConsumerPolicy;
+          (shouldGateForUnknownConsumerPolicy && !shouldDegradeToFreeOffline);
   const enterpriseAuthenticationPending =
     isManagedDeployment && authenticationState === "checking";
   const email = user?.email || "this account";
@@ -504,7 +524,11 @@ export function AppEntitlementGate({
     // signed in, and gated *specifically* on a missing entitlement — not on a
     // required enterprise login (no token), and not while failing open on a
     // transient token loss (that path has its own re-hydration loop above).
-    if (!isSettingsLoaded || devBypass || !shouldGate || isEntitled) return;
+    if (!isSettingsLoaded || devBypass || isEntitled) return;
+    // Also poll while degraded-offline (not gated): that state exists precisely
+    // because the network is down, so it is the one that most needs to re-verify
+    // and restore paid features the moment connectivity returns.
+    if (!shouldGate && !shouldDegradeToFreeOffline) return;
     if (!user?.token || !shouldGateForEntitlement) return;
     const token = user.token;
 
