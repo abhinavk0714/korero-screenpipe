@@ -287,7 +287,9 @@ const learningState = (over: Record<string, unknown> = {}) => ({
     await invokeOrThrow("reset_onboarding");
     await invokeOrThrow("complete_onboarding");
     // Well past the ceiling, well inside the grace: the returning-user case.
-    await invokeOrThrow("set_onboarding_completed_ago", { seconds: 3 * 60 * 60 });
+    await invokeOrThrow("plugin:e2e|set_onboarding_completed_ago", {
+      seconds: 3 * 60 * 60,
+    });
 
     await showWindow({ Home: { page: "home" } });
     await waitForWindowHandle("home", t(20_000));
