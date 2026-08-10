@@ -7,6 +7,7 @@ import { useEffect, useMemo } from "react";
 import { platform } from "@tauri-apps/plugin-os";
 import { CardAskModal } from "@/components/card-ask-modal";
 import { useCardAsk } from "@/lib/hooks/use-card-ask";
+import { useCheckoutOutcome } from "@/lib/card-ask/use-checkout-outcome";
 import { emitCardAskTrigger } from "@/lib/card-ask/trigger-bus";
 import { isExpiringCardlessGrant } from "@/lib/card-ask/gating";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -41,6 +42,11 @@ export function CardAskProvider() {
   const { activeTrigger, arm, isFirstAsk, dismiss, consume } = useCardAsk();
   const { settings, isSettingsLoaded } = useSettings();
   const os = useMemo(normalizeOs, []);
+
+  // Unlock the app when the in-app checkout window reports success. Without
+  // this the purchase completes but the user stays behind the entitlement
+  // wall until they hit "refresh access" or relaunch.
+  useCheckoutOutcome();
 
   // Fire the login trigger once the arm has resolved *and* the account is
   // actually known.
