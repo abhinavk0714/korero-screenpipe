@@ -183,8 +183,14 @@ describe("meeting summary surface", () => {
 });
 
 // Sharing a summary used to mean the copy-everything button plus deleting the
-// transcript by hand. The share actions live in the summary header so they are
-// on screen the moment the agent finishes.
+// transcript by hand. The share action lives in the summary header so it is on
+// screen the moment the agent finishes.
+//
+// One trigger, destinations one level down. Two peer buttons would have put
+// three same-weight controls in this header, against the rule the footer
+// cluster already follows. Granola (share-menu / share-popover surfaces) and
+// Notion (one share_summary_from_meeting_notes origin fanning out to
+// copy-contents / email / slack) both settled on the same shape.
 describe("meeting summary share actions", () => {
   const shareProps = {
     detail: "saved locally",
@@ -192,28 +198,57 @@ describe("meeting summary share actions", () => {
     canGenerate: true,
   };
 
-  it("offers copy and email once a summary is saved", () => {
-    const onCopySummary = vi.fn();
-    const onEmailSummary = vi.fn();
-
+  it("keeps one share control in the header, not a button per destination", () => {
     render(
       <MeetingSummarySurface
         note={"notes\n\n## Summary\nShip on friday."}
         state="ready"
         {...shareProps}
-        onCopySummary={onCopySummary}
-        onEmailSummary={onEmailSummary}
+        onCopySummary={vi.fn()}
+        onEmailSummary={vi.fn()}
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "copy summary" }));
-    fireEvent.click(screen.getByRole("button", { name: "email summary" }));
-
-    expect(onCopySummary).toHaveBeenCalledTimes(1);
-    expect(onEmailSummary).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "share summary" })).toBeVisible();
+    // Destinations stay behind the trigger until the user asks for them.
+    expect(screen.queryByText("copy summary")).not.toBeInTheDocument();
+    expect(screen.queryByText("email summary")).not.toBeInTheDocument();
   });
 
-  it("confirms the copy in place", () => {
+  it("offers copy and email as destinations once opened", async () => {
+    const onCopySummary = vi.fn();
+
+    render(
+      <MeetingSummarySurface
+        note={"## Summary\nShip on friday."}
+        state="ready"
+        {...shareProps}
+        onCopySummary={onCopySummary}
+        onEmailSummary={vi.fn()}
+      />,
+    );
+
+    // Keyboard open, which also pins the trigger as reachable without a mouse.
+    fireEvent.keyDown(screen.getByRole("button", { name: "share summary" }), {
+      key: "Enter",
+    });
+
+    const copyItem = await screen.findByRole("menuitem", {
+      name: /copy summary/,
+    });
+    expect(
+      await screen.findByRole("menuitem", { name: /email summary/ }),
+    ).toBeVisible();
+    // Copy is listed first: it is the destination people reach for.
+    expect(copyItem.compareDocumentPosition(
+      screen.getByRole("menuitem", { name: /email summary/ }),
+    ) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(copyItem);
+    expect(onCopySummary).toHaveBeenCalledTimes(1);
+  });
+
+  it("confirms the copy on the trigger itself", () => {
     render(
       <MeetingSummarySurface
         note={"## Summary\nShip on friday."}
@@ -226,7 +261,7 @@ describe("meeting summary share actions", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "copy summary" }),
+      screen.getByRole("button", { name: "share summary" }),
     ).toHaveTextContent("copied");
   });
 
@@ -242,10 +277,7 @@ describe("meeting summary share actions", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: "copy summary" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "email summary" }),
+      screen.queryByRole("button", { name: "share summary" }),
     ).not.toBeInTheDocument();
   });
 
@@ -262,7 +294,7 @@ describe("meeting summary share actions", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: "copy summary" }),
+      screen.queryByRole("button", { name: "share summary" }),
     ).not.toBeInTheDocument();
   });
 });
