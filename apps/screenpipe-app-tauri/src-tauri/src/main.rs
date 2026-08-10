@@ -45,6 +45,7 @@ mod brain_views;
 mod calendar;
 mod capture_session;
 mod chatgpt_oauth;
+mod checkout_window;
 #[allow(deprecated)]
 mod commands;
 mod db_recovery_notifications;

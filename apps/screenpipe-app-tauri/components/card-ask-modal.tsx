@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { cardAskEvents } from "@/lib/card-ask/events";
 import type { CardAskArm, CardAskTrigger } from "@/lib/card-ask/gating";
-import { openExternalUrl } from "@/lib/open-external-url";
+import { openCheckout } from "@/lib/card-ask/open-checkout";
 import { screenpipeWebBase } from "@/lib/web-url";
 
 export const CARD_ASK_CHECKOUT_PATH = "/onboarding?trial=business&src=card_ask";
@@ -55,8 +55,8 @@ type Props = {
   os: string;
   onDismiss: () => void;
   onConsume: () => void;
-  /** Injected in tests. */
-  openUrl?: (url: string) => Promise<void>;
+  /** Returns the surface that served checkout. Injected in tests. */
+  openUrl?: (url: string) => Promise<string | void>;
   checkoutBaseUrl?: string;
 };
 
@@ -67,7 +67,7 @@ export function CardAskModal({
   os,
   onDismiss,
   onConsume,
-  openUrl = openExternalUrl,
+  openUrl = openCheckout,
   // Routed through the helper so NEXT_PUBLIC_SCREENPIPE_WEB_URL can repoint
   // checkout at staging; a bare literal is blocked by lib/web-url.guard.test.
   checkoutBaseUrl = screenpipeWebBase("https://screenpipe.com"),
@@ -110,12 +110,18 @@ export function CardAskModal({
       arm,
     )}&trigger=${encodeURIComponent(trigger)}`;
     try {
-      await openUrl(url);
+      // Keep the purchase inside the app. The system-browser handoff loses
+      // people at the OS boundary: 10 users reached this point and Stripe
+      // recorded 0 checkout sessions. `openCheckout` falls back to the browser
+      // on its own if the window cannot open, so this never dead-ends.
+      const destination = await openUrl(url);
       cardAskEvents.checkoutOpened({
         arm,
         trigger,
         os,
-        destinationType: "web_checkout",
+        // Records which surface actually served the purchase, so the browser
+        // fallback can be told apart from the in-app window in the funnel.
+        destinationType: destination ?? "web_checkout",
       });
       onConsume();
     } catch {

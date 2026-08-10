@@ -1139,6 +1139,20 @@ async oauthStatus(integrationId: string, instance: string | null) : Promise<Resu
 }
 },
 /**
+ * Open a Stripe Checkout URL in an app-owned window.
+ *
+ * The frontend keeps the system-browser path as a fallback, so a rejected or
+ * failed window must surface an error rather than silently doing nothing.
+ */
+async openCheckoutWindow(url: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_checkout_window", { url }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Open Google Calendar OAuth inside an in-app WebView.
  * Same pattern as `open_login_window` — intercepts the screenpipe:// deep-link
  * redirect so we don't rely on Safari custom-scheme support.
