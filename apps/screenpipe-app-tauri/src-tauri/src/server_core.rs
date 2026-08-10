@@ -214,7 +214,7 @@ async fn identify_port_holder(port: u16) -> Option<String> {
         // netstat -ano → parse lines matching our exact port in LISTENING state.
         // We filter in Rust rather than piping through findstr because
         // `findstr :<port>` matches substrings (e.g. :3030 matches :30300).
-        let mut netstat = tokio::process::Command::new("netstat");
+        let mut netstat = screenpipe_core::no_window_command_async("netstat");
         netstat.args(["-ano"]).kill_on_drop(true);
         let output = tokio::time::timeout(PORT_HOLDER_LOOKUP_TIMEOUT, netstat.output())
             .await
@@ -224,7 +224,7 @@ async fn identify_port_holder(port: u16) -> Option<String> {
         let pid = parse_windows_listener_pid(&stdout, port)?;
 
         let pid_filter = format!("PID eq {}", pid);
-        let mut tasklist = tokio::process::Command::new("tasklist");
+        let mut tasklist = screenpipe_core::no_window_command_async("tasklist");
         tasklist
             .args(["/FI", pid_filter.as_str(), "/FO", "CSV", "/NH"])
             .kill_on_drop(true);
