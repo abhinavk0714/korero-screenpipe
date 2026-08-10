@@ -68,6 +68,24 @@
 //!
 //! A corpus audit is provided for exactly this kind of question — see
 //! `examples/rfdetr_continuation_audit.rs`.
+//!
+//! ## The row step is the seed box height, deliberately
+//!
+//! Stepping down by `bh` assumes the box height equals the line pitch. That is
+//! an assumption, and the obvious improvement is to segment rows from the ink
+//! projection instead. **That was tried and it regressed the primary case** —
+//! worth recording so it is not retried blind.
+//!
+//! Real text rows are anti-aliased, so a naive "a row with almost no ink is a
+//! gap" threshold never finds a gap inside a dense block. The row run then
+//! swallows several lines at once, the short tail row is merged with the
+//! full-width rows above it, the tail test never fires, and guard A correctly
+//! discards the whole walk. Measured: the wrapped-JWT frame went from 146,916
+//! blacked pixels back to 10,656, i.e. straight back to the bug.
+//!
+//! Segmenting properly needs an ink threshold relative to the row's own ink
+//! mass, not an absolute pixel count. Until someone does that and re-runs the
+//! corpus audit, the fixed step is what is measured to work.
 
 use crate::image::ImageRegion;
 
