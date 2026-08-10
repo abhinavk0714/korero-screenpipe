@@ -127,6 +127,13 @@ export function extractMeetingSummary(markdown: string): string | null {
   return body || null;
 }
 
+// The summary header is where a share has to live. It is the first thing on
+// screen the moment the agent finishes, so getting the summary to a person costs
+// one click from there instead of a copy-everything-then-delete-the-transcript
+// detour through the note.
+const MEETING_SHARE_BUTTON_CLASS =
+  "h-9 shrink-0 border border-border bg-background px-3 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:border-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground disabled:opacity-40";
+
 export function MeetingSummarySurface({
   note,
   state,
@@ -134,6 +141,9 @@ export function MeetingSummarySurface({
   streamedSummary,
   onGenerate,
   canGenerate,
+  onCopySummary,
+  onEmailSummary,
+  summaryCopied,
 }: {
   note: string;
   state: "idle" | "working" | "ready" | "attention";
@@ -141,10 +151,16 @@ export function MeetingSummarySurface({
   streamedSummary?: string;
   onGenerate: () => void;
   canGenerate: boolean;
+  onCopySummary?: () => void;
+  onEmailSummary?: () => void;
+  summaryCopied?: boolean;
 }) {
   const savedSummary = extractMeetingSummary(note);
   const isStreaming = state === "working" && Boolean(streamedSummary?.trim());
   const summary = isStreaming ? streamedSummary! : savedSummary;
+  // Share only what is finished and on disk. A half-streamed draft would put a
+  // truncated summary in someone's inbox.
+  const canShare = Boolean(savedSummary) && state !== "working";
 
   return (
     <section
@@ -164,20 +180,46 @@ export function MeetingSummarySurface({
               {detail}
             </p>
           </div>
-          {(state === "idle" || state === "attention" || state === "ready") && (
-            <button
-              type="button"
-              onClick={onGenerate}
-              disabled={!canGenerate}
-              className="h-9 shrink-0 border border-foreground bg-foreground px-3 font-mono text-[10px] uppercase tracking-[0.12em] text-background transition-colors hover:bg-background hover:text-foreground disabled:border-border disabled:bg-muted disabled:text-muted-foreground"
-            >
-              {state === "attention"
-                ? "retry"
-                : state === "ready"
-                  ? "summarize again"
-                  : "generate"}
-            </button>
-          )}
+          <div className="flex shrink-0 items-center gap-2">
+            {canShare && onCopySummary && (
+              <button
+                type="button"
+                onClick={onCopySummary}
+                aria-label="copy summary"
+                title="copy the summary as formatted text, without the transcript"
+                className={MEETING_SHARE_BUTTON_CLASS}
+              >
+                {summaryCopied ? "copied" : "copy summary"}
+              </button>
+            )}
+            {canShare && onEmailSummary && (
+              <button
+                type="button"
+                onClick={onEmailSummary}
+                aria-label="email summary"
+                title="open an email draft with the summary"
+                className={MEETING_SHARE_BUTTON_CLASS}
+              >
+                email
+              </button>
+            )}
+            {(state === "idle" ||
+              state === "attention" ||
+              state === "ready") && (
+              <button
+                type="button"
+                onClick={onGenerate}
+                disabled={!canGenerate}
+                className="h-9 shrink-0 border border-foreground bg-foreground px-3 font-mono text-[10px] uppercase tracking-[0.12em] text-background transition-colors hover:bg-background hover:text-foreground disabled:border-border disabled:bg-muted disabled:text-muted-foreground"
+              >
+                {state === "attention"
+                  ? "retry"
+                  : state === "ready"
+                    ? "summarize again"
+                    : "generate"}
+              </button>
+            )}
+          </div>
         </div>
 
         <div

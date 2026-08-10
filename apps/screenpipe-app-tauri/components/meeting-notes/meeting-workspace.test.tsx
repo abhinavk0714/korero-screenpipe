@@ -181,3 +181,88 @@ describe("meeting summary surface", () => {
     expect(screen.getByTestId("meeting-summary-stream-cursor")).toBeVisible();
   });
 });
+
+// Sharing a summary used to mean the copy-everything button plus deleting the
+// transcript by hand. The share actions live in the summary header so they are
+// on screen the moment the agent finishes.
+describe("meeting summary share actions", () => {
+  const shareProps = {
+    detail: "saved locally",
+    onGenerate: vi.fn(),
+    canGenerate: true,
+  };
+
+  it("offers copy and email once a summary is saved", () => {
+    const onCopySummary = vi.fn();
+    const onEmailSummary = vi.fn();
+
+    render(
+      <MeetingSummarySurface
+        note={"notes\n\n## Summary\nShip on friday."}
+        state="ready"
+        {...shareProps}
+        onCopySummary={onCopySummary}
+        onEmailSummary={onEmailSummary}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "copy summary" }));
+    fireEvent.click(screen.getByRole("button", { name: "email summary" }));
+
+    expect(onCopySummary).toHaveBeenCalledTimes(1);
+    expect(onEmailSummary).toHaveBeenCalledTimes(1);
+  });
+
+  it("confirms the copy in place", () => {
+    render(
+      <MeetingSummarySurface
+        note={"## Summary\nShip on friday."}
+        state="ready"
+        {...shareProps}
+        onCopySummary={vi.fn()}
+        onEmailSummary={vi.fn()}
+        summaryCopied
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "copy summary" }),
+    ).toHaveTextContent("copied");
+  });
+
+  it("hides sharing until there is a summary to share", () => {
+    render(
+      <MeetingSummarySurface
+        note="notes only"
+        state="idle"
+        {...shareProps}
+        onCopySummary={vi.fn()}
+        onEmailSummary={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "copy summary" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "email summary" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("withholds sharing mid-stream so a partial summary cannot be sent", () => {
+    render(
+      <MeetingSummarySurface
+        note={"## Summary\nEarlier summary."}
+        state="working"
+        {...shareProps}
+        streamedSummary="Half a sen"
+        onCopySummary={vi.fn()}
+        onEmailSummary={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "copy summary" }),
+    ).not.toBeInTheDocument();
+  });
+});
