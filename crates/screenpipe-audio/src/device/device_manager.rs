@@ -5,6 +5,7 @@ use crate::core::{
     device::{list_audio_devices, AudioDevice},
     stream::AudioStream,
 };
+use crate::device::input_retry_backoff::InputRetryBackoff;
 use crate::device::vpio_health::{FailureOutcome, VpioHealthTracker};
 use anyhow::{anyhow, Result};
 use dashmap::DashMap;
@@ -42,6 +43,11 @@ pub struct DeviceManager {
     /// repeatedly dies at runtime is demoted to the HAL input path for this
     /// session so audio keeps flowing instead of looping on a dead stream.
     vpio_health: VpioHealthTracker,
+    /// Per-device retry backoff for input streams that die without delivering
+    /// audio — usually because a call app owns the mic. Stops the recovery
+    /// monitor reopening the same device every couple of seconds, which on a
+    /// Bluetooth headset renegotiates SCO and steals the mic from that app.
+    input_retry: InputRetryBackoff,
 }
 
 impl DeviceManager {
@@ -60,6 +66,7 @@ impl DeviceManager {
             windows_input_aec: AtomicBool::new(windows_input_aec),
             macos_input_vpio: AtomicBool::new(macos_input_vpio),
             vpio_health: VpioHealthTracker::new(),
+            input_retry: InputRetryBackoff::new(),
         })
     }
 
@@ -115,6 +122,45 @@ impl DeviceManager {
             }
             FailureOutcome::Counted { .. } | FailureOutcome::AlreadyDemoted => false,
         }
+    }
+
+    /// Record an input stream that died without delivering any audio, so the
+    /// recovery monitor backs off before reopening the same device.
+    ///
+    /// The usual cause is another application owning the microphone — a video
+    /// call holding a Bluetooth headset. Reopening captures nothing (the call
+    /// app still owns it) and forces an A2DP/SCO renegotiation that disrupts
+    /// that app's capture, which Google Meet reports to the user as
+    /// "Microphone muted by system".
+    pub fn note_input_zero_audio_death(&self, device: &AudioDevice) {
+        let name = device.to_string();
+        let consecutive = self.input_retry.record_zero_audio_death(&name);
+        warn!(
+            device = %device,
+            consecutive,
+            retry_in_secs = crate::device::input_retry_backoff::retry_delay_secs(consecutive),
+            "input stream died without delivering audio (another app most likely owns this \
+             microphone); holding off automatic restarts so repeated reopens don't renegotiate \
+             the device and disrupt whichever app is using it"
+        );
+    }
+
+    /// Whether an automatic restart of this input should be held off because it
+    /// recently died without delivering audio. False for a device with no
+    /// recorded deaths, so a first start is never delayed.
+    pub fn input_retry_blocked(&self, device_name: &str) -> bool {
+        self.input_retry.retry_blocked(device_name)
+    }
+
+    /// Seconds left on the current hold-off, for logging.
+    pub fn input_retry_remaining_secs(&self, device_name: &str) -> u64 {
+        self.input_retry.remaining_secs(device_name)
+    }
+
+    /// Drop a device's zero-audio history on explicit user intent (enabling or
+    /// hand-picking it), which re-arms an immediate attempt.
+    pub fn clear_input_retry(&self, device_name: &str) {
+        self.input_retry.clear(device_name);
     }
 
     pub async fn devices(&self) -> Vec<AudioDevice> {

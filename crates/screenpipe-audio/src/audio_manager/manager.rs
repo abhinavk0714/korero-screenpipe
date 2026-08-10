@@ -40,6 +40,19 @@ fn is_vpio_relevant_stream_death(e: &anyhow::Error) -> bool {
     })
 }
 
+/// Whether this error is a stream death that delivered no audio at all — either
+/// variant of [`crate::core::StreamDeath`].
+///
+/// Unlike [`is_vpio_relevant_stream_death`] this deliberately includes
+/// `ZeroFill`: a device hijacked by another process is the single most common
+/// reason a reopen is pointless, and it is exactly the case that must back off
+/// rather than retry. Cross-platform — Bluetooth mic contention is not
+/// macOS-specific, and the policy is platform-neutral.
+fn is_zero_audio_stream_death(e: &anyhow::Error) -> bool {
+    e.chain()
+        .any(|cause| cause.downcast_ref::<crate::core::StreamDeath>().is_some())
+}
+
 use super::{
     start_device_monitor, stop_device_monitor, AudioCaptureMode, AudioManagerOptions,
     TranscriptionMode,
@@ -846,6 +859,9 @@ impl AudioManager {
             Ok(device) => device,
             Err(_) => return Err(anyhow!("Device {} not found", device_name)),
         };
+        // Explicit user intent outranks the zero-audio hold-off: someone pressing
+        // "resume mic" wants an attempt now, not after the backoff expires.
+        self.device_manager.clear_input_retry(device_name);
         self.start_device(&device).await?;
         info!("user resumed audio device: {}", device_name);
         Ok(())
@@ -1252,6 +1268,17 @@ impl AudioManager {
                     && is_vpio_relevant_stream_death(e)
                 {
                     device_manager.note_vpio_runtime_failure(&device_clone);
+                }
+
+                // The stream produced no audio before dying. Independently of
+                // the VPIO question above, the recovery monitor must not reopen
+                // this device immediately: when another app owns the mic (a call
+                // holding a Bluetooth headset) the reopen captures nothing and
+                // renegotiates the device out from under that app.
+                if device_clone.device_type == crate::core::device::DeviceType::Input
+                    && is_zero_audio_stream_death(e)
+                {
+                    device_manager.note_input_zero_audio_death(&device_clone);
                 }
                 return Err(anyhow!("record_device {} failed: {}", device_clone, e));
             }

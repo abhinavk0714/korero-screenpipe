@@ -849,6 +849,7 @@
         "src/core/source_buffer.rs",
         "src/core/stream.rs",
         "src/device/device_manager.rs",
+        "src/device/input_retry_backoff.rs",
         "src/idle_detector.rs",
         "src/lib.rs",
         "src/metrics.rs",

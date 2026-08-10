@@ -1142,6 +1142,20 @@ pub async fn start_device_monitor(
                                 "[DEVICE_RECOVERY] skipping default input change: {} is gated by the bluetooth meeting gate",
                                 new_default_input
                             );
+                        } else if device_manager.input_retry_blocked(&new_default_input) {
+                            // This device recently died without delivering audio,
+                            // so swapping to it now would just reopen a stream
+                            // that captures nothing — and on a Bluetooth mic, one
+                            // more SCO renegotiation against whichever app owns
+                            // it. Like the two branches above, deliberately does
+                            // NOT revert `last_input`, so this stays one log per
+                            // real OS default-change event rather than a 2s retry
+                            // storm for as long as the hold-off lasts.
+                            debug!(
+                                "[DEVICE_RECOVERY] skipping default input change: {} is backing off for {}s after delivering no audio",
+                                new_default_input,
+                                device_manager.input_retry_remaining_secs(&new_default_input)
+                            );
                         } else {
                             info!("system default input changed to: {}", new_default_input);
 
@@ -1426,6 +1440,29 @@ pub async fn start_device_monitor(
                                             // perturb its A2DP/SCO profile
                                             // negotiation. Skip this tick entirely,
                                             // no log, no reset, no retry storm.
+                                        } else if device_manager.input_retry_blocked(&device_name) {
+                                            // Same hazard as the gate case above,
+                                            // reached the other way: the gate lets
+                                            // this device through (we're in a
+                                            // meeting, so the Bluetooth mic is
+                                            // allowed) and `start_device` genuinely
+                                            // succeeds — it just never delivers a
+                                            // sample, because the meeting app owns
+                                            // the mic. The stream dies seconds
+                                            // later, this loop sees "no input
+                                            // running" and reopens it with a
+                                            // backoff that `Ok(())` already reset.
+                                            // Each reopen renegotiates SCO and
+                                            // knocks out the call app's capture
+                                            // (Google Meet shows "Microphone muted
+                                            // by system") while recording nothing.
+                                            // Wait out the per-device hold-off.
+                                            debug!(
+                                                "[DEVICE_RECOVERY] holding off restart of {} for {}s: last stream delivered no audio",
+                                                device_name,
+                                                device_manager
+                                                    .input_retry_remaining_secs(&device_name)
+                                            );
                                         } else {
                                             warn!(
                                                 "[DEVICE_RECOVERY] no input device running (attempt {}), starting default: {}",
