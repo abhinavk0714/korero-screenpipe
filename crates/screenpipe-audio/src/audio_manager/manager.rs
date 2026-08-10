@@ -43,7 +43,8 @@ fn is_vpio_relevant_stream_death(e: &anyhow::Error) -> bool {
 /// Whether this error is a stream death that delivered no audio at all — either
 /// variant of [`crate::core::StreamDeath`].
 ///
-/// Unlike [`is_vpio_relevant_stream_death`] this deliberately includes
+/// Unlike `is_vpio_relevant_stream_death` (macOS-only, so deliberately not an
+/// intra-doc link here) this includes
 /// `ZeroFill`: a device hijacked by another process is the single most common
 /// reason a reopen is pointless, and it is exactly the case that must back off
 /// rather than retry. Cross-platform — Bluetooth mic contention is not
@@ -1227,8 +1228,9 @@ impl AudioManager {
         let metrics = self.metrics.clone();
         let meeting_audio_tap = self.meeting_audio_tap.clone();
         let screenpipe_aec_enabled = options.screenpipe_aec_enabled;
-        // Used only on macOS to demote a runtime-dead VPIO device to the HAL path.
-        #[cfg(target_os = "macos")]
+        // Used to record stream deaths against per-device policy: the zero-audio
+        // retry backoff (all platforms) and, on macOS only, demoting a
+        // runtime-dead VPIO device to the HAL path.
         let device_manager = self.device_manager.clone();
 
         let device_manager_clone = self.device_manager.clone();
@@ -3033,6 +3035,36 @@ mod tests {
         assert!(!is_vpio_relevant_stream_death(&anyhow!(
             "device disconnected"
         )));
+    }
+
+    /// The retry-backoff classifier is the wider of the two: any stream death
+    /// means no audio was delivered, so reopening is pointless. It must include
+    /// `ZeroFill` — a device hijacked by a call app is exactly the case that has
+    /// to back off instead of renegotiating the mic every few seconds. Not
+    /// macOS-gated: Bluetooth mic contention is cross-platform.
+    #[test]
+    fn zero_audio_death_matches_both_stream_death_variants() {
+        use crate::core::StreamDeath;
+
+        assert!(is_zero_audio_stream_death(&anyhow!(
+            StreamDeath::ReceiveTimeout { secs: 8 }
+        )));
+        assert!(is_zero_audio_stream_death(&anyhow!(
+            StreamDeath::ZeroFill {
+                device: "louis's AirPods Pro (input)".to_string(),
+                secs: 30
+            }
+        )));
+        // Survives being wrapped with context on the way up.
+        assert!(is_zero_audio_stream_death(
+            &anyhow!(StreamDeath::ZeroFill {
+                device: "louis's AirPods Pro (input)".to_string(),
+                secs: 30
+            })
+            .context("rebuilding device")
+        ));
+        // An unrelated failure must not arm the backoff.
+        assert!(!is_zero_audio_stream_death(&anyhow!("device disconnected")));
     }
 
     // ── DRM stopped devices tracking tests ─────────────────────
