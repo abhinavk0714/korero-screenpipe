@@ -24,8 +24,8 @@
 //!
 //! So the loop costs the user their call audio and buys no recording in return.
 //! This tracker makes a stream death that produced no audio *count*, so repeated
-//! reopens of the same device escalate 10s → 30s → 60s instead of retrying every
-//! couple of seconds.
+//! reopens of the same device escalate 10s → 30s → 60s → 120s instead of
+//! retrying every couple of seconds.
 //!
 //! Deliberately time-based rather than success-based: a device that streams
 //! healthily for [`STREAK_RESET_AFTER`] between two deaths starts its streak
@@ -235,6 +235,31 @@ mod tests {
         // death is a fresh incident, not a continuation.
         let much_later = t0 + Duration::from_secs(10) + STREAK_RESET_AFTER + Duration::from_secs(1);
         assert_eq!(b.record_zero_audio_death_at(DEV, much_later), 1);
+    }
+
+    #[test]
+    fn clearing_after_a_config_change_restores_immediate_recovery() {
+        // macOS VPIO demotion fires on the 3rd consecutive death — exactly when
+        // this backoff would otherwise be at 60s. The demotion IS the fix (the
+        // device moves to the working HAL path), so the caller clears the streak
+        // and the next attempt must be allowed straight away rather than waiting
+        // out failures that no longer predict anything.
+        let b = InputRetryBackoff::new();
+        let t0 = Instant::now();
+        for _ in 0..3 {
+            b.record_zero_audio_death_at(DEV, t0);
+        }
+        assert_eq!(
+            b.remaining_secs_at(DEV, t0),
+            60,
+            "streak should have escalated"
+        );
+
+        b.clear(DEV);
+        assert!(
+            !b.retry_blocked_at(DEV, t0),
+            "a config change must re-arm recovery immediately"
+        );
     }
 
     #[test]

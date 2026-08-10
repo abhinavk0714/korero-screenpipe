@@ -1147,15 +1147,27 @@ pub async fn start_device_monitor(
                             // so swapping to it now would just reopen a stream
                             // that captures nothing — and on a Bluetooth mic, one
                             // more SCO renegotiation against whichever app owns
-                            // it. Like the two branches above, deliberately does
-                            // NOT revert `last_input`, so this stays one log per
-                            // real OS default-change event rather than a 2s retry
-                            // storm for as long as the hold-off lasts.
+                            // it.
+                            //
+                            // Unlike the two branches above this DOES revert
+                            // `last_input`, because this condition is temporary.
+                            // Those guard persistent state (user intent, gate
+                            // policy) where consuming the change event once is
+                            // correct; a backoff expires. Without the revert,
+                            // `check_input_changed` has already latched this
+                            // device and the swap would never be re-evaluated —
+                            // the user's chosen default input would be ignored
+                            // for the rest of the session. Reverting re-arms it,
+                            // and the `retry_blocked` guard (not the change
+                            // event) is what prevents the retry storm; the log
+                            // stays at debug so re-evaluating every tick is
+                            // silent.
                             debug!(
                                 "[DEVICE_RECOVERY] skipping default input change: {} is backing off for {}s after delivering no audio",
                                 new_default_input,
                                 device_manager.input_retry_remaining_secs(&new_default_input)
                             );
+                            default_tracker.last_input = previous_default_input;
                         } else {
                             info!("system default input changed to: {}", new_default_input);
 
@@ -2936,6 +2948,31 @@ mod tests {
             }
         }
 
+        /// Models the zero-audio hold-off branch: the device is skipped while
+        /// backing off, exactly as `input_retry_blocked` gates it in the real
+        /// loop. Returns whether a start was attempted.
+        fn poll_with_zero_audio_holdoff(
+            &mut self,
+            current_default: &str,
+            holdoff_active: bool,
+            _now: Instant,
+        ) {
+            let previous_default = self.tracker.last_input.clone();
+            if let Some(new_default) = self
+                .tracker
+                .check_input_changed_from_current(Some(current_default.to_string()))
+            {
+                if holdoff_active {
+                    // Must revert: the hold-off is temporary, so the pending
+                    // switch has to stay pending rather than being consumed.
+                    self.tracker.last_input = previous_default;
+                    return;
+                }
+                self.start_attempts += 1;
+                self.running_input = new_default;
+            }
+        }
+
         fn poll(&mut self, current_default: &str, default_is_startable: bool, now: Instant) {
             let previous_default = self.tracker.last_input.clone();
             if let Some(new_default) = self
@@ -2999,6 +3036,41 @@ mod tests {
             "failed default-device switches must stay pending and retry even when the old mic is still running"
         );
         assert_eq!(repro.running_input, krisp);
+    }
+
+    /// A zero-audio hold-off is temporary, so it must not consume the pending
+    /// default-input switch the way the user-disabled and gate-blocked branches
+    /// do. If it did, `check_input_changed` would have already latched the new
+    /// device and the swap would never be re-evaluated — the user's chosen mic
+    /// would be ignored for the rest of the session, long after the hold-off
+    /// expired.
+    #[test]
+    fn zero_audio_holdoff_keeps_the_default_switch_pending() {
+        let builtin = "MacBook Pro Microphone (input)";
+        let airpods = "louis's AirPods Pro (input)";
+        let now = Instant::now();
+
+        let mut repro = DefaultInputSwitchRepro::new(builtin);
+
+        // AirPods become the OS default while still backing off after delivering
+        // no audio: skip the swap, keep the working built-in mic.
+        repro.poll_with_zero_audio_holdoff(airpods, true, now);
+        assert_eq!(repro.start_attempts, 0);
+        assert_eq!(repro.running_input, builtin);
+
+        // Still backing off a few ticks later — still no churn.
+        repro.poll_with_zero_audio_holdoff(airpods, true, now + Duration::from_secs(2));
+        repro.poll_with_zero_audio_holdoff(airpods, true, now + Duration::from_secs(4));
+        assert_eq!(repro.start_attempts, 0);
+
+        // Hold-off expires (call ended, mic released). The switch must still be
+        // pending and now go through.
+        repro.poll_with_zero_audio_holdoff(airpods, false, now + Duration::from_secs(130));
+        assert_eq!(
+            repro.start_attempts, 1,
+            "the pending default switch must survive the hold-off, not be consumed by it"
+        );
+        assert_eq!(repro.running_input, airpods);
     }
 
     fn build_inputs<'a>(

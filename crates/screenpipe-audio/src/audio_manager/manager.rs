@@ -1266,11 +1266,12 @@ impl AudioManager {
                 // device falls back to the plain HAL input path after a few
                 // rapid failures (no-op when VPIO is off / already demoted).
                 #[cfg(target_os = "macos")]
-                if device_clone.device_type == crate::core::device::DeviceType::Input
+                let vpio_just_demoted = device_clone.device_type
+                    == crate::core::device::DeviceType::Input
                     && is_vpio_relevant_stream_death(e)
-                {
-                    device_manager.note_vpio_runtime_failure(&device_clone);
-                }
+                    && device_manager.note_vpio_runtime_failure(&device_clone);
+                #[cfg(not(target_os = "macos"))]
+                let vpio_just_demoted = false;
 
                 // The stream produced no audio before dying. Independently of
                 // the VPIO question above, the recovery monitor must not reopen
@@ -1280,7 +1281,18 @@ impl AudioManager {
                 if device_clone.device_type == crate::core::device::DeviceType::Input
                     && is_zero_audio_stream_death(e)
                 {
-                    device_manager.note_input_zero_audio_death(&device_clone);
+                    if vpio_just_demoted {
+                        // This death is what tipped the device off VPIO onto the
+                        // HAL path, so the next attempt uses a materially
+                        // different configuration and the failures leading here
+                        // don't predict it. Backing off now would delay recovery
+                        // at the exact moment it became likely — VPIO demotion is
+                        // the fix, and it needs an immediate retry to take effect
+                        // (a dead-VPIO mic once cost a user 15h of silent audio).
+                        device_manager.clear_input_retry(&device_clone.to_string());
+                    } else {
+                        device_manager.note_input_zero_audio_death(&device_clone);
+                    }
                 }
                 return Err(anyhow!("record_device {} failed: {}", device_clone, e));
             }
