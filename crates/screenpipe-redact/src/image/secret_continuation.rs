@@ -83,9 +83,28 @@
 //! discards the whole walk. Measured: the wrapped-JWT frame went from 146,916
 //! blacked pixels back to 10,656, i.e. straight back to the bug.
 //!
-//! Segmenting properly needs an ink threshold relative to the row's own ink
-//! mass, not an absolute pixel count. Until someone does that and re-runs the
-//! corpus audit, the fixed step is what is measured to work.
+//! The obvious repair — an ink threshold relative to the block's own ink mass
+//! rather than an absolute count — was then tried too, and **also regressed on
+//! real frames**:
+//!
+//! ```text
+//!                      fixed step      relative-threshold segmentation
+//! wrapped JWT frame    146,916 px      69,702 px   (stops after ~4 of 9 rows)
+//! wrapped OAuth frame   46,263 px       8,127 px   (never fires at all)
+//! ```
+//!
+//! There is a reason this keeps failing, and it is worth understanding before a
+//! third attempt: **the row that ends a wrapped token is short**, so any
+//! threshold tuned to separate text rows from gap rows tends to classify the
+//! tail as a gap. Push the threshold down to avoid that and it starts merging
+//! anti-aliased gaps into text. The tail row is simultaneously the thing the
+//! safety guard depends on and the thing row segmentation is worst at.
+//!
+//! Note also that BOTH failures passed every unit test in this file — the
+//! synthetic fixtures have clean gaps that real anti-aliased text does not.
+//! Only the two real frames discriminated. Any third attempt must be judged on
+//! `examples/rfdetr_continuation_audit.rs` over real captures, not on the
+//! fixtures.
 
 use crate::image::ImageRegion;
 
