@@ -139,7 +139,7 @@ describe("onboarding permission wheel", () => {
     ).toBeNull();
     expect(
       screen.getByText(
-        "Three permissions turn on recording. Your recordings are stored on this Mac."
+        "Three permissions turn on recording. Your recordings are stored on this computer."
       )
     ).toBeInTheDocument();
   });

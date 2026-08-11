@@ -393,12 +393,14 @@ export default function PermissionsStep({
             transmission. Paid users are auto-switched to cloud transcription
             (use-settings.tsx applyProCloudAudioDefaults), so "nothing ever
             leaves" / "we never store your data" would be false for exactly
-            the users we ask to pay. "Stored on this Mac" is true in every
+            the users we ask to pay. "Stored on this computer" is true in every
             configuration: frames, audio files and the index are local even
-            when a transcript round-trips through a provider. */}
+            when a transcript round-trips through a provider. Device-neutral
+            wording on purpose so it matches the login-gate line, which is the
+            copy Windows and Linux users see (this step is mac-only). */}
         <p className="font-mono text-[10px] text-muted-foreground mt-1 text-center max-w-xs">
           Three permissions turn on recording. Your recordings are stored on
-          this Mac.
+          this computer.
         </p>
       </div>
 
