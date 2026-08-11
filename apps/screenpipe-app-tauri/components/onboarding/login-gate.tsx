@@ -463,7 +463,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
               onClick={handleSkip}
               className="font-mono text-xs text-muted-foreground/70 hover:text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground transition-colors mt-8 tracking-wide"
             >
-              skip for dev — continue without an account
+              skip for dev, continue without an account
             </motion.button>
           )}
         </AnimatePresence>
