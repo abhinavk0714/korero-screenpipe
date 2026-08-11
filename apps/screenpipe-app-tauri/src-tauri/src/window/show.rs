@@ -148,6 +148,164 @@ fn allowed_while_hidden_ui(id: &RewindWindowId, onboarding_completed: bool) -> b
         || (*id == RewindWindowId::Onboarding && !onboarding_completed)
 }
 
+/// Reveal the Windows fullscreen overlay: Win32 overlay styles, the monitor
+/// rect, capture affinity, and activation, in that order.
+///
+/// Shared by the page-load callback and the load-timeout fallback below so
+/// both paths produce an identically configured window. Every step is
+/// idempotent, so running it twice is harmless.
+///
+/// The intent gate matters: the overlay is built hidden and this may run
+/// seconds later, by which point the user may have dismissed it. Showing it
+/// anyway resurrects a window nobody asked for and desynchronises the
+/// shortcut's visible/hidden toggle — the next press reads the overlay as
+/// visible and hides it, so pressing the shortcut appears to do nothing.
+#[cfg(target_os = "windows")]
+fn reveal_fullscreen_overlay(
+    window: &WebviewWindow,
+    app: &AppHandle,
+    capturable: bool,
+    reason: &str,
+) {
+    if !super::main_overlay_wanted() {
+        info!("overlay: skipping {reason} reveal — dismissed while it loaded");
+        return;
+    }
+    // Setup runs AFTER the webview loads so the window becomes visible only
+    // once JS is ready to handle keyboard events.
+    if let Err(e) = crate::windows_overlay::setup_overlay(window, false) {
+        error!("Failed to setup Windows overlay ({reason}): {e}");
+    }
+    // Apply display affinity so OBS/screen recorders respect the setting.
+    if let Err(e) = crate::windows_overlay::set_display_affinity(window, capturable) {
+        error!("Failed to set display affinity ({reason}): {e}");
+    }
+    // Activate so keyboard focus goes to the webview.
+    if let Err(e) = crate::windows_overlay::bring_to_front_and_activate(window) {
+        error!("Failed to activate overlay ({reason}): {e}");
+    }
+    let _ = app.emit("window-focused", true);
+}
+
+/// Reveal the window-mode overlay — the default on Windows and Linux.
+#[cfg(not(target_os = "macos"))]
+fn reveal_window_mode_overlay(
+    window: &WebviewWindow,
+    app: &AppHandle,
+    #[cfg_attr(not(target_os = "windows"), allow(unused_variables))] capturable: bool,
+    reason: &str,
+) {
+    if !super::main_overlay_wanted() {
+        info!("window-mode overlay: skipping {reason} reveal — dismissed while it loaded");
+        return;
+    }
+    #[cfg(target_os = "windows")]
+    if let Err(e) = crate::windows_overlay::set_display_affinity(window, capturable) {
+        error!("Failed to set display affinity ({reason}): {e}");
+    }
+    window.show().ok();
+    #[cfg(target_os = "windows")]
+    if let Err(e) = crate::windows_overlay::center_window_mode_on_cursor_monitor(window, app) {
+        tracing::warn!("Failed to center window-mode overlay ({reason}): {e}");
+    }
+    window.set_focus().ok();
+    let _ = app.emit("window-focused", true);
+}
+
+/// Which reveal sequence the load-timeout fallback should run.
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy)]
+enum OverlayRevealMode {
+    Fullscreen,
+    Window,
+}
+
+/// How long to wait for the overlay's page-load event before revealing anyway.
+///
+/// `on_page_load` is the only thing that puts the Windows overlay on screen,
+/// and WebView2 does not always deliver it: a failed navigation, a renderer
+/// restart, or an asset server still warming up on a cold first launch all
+/// swallow the event. The window then stays hidden forever while the shortcut
+/// looks dead. Revealing on the deadline costs nothing when the page is merely
+/// slow — it keeps loading behind an already-visible window.
+#[cfg(target_os = "windows")]
+const OVERLAY_PAGE_LOAD_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Reveal the overlay if its page-load event never arrived.
+#[cfg(target_os = "windows")]
+fn arm_overlay_page_load_fallback(
+    app: &AppHandle,
+    label: &'static str,
+    capturable: bool,
+    mode: OverlayRevealMode,
+) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(OVERLAY_PAGE_LOAD_DEADLINE);
+        let Some(window) = app.get_webview_window(label) else {
+            return;
+        };
+        if window.is_visible().unwrap_or(false) {
+            return;
+        }
+        if !super::main_overlay_wanted() {
+            return;
+        }
+        tracing::warn!(
+            "overlay '{}': no page-load event after {:?} — revealing anyway",
+            label,
+            OVERLAY_PAGE_LOAD_DEADLINE
+        );
+        let app_for_thread = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let Some(window) = app_for_thread.get_webview_window(label) else {
+                return;
+            };
+            match mode {
+                OverlayRevealMode::Fullscreen => reveal_fullscreen_overlay(
+                    &window,
+                    &app_for_thread,
+                    capturable,
+                    "load-timeout",
+                ),
+                OverlayRevealMode::Window => reveal_window_mode_overlay(
+                    &window,
+                    &app_for_thread,
+                    capturable,
+                    "load-timeout",
+                ),
+            }
+        });
+    });
+}
+
+/// Re-cover the display after the overlay crossed a DPI boundary.
+///
+/// tao answers `WM_DPICHANGED` with its own `SetWindowPos`, sized to preserve
+/// the overlay's old *logical* size, and it does so **after** this event
+/// handler returns — so correcting the geometry inline is silently discarded.
+/// Bouncing through a short-lived thread puts the correction on a later
+/// main-thread turn, where it is the last writer and actually sticks.
+#[cfg(target_os = "windows")]
+fn reassert_overlay_monitor_after_scale_change(app: &AppHandle, label: String) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let app_for_thread = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let Some(window) = app_for_thread.get_webview_window(&label) else {
+                return;
+            };
+            if !window.is_visible().unwrap_or(false) {
+                return;
+            }
+            if let Err(e) = crate::windows_overlay::resize_to_current_monitor(&window) {
+                error!("Failed to re-cover monitor after scale change: {e}");
+            }
+        });
+    });
+}
+
 /// Search bar geometry. The width is clamped to `SEARCH_BAR_MIN_W` on both the
 /// create and the reposition path: the window can never be narrower than its
 /// `min_inner_size`, so computing a smaller width would only throw the
@@ -427,14 +585,23 @@ impl ShowRewindWindow {
                 window.show().ok();
                 // Reposition overlay to the monitor where the cursor is,
                 // matching macOS behavior where the panel moves to the active screen.
-                if let Ok(cursor) = app.cursor_position() {
-                    if let Err(e) = crate::windows_overlay::reposition_to_cursor_monitor(
+                //
+                // When the cursor is unreadable (remote/virtual session with no
+                // pointer, locked or secure desktop) this used to skip
+                // positioning entirely, leaving a fullscreen overlay at
+                // whatever rect it last had — including a display that has
+                // since been unplugged or resized. Re-cover the display the
+                // window is actually on instead.
+                let repositioned = match app.cursor_position() {
+                    Ok(cursor) => crate::windows_overlay::reposition_to_cursor_monitor(
                         window,
                         cursor.x as i32,
                         cursor.y as i32,
-                    ) {
-                        error!("Failed to reposition overlay to cursor monitor: {}", e);
-                    }
+                    ),
+                    Err(_) => crate::windows_overlay::resize_to_current_monitor(window),
+                };
+                if let Err(e) = repositioned {
+                    error!("Failed to reposition overlay to its monitor: {}", e);
                 }
                 // Always activate after repositioning so the overlay receives keyboard focus.
                 // Without this, re-showing an already-created overlay when another screenpipe
@@ -489,6 +656,10 @@ impl ShowRewindWindow {
 
         // === Main window: use mode-specific labels to avoid NSPanel reconfiguration ===
         if id.label() == RewindWindowId::Main.label() {
+            // Record the intent before anything can reveal the overlay: the
+            // deferred reveal paths below read this to tell "still wanted"
+            // from "the user already dismissed it".
+            super::set_main_overlay_wanted(true);
             let overlay_mode = SettingsStore::get(app)
                 .unwrap_or_default()
                 .unwrap_or_default()
@@ -786,7 +957,6 @@ impl ShowRewindWindow {
                     #[cfg(not(target_os = "macos"))]
                     let window = {
                         let app_clone = app.clone();
-                        #[cfg(target_os = "windows")]
                         let capturable = show_in_recording;
                         let builder = self
                             .window_builder_with_label(
@@ -807,30 +977,23 @@ impl ShowRewindWindow {
                                     payload.event(),
                                     tauri::webview::PageLoadEvent::Finished
                                 ) {
-                                    #[cfg(target_os = "windows")]
-                                    if let Err(e) = crate::windows_overlay::set_display_affinity(
-                                        &win, capturable,
-                                    ) {
-                                        tracing::error!("Failed to set display affinity: {}", e);
-                                    }
-                                    win.show().ok();
-                                    #[cfg(target_os = "windows")]
-                                    if let Err(e) =
-                                        crate::windows_overlay::center_window_mode_on_cursor_monitor(
-                                            &win,
-                                            &app_clone,
-                                        )
-                                    {
-                                        tracing::warn!(
-                                            "Failed to center new window-mode overlay: {}",
-                                            e
-                                        );
-                                    }
-                                    win.set_focus().ok();
-                                    let _ = app_clone.emit("window-focused", true);
+                                    reveal_window_mode_overlay(
+                                        &win,
+                                        &app_clone,
+                                        capturable,
+                                        "page-load",
+                                    );
                                 }
                             });
-                        super::finalize_webview_window(builder.build()?)
+                        let window = super::finalize_webview_window(builder.build()?);
+                        #[cfg(target_os = "windows")]
+                        arm_overlay_page_load_fallback(
+                            app,
+                            main_label_for_mode("window"),
+                            capturable,
+                            OverlayRevealMode::Window,
+                        );
+                        window
                     };
 
                     // Convert to NSPanel on macOS (same as overlay) so it
@@ -1152,28 +1315,22 @@ impl ShowRewindWindow {
                         .position(position.x as f64, position.y as f64)
                         .on_page_load(move |win, payload| {
                             if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
-                                // Setup Win32 overlay AFTER webview loads so the
-                                // window becomes visible only when JS is ready
-                                // to handle keyboard events.
-                                if let Err(e) = crate::windows_overlay::setup_overlay(&win, false) {
-                                    tracing::error!("Failed to setup Windows overlay: {}", e);
-                                }
-                                // Apply display affinity so OBS/screen recorders respect the setting
-                                if let Err(e) =
-                                    crate::windows_overlay::set_display_affinity(&win, capturable)
-                                {
-                                    tracing::error!("Failed to set display affinity: {}", e);
-                                }
-                                // Activate so keyboard focus goes to the webview
-                                if let Err(e) =
-                                    crate::windows_overlay::bring_to_front_and_activate(&win)
-                                {
-                                    tracing::error!("Failed to activate overlay: {}", e);
-                                }
-                                let _ = app_clone.emit("window-focused", true);
+                                reveal_fullscreen_overlay(
+                                    &win,
+                                    &app_clone,
+                                    capturable,
+                                    "page-load",
+                                );
                             }
                         });
-                    super::finalize_webview_window(builder.build()?)
+                    let window = super::finalize_webview_window(builder.build()?);
+                    arm_overlay_page_load_fallback(
+                        app,
+                        main_label_for_mode("fullscreen"),
+                        capturable,
+                        OverlayRevealMode::Fullscreen,
+                    );
+                    window
                 };
 
                 // Linux uses a normal decorated window (overlay not yet implemented).
@@ -1198,9 +1355,7 @@ impl ShowRewindWindow {
                         .transparent(false)
                         .on_page_load(move |win, payload| {
                             if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
-                                win.show().ok();
-                                win.set_focus().ok();
-                                let _ = app_clone.emit("window-focused", true);
+                                reveal_window_mode_overlay(&win, &app_clone, true, "page-load");
                             }
                         });
                     super::finalize_webview_window(builder.build()?)
@@ -1402,20 +1557,38 @@ impl ShowRewindWindow {
                             }
                         }
                         tauri::WindowEvent::ScaleFactorChanged { scale_factor: _, new_inner_size: _,.. } => {
-                            // Handle display resolution/scale changes — use the window's current monitor
-                            let Some(monitor) = window_clone.current_monitor().ok().flatten()
-                                .or_else(|| window_clone.app_handle().primary_monitor().ok().flatten()) else {
-                                error!("failed to get monitor for scale factor change");
-                                return;
-                            };
-                            let scale_factor = monitor.scale_factor();
-                            let size = monitor.size().to_logical::<f64>(scale_factor);
-                            let position = monitor.position();
-                            info!("Display scale factor changed, updating window size {:?} position {:?}", size, position);
-                            let _ = window_clone.set_size(tauri::Size::Logical(size));
-                            let _ = window_clone.set_position(tauri::Position::Physical(
-                                tauri::PhysicalPosition::new(position.x, position.y),
-                            ));
+                            // Handle display resolution/scale changes — use the window's current monitor.
+                            //
+                            // On Windows the correction has to be deferred: tao
+                            // applies its own SetWindowPos (preserving the OLD
+                            // logical size) after this handler returns, so
+                            // resizing inline is discarded and the "fullscreen"
+                            // overlay is left the size of the display it was
+                            // created on.
+                            #[cfg(target_os = "windows")]
+                            {
+                                info!("Display scale factor changed, re-covering monitor after tao settles");
+                                reassert_overlay_monitor_after_scale_change(
+                                    &window_clone.app_handle().clone(),
+                                    window_clone.label().to_string(),
+                                );
+                            }
+                            #[cfg(not(target_os = "windows"))]
+                            {
+                                let Some(monitor) = window_clone.current_monitor().ok().flatten()
+                                    .or_else(|| window_clone.app_handle().primary_monitor().ok().flatten()) else {
+                                    error!("failed to get monitor for scale factor change");
+                                    return;
+                                };
+                                let scale_factor = monitor.scale_factor();
+                                let size = monitor.size().to_logical::<f64>(scale_factor);
+                                let position = monitor.position();
+                                info!("Display scale factor changed, updating window size {:?} position {:?}", size, position);
+                                let _ = window_clone.set_size(tauri::Size::Logical(size));
+                                let _ = window_clone.set_position(tauri::Position::Physical(
+                                    tauri::PhysicalPosition::new(position.x, position.y),
+                                ));
+                            }
                         }
                         _ => {}
                     }
@@ -1848,6 +2021,7 @@ impl ShowRewindWindow {
     pub fn hide_without_restore(&self, app: &AppHandle) -> tauri::Result<()> {
         let id = self.id();
         if id.label() == RewindWindowId::Main.label() {
+            super::set_main_overlay_wanted(false);
             #[cfg(target_os = "macos")]
             {
                 MAIN_PANEL_SHOWN.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -1884,6 +2058,11 @@ impl ShowRewindWindow {
     pub fn close(&self, app: &AppHandle) -> tauri::Result<()> {
         let id = self.id();
         if id.label() == RewindWindowId::Main.label() {
+            // Clear the intent first. A page-load or load-timeout reveal may
+            // still be in flight for a window created moments ago; without
+            // this it would put the overlay back on screen right after the
+            // user dismissed it.
+            super::set_main_overlay_wanted(false);
             #[cfg(target_os = "macos")]
             {
                 // Hide whichever main panel is active (could be "main" or "main-window").

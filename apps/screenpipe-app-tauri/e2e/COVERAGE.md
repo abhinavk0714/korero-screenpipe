@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 105
-- Declared test blocks: 305
-- Weighted coverage points: 237.5
+- Mapped specs: 106
+- Declared test blocks: 308
+- Weighted coverage points: 240.5
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,7 +19,7 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 82 | 266 | 216.6 | 15 | 89 | 91% |
+| windows | 83 | 269 | 219.6 | 15 | 89 | 91% |
 | macos | 101 | 268 | 208.3 | 17 | 91 | 90% |
 | linux | 71 | 223 | 185.2 | 14 | 84 | 88% |
 
@@ -42,14 +42,14 @@ pass/fail/skip counts.
 | local-api | 22 specs / 109 tests / 90.0 pts | 27 specs / 94 tests / 78.0 pts | 17 specs / 77 tests / 68.2 pts |
 | notifications | 4 specs / 25 tests / 16.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
 | onboarding | 6 specs / 27 tests / 24.0 pts | 7 specs / 28 tests / 24.4 pts | 6 specs / 27 tests / 24.0 pts |
-| os-integration | 7 specs / 29 tests / 24.8 pts | 13 specs / 25 tests / 14.8 pts | 2 specs / 12 tests / 8.7 pts |
+| os-integration | 8 specs / 32 tests / 27.8 pts | 13 specs / 25 tests / 14.8 pts | 2 specs / 12 tests / 8.7 pts |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
 | pipes | 6 specs / 19 tests / 19.0 pts | 7 specs / 24 tests / 24.0 pts | 6 specs / 19 tests / 19.0 pts |
 | real-ui-e2e | 57 specs / 171 tests / 141.0 pts | 66 specs / 170 tests / 140.1 pts | 52 specs / 146 tests / 126.2 pts |
 | settings | 14 specs / 38 tests / 35.0 pts | 16 specs / 33 tests / 28.7 pts | 13 specs / 30 tests / 27.0 pts |
 | storage-privacy | 9 specs / 40 tests / 31.3 pts | 9 specs / 26 tests / 25.1 pts | 6 specs / 19 tests / 18.1 pts |
-| tauri-command | 16 specs / 43 tests / 32.4 pts | 20 specs / 48 tests / 35.3 pts | 15 specs / 42 tests / 31.4 pts |
-| window-lifecycle | 18 specs / 63 tests / 53.0 pts | 18 specs / 44 tests / 31.4 pts | 13 specs / 39 tests / 29.9 pts |
+| tauri-command | 17 specs / 46 tests / 35.4 pts | 20 specs / 48 tests / 35.3 pts | 15 specs / 42 tests / 31.4 pts |
+| window-lifecycle | 19 specs / 66 tests / 56.0 pts | 18 specs / 44 tests / 31.4 pts | 13 specs / 39 tests / 29.9 pts |
 
 ## Critical Feature Matrix
 
@@ -70,7 +70,7 @@ pass/fail/skip counts.
 | Notification history and viewer paths | notifications | covered (strong; windows-user-journey, notification-viewer-link) | covered (strong; notification-viewer-link, onboarding-h1-follow-up) | covered (strong; notification-viewer-link, onboarding-h1-follow-up) |
 | Audio device health | audio-device | covered (strong; windows-system-integration, windows-core-recording) | weak (conditional; capture-restart-device-recovery, meetings-only-audio-lifecycle) | gap |
 | Meetings-only audio device ownership | audio-device, local-api, real-ui-e2e | weak (conditional; meetings-only-audio-lifecycle) | weak (conditional; meetings-only-audio-lifecycle) | - |
-| Window lifecycle, focus, and dedupe | window-lifecycle | covered (strong; windows-system-integration, window-lifecycle) | covered (strong; window-lifecycle, viewer-deeplink) | covered (strong; window-lifecycle, viewer-deeplink) |
+| Window lifecycle, focus, and dedupe | window-lifecycle | covered (strong; windows-system-integration, overlay-windows-display) | covered (strong; window-lifecycle, viewer-deeplink) | covered (strong; window-lifecycle, viewer-deeplink) |
 | Meeting note creation and editing | real-ui-e2e | covered (strong; windows-user-journey, meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click, meeting-workspace-tabs) | covered (strong; meeting-note-bottom-click, meeting-workspace-tabs) |
 | Pipes discover, install, and play | pipes | covered (strong; pipes, brain-overview) | covered (strong; pipes, pipe-continuous-chat) | covered (strong; pipes, brain-overview) |
 | Chat window, composer, and streaming state | chat-ai | covered (strong; acp-backend, chat-sidebar-groups) | covered (strong; acp-backend, chat-sidebar-groups) | covered (strong; acp-backend, chat-sidebar-groups) |
@@ -168,6 +168,7 @@ pass/fail/skip counts.
 | onboarding-first-run.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, tauri-command | onboarding, first-run-learning, settings-persistence | high | strong | real-user-flow | 8 | Fresh-install setup walk: the acquisition slide is reachable in the shipped slide order and counted by the progress bar, offers no free-text field, one tap persists through to store.bin via the real settings command, skip records nothing, and the engine slide is the last one with no goal picker after it. |
 | onboarding-h1-follow-up.spec.ts | windows, macos, linux | onboarding, notifications, pipes, real-ui-e2e | onboarding, notifications, pipes | high | strong | real-user-flow | 1 | A due H1 activation runs its real Pipe, sends one visible prompt through the app-control notification server, and remains exactly-once across repeated scheduler ticks. |
 | onboarding-redirect.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, window-lifecycle | onboarding, app-launch | high | conditional | real-user-flow | 5 | Opt-in no-onboarding seed verifies onboarding redirect. |
+| overlay-windows-display.spec.ts | windows | window-lifecycle, os-integration, tauri-command | window-lifecycle, main-overlay | high | strong | command | 3 | Real Win32 geometry for both overlay modes and the shortcut reminder: covers its display, stays topmost, survives repeated show/hide, and a late page load never resurrects a dismissed overlay. |
 | owned-browser.spec.ts | windows, macos | os-integration, window-lifecycle | owned-browser, window-lifecycle | low | smoke | command | 1 | Embedded agent browser hides safely without an attached child. |
 | permission-recovery.spec.ts | macos | os-integration, real-ui-e2e, window-lifecycle | permission-recovery, window-lifecycle | high | conditional | real-user-flow | 2 | macOS-only recovery window for missing TCC permissions. |
 | pi-extensions.spec.ts | windows, macos, linux | real-ui-e2e, settings | connections, pi-extensions, agent-extensions | medium | strong | real-user-flow | 1 | Opens Home -> Connections, opens Pi extensions, verifies catalog and warning copy, filters package search, and captures a screenshot. Read-only smoke: does not install packages. |

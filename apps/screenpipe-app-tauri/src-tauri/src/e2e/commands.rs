@@ -39,6 +39,136 @@ fn main_overlay_visible(app_handle: tauri::AppHandle) -> bool {
     }
 }
 
+/// Where an overlay window actually is on screen, and whether it covers the
+/// display it is supposed to cover.
+///
+/// `main_overlay_visible` above only answers Tauri's `is_visible()`, which is
+/// `IsWindowVisible` on Windows — it stays `true` for a window that is the
+/// wrong size, parked on the wrong monitor, or shrunk to a corner by a DPI
+/// hand-off. Every one of those reads to a user as "the overlay didn't show
+/// up", so the Windows overlay specs assert on this instead.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OverlayGeometry {
+    exists: bool,
+    tauri_visible: bool,
+    /// Windows only: `IsWindowVisible`. Mirrors `tauri_visible` elsewhere.
+    os_visible: bool,
+    topmost: bool,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    monitor_x: i32,
+    monitor_y: i32,
+    monitor_width: i32,
+    monitor_height: i32,
+    covers_monitor: bool,
+}
+
+impl OverlayGeometry {
+    fn missing() -> Self {
+        Self {
+            exists: false,
+            tauri_visible: false,
+            os_visible: false,
+            topmost: false,
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            monitor_x: 0,
+            monitor_y: 0,
+            monitor_width: 0,
+            monitor_height: 0,
+            covers_monitor: false,
+        }
+    }
+}
+
+#[command]
+fn overlay_geometry(app_handle: tauri::AppHandle, label: String) -> Result<OverlayGeometry, String> {
+    let Some(window) = app_handle.get_webview_window(&label) else {
+        return Ok(OverlayGeometry::missing());
+    };
+    let tauri_visible = window.is_visible().unwrap_or(false);
+
+    #[cfg(target_os = "windows")]
+    {
+        let geometry = crate::windows_overlay::screen_geometry(&window)?;
+        return Ok(OverlayGeometry {
+            exists: true,
+            tauri_visible,
+            os_visible: geometry.visible,
+            topmost: geometry.topmost,
+            x: geometry.x,
+            y: geometry.y,
+            width: geometry.width,
+            height: geometry.height,
+            monitor_x: geometry.monitor_x,
+            monitor_y: geometry.monitor_y,
+            monitor_width: geometry.monitor_width,
+            monitor_height: geometry.monitor_height,
+            covers_monitor: geometry.covers_monitor,
+        });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let position = window.outer_position().map_err(|e| e.to_string())?;
+        let size = window.outer_size().map_err(|e| e.to_string())?;
+        let monitor = window
+            .current_monitor()
+            .map_err(|e| e.to_string())?
+            .or(app_handle.primary_monitor().map_err(|e| e.to_string())?);
+        let (mx, my, mw, mh) = monitor
+            .map(|m| {
+                (
+                    m.position().x,
+                    m.position().y,
+                    m.size().width as i32,
+                    m.size().height as i32,
+                )
+            })
+            .unwrap_or((0, 0, 0, 0));
+        Ok(OverlayGeometry {
+            exists: true,
+            tauri_visible,
+            os_visible: tauri_visible,
+            topmost: false,
+            x: position.x,
+            y: position.y,
+            width: size.width as i32,
+            height: size.height as i32,
+            monitor_x: mx,
+            monitor_y: my,
+            monitor_width: mw,
+            monitor_height: mh,
+            covers_monitor: position.x == mx
+                && position.y == my
+                && size.width as i32 == mw
+                && size.height as i32 == mh,
+        })
+    }
+}
+
+/// E2E helper: pick which main-overlay surface the show path builds.
+///
+/// The two modes are genuinely different windows — "fullscreen" is the
+/// transparent, undecorated, Win32-styled panel under the `main` label,
+/// "window" is a normal decorated window under `main-window` — and Windows
+/// defaults to "window". Covering only the default would leave the fullscreen
+/// overlay's monitor-rect handling untested.
+#[command]
+fn set_overlay_mode(app_handle: tauri::AppHandle, mode: String) -> Result<(), String> {
+    if mode != "fullscreen" && mode != "window" {
+        return Err(format!("unsupported overlay mode: {mode}"));
+    }
+    let mut settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
+    settings.overlay_mode = mode;
+    settings.save(&app_handle)
+}
+
 /// E2E helper: backdate the recorded setup completion.
 ///
 /// The first-run window keys off how long ago setup finished, and the two
@@ -612,6 +742,8 @@ pub(super) fn plugin() -> TauriPlugin<Wry> {
         // build.rs verifies this inventory matches the feature-only plugin ACL.
         .invoke_handler(tauri::generate_handler![
             main_overlay_visible,
+            overlay_geometry,
+            set_overlay_mode,
             mark_capture_intended,
             emit_disk_space_low,
             emit_disk_space_recovered,

@@ -1269,6 +1269,25 @@
       "notes": "Main overlay show/hide without duplicate handles."
     },
     {
+      "spec": "overlay-windows-display.spec.ts",
+      "platforms": [
+        "windows"
+      ],
+      "layers": [
+        "window-lifecycle",
+        "os-integration",
+        "tauri-command"
+      ],
+      "features": [
+        "window-lifecycle",
+        "main-overlay"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "command",
+      "notes": "Real Win32 geometry for both overlay modes and the shortcut reminder: covers its display, stays topmost, survives repeated show/hide, and a late page load never resurrects a dismissed overlay."
+    },
+    {
       "spec": "main-window.spec.ts",
       "platforms": [
         "windows",

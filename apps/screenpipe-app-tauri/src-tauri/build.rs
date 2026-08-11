@@ -361,6 +361,8 @@ fn generate_and_validate_tauri_commands() {
 
 const E2E_COMMANDS: &[&str] = &[
     "main_overlay_visible",
+    "overlay_geometry",
+    "set_overlay_mode",
     "mark_capture_intended",
     "emit_disk_space_low",
     "emit_disk_space_recovered",

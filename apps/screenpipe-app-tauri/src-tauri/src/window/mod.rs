@@ -22,6 +22,33 @@ pub use panel::main_label_for_mode;
 pub use show::{RewindWindowId, ShowRewindWindow};
 pub use util::with_autorelease_pool;
 
+/// Whether the user currently wants the main overlay on screen.
+///
+/// On Windows and Linux the overlay is built hidden and only revealed from the
+/// webview's page-load callback, which can land seconds after the shortcut was
+/// pressed. That is long enough for the user to give up and press the shortcut
+/// again, so without this gate a late callback re-shows an overlay that was
+/// already dismissed — and the *next* press then reads the window as visible
+/// and hides it, so the shortcut appears to do nothing. Both directions of
+/// "the overlay doesn't always show up" come from the same missing intent.
+///
+/// Set by `ShowRewindWindow::Main.show()`, cleared by `close()` and
+/// `hide_without_restore()` — the only two ways the overlay leaves the screen.
+static MAIN_OVERLAY_WANTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn set_main_overlay_wanted(wanted: bool) {
+    MAIN_OVERLAY_WANTED.store(wanted, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Only the deferred reveal paths read this, and those are Windows/Linux only —
+/// macOS reveals its NSPanel synchronously from the show path, so there is no
+/// window between "user asked" and "webview ready" for the intent to close.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn main_overlay_wanted() -> bool {
+    MAIN_OVERLAY_WANTED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Finalize a newly created webview window with cross-cutting resilience hooks.
 /// Keep this as the single post-build entrypoint for window creation callsites.
 pub fn finalize_webview_window(window: tauri::WebviewWindow) -> tauri::WebviewWindow {

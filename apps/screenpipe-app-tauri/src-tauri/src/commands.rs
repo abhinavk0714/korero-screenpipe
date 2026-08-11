@@ -2817,6 +2817,136 @@ fn shortcut_reminder_payload(
     map
 }
 
+/// Gap between the top of the display and the shortcut reminder, in logical px.
+///
+/// macOS positions the reminder through its own NSScreen branch in
+/// `show_shortcut_reminder_impl`, so this whole placement helper — and the
+/// tests below it — are Windows/Linux only.
+#[cfg(not(target_os = "macos"))]
+const REMINDER_TOP_MARGIN: f64 = 12.0;
+
+/// One display, in the form the reminder placement math needs. Position and
+/// size are physical (virtual-desktop) pixels; `scale` is its DPI factor.
+#[cfg(not(target_os = "macos"))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MonitorPlacement {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub scale: f64,
+}
+
+/// Where the shortcut reminder should sit, in physical pixels.
+#[cfg(not(target_os = "macos"))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ReminderPlacement {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Top-center of the display under the cursor.
+///
+/// Two bugs live here, both of which look to the user like "the shortcut
+/// overlay didn't show up on Windows":
+///
+///   * It used to be pinned to the primary display. On a multi-monitor desktop
+///     the reminder appeared on a screen the user was not looking at, which is
+///     indistinguishable from never appearing. macOS already follows the
+///     cursor (see the NSScreen branch in `show_shortcut_reminder_impl`); this
+///     brings Windows and Linux in line.
+///   * The math went through logical coordinates. Tauri resolves a logical
+///     position with the *window's current* scale factor, not the target
+///     display's, so on a mixed-DPI desktop the reminder landed at a fraction
+///     or a multiple of the intended offset — often past the edge of every
+///     display. Returning physical pixels removes the ambiguity entirely.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn shortcut_reminder_placement(
+    monitors: &[MonitorPlacement],
+    primary: Option<MonitorPlacement>,
+    cursor: Option<(f64, f64)>,
+    logical_width: f64,
+    logical_height: f64,
+) -> Option<ReminderPlacement> {
+    let target = cursor
+        .and_then(|(cx, cy)| {
+            monitors.iter().copied().find(|m| {
+                cx >= m.x as f64
+                    && cx < m.x as f64 + m.width as f64
+                    && cy >= m.y as f64
+                    && cy < m.y as f64 + m.height as f64
+            })
+        })
+        .or(primary)
+        .or_else(|| monitors.first().copied())?;
+
+    let width = (logical_width * target.scale).round().max(1.0) as u32;
+    let height = (logical_height * target.scale).round().max(1.0) as u32;
+    // Saturating on purpose: a display narrower than the reminder should pin
+    // it to the left edge. Unsigned underflow here would place the window
+    // billions of pixels away — another invisible overlay.
+    let x = target.x + (target.width.saturating_sub(width) / 2) as i32;
+    let y = target.y + (REMINDER_TOP_MARGIN * target.scale).round() as i32;
+
+    Some(ReminderPlacement {
+        x,
+        y,
+        width,
+        height,
+    })
+}
+
+/// Read the current display topology and cursor into the placement helper.
+#[cfg(not(target_os = "macos"))]
+fn current_reminder_placement(
+    app_handle: &tauri::AppHandle,
+    logical_width: f64,
+    logical_height: f64,
+) -> Option<ReminderPlacement> {
+    let to_placement = |m: &tauri::window::Monitor| MonitorPlacement {
+        x: m.position().x,
+        y: m.position().y,
+        width: m.size().width,
+        height: m.size().height,
+        scale: m.scale_factor(),
+    };
+    let monitors: Vec<MonitorPlacement> = app_handle
+        .available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(to_placement)
+        .collect();
+    let primary = app_handle
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| to_placement(&m));
+    let cursor = app_handle.cursor_position().ok().map(|c| (c.x, c.y));
+
+    shortcut_reminder_placement(&monitors, primary, cursor, logical_width, logical_height)
+}
+
+/// Apply the exact physical rect the placement helper computed.
+///
+/// Physical rather than logical: Tauri resolves a logical position with the
+/// window's *current* scale factor, which is the previous display's on every
+/// cross-monitor move.
+#[cfg(not(target_os = "macos"))]
+fn apply_reminder_placement(window: &tauri::WebviewWindow, p: ReminderPlacement) {
+    info!(
+        "shortcut-reminder placed at ({}, {}) {}x{} (cursor display)",
+        p.x, p.y, p.width, p.height
+    );
+    let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
+        p.width, p.height,
+    )));
+    let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+        p.x, p.y,
+    )));
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn show_shortcut_reminder(
@@ -2958,6 +3088,10 @@ pub(crate) async fn show_shortcut_reminder_impl(
     let window_height = 40.0 * scale;
 
     // Position at top center of the screen where the cursor is
+    #[cfg(not(target_os = "macos"))]
+    let placement = current_reminder_placement(&app_handle, window_width, window_height);
+
+    #[allow(unused_variables)] // the logical (x, y) pair is the builder hint only
     let (x, y) = {
         #[cfg(target_os = "macos")]
         {
@@ -2988,25 +3122,35 @@ pub(crate) async fn show_shortcut_reminder_impl(
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let monitor = app_handle
-                .primary_monitor()
-                .map_err(|e| e.to_string())?
-                .ok_or("No primary monitor found")?;
-            let screen_size = monitor.size();
-            let scale_factor = monitor.scale_factor();
-            let x = ((screen_size.width as f64 / scale_factor) - window_width) / 2.0;
-            (x, 12.0)
+            // Only the builder's initial (logical) hint. The exact physical
+            // rect is pinned from `placement` right after the window is built,
+            // because the builder has no physical-position variant.
+            let p = placement.ok_or("No monitor found for the shortcut reminder")?;
+            let scale = if p.width > 0 {
+                p.width as f64 / window_width
+            } else {
+                1.0
+            };
+            (p.x as f64 / scale, p.y as f64 / scale)
         }
     };
 
     // If window exists, resize, reposition to current screen, and show
     if let Some(window) = app_handle.get_webview_window(label) {
         info!("shortcut-reminder window exists, resizing/repositioning and showing");
-        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
-            window_width,
-            window_height,
-        )));
-        let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
+        #[cfg(target_os = "macos")]
+        {
+            let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+                window_width,
+                window_height,
+            )));
+            let _ =
+                window.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
+        }
+        #[cfg(not(target_os = "macos"))]
+        if let Some(p) = placement {
+            apply_reminder_placement(&window, p);
+        }
         let _ = app_handle.emit_to(label, "shortcut-reminder-update", &shortcut_payload);
         let _ = window.show();
 
@@ -3067,6 +3211,14 @@ pub(crate) async fn show_shortcut_reminder_impl(
         })?;
 
     info!("shortcut-reminder window created");
+
+    // The builder only accepts a logical position, which Tauri resolves with
+    // the scale factor of whichever display it happened to place the window
+    // on. Pin the exact physical rect before the window is shown.
+    #[cfg(not(target_os = "macos"))]
+    if let Some(p) = placement {
+        apply_reminder_placement(&window, p);
+    }
 
     // Convert to NSPanel on macOS for fullscreen support
     #[cfg(target_os = "macos")]
@@ -3135,17 +3287,16 @@ pub(crate) async fn show_shortcut_reminder_impl(
     let app_handle_clone = app_handle.clone();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::ScaleFactorChanged { .. } = event {
-            // Display configuration changed, reposition to top center of primary monitor
-            if let Ok(Some(monitor)) = app_handle_clone.primary_monitor() {
-                let screen_size = monitor.size();
-                let scale_factor = monitor.scale_factor();
-                let new_x = ((screen_size.width as f64 / scale_factor) - 220.0) / 2.0;
-                let new_y = 12.0;
-
-                if let Some(window) = app_handle_clone.get_webview_window("shortcut-reminder") {
-                    let _ = window.set_position(tauri::Position::Logical(
-                        tauri::LogicalPosition::new(new_x, new_y),
-                    ));
+            // Recompute from the live topology. The old code centred a
+            // hardcoded 220px window on the primary display, so any other
+            // overlay size (medium/large) or any non-primary display left the
+            // reminder off-centre or off-screen after a DPI change.
+            #[cfg(not(target_os = "macos"))]
+            if let Some(window) = app_handle_clone.get_webview_window("shortcut-reminder") {
+                if let Some(p) =
+                    current_reminder_placement(&app_handle_clone, window_width, window_height)
+                {
+                    apply_reminder_placement(&window, p);
                     info!("Repositioned shortcut-reminder after display change");
                 }
             }
@@ -4281,6 +4432,102 @@ fn dir_size(path: &std::path::Path) -> u64 {
         }
     }
     total
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod shortcut_reminder_placement_tests {
+    use super::{shortcut_reminder_placement, MonitorPlacement, ReminderPlacement};
+
+    /// 1080p at 100%, left of the primary display (negative virtual origin).
+    const LEFT: MonitorPlacement = MonitorPlacement {
+        x: -1920,
+        y: 0,
+        width: 1920,
+        height: 1080,
+        scale: 1.0,
+    };
+    /// The primary display: 2560x1440 at 150%.
+    const PRIMARY: MonitorPlacement = MonitorPlacement {
+        x: 0,
+        y: 0,
+        width: 2560,
+        height: 1440,
+        scale: 1.5,
+    };
+
+    fn place(cursor: Option<(f64, f64)>) -> Option<ReminderPlacement> {
+        shortcut_reminder_placement(&[LEFT, PRIMARY], Some(PRIMARY), cursor, 160.0, 40.0)
+    }
+
+    #[test]
+    fn the_reminder_follows_the_cursor_onto_a_secondary_display() {
+        // Cursor on the left-hand display: the reminder belongs there, not on
+        // the primary. Landing on the primary is what users report as "the
+        // overlay never showed up".
+        assert_eq!(
+            place(Some((-1000.0, 400.0))),
+            Some(ReminderPlacement {
+                x: -1920 + (1920 - 160) / 2,
+                y: 12,
+                width: 160,
+                height: 40,
+            })
+        );
+    }
+
+    #[test]
+    fn placement_is_physical_so_a_scaled_display_gets_a_scaled_rect() {
+        // At 150% the same 160x40 logical overlay must occupy 240x60 physical
+        // pixels and sit 18 physical px down. Treating the logical numbers as
+        // physical renders it at two thirds size, centred on the wrong column.
+        assert_eq!(
+            place(Some((1200.0, 700.0))),
+            Some(ReminderPlacement {
+                x: (2560 - 240) / 2,
+                y: 18,
+                width: 240,
+                height: 60,
+            })
+        );
+    }
+
+    #[test]
+    fn no_cursor_falls_back_to_primary_then_to_any_display() {
+        assert_eq!(place(None).map(|p| p.x), Some((2560 - 240) / 2));
+
+        // Cursor outside every known display (stale topology) — still placed.
+        assert_eq!(
+            place(Some((99_999.0, 99_999.0))).map(|p| p.x),
+            Some((2560 - 240) / 2)
+        );
+
+        // No primary reported: fall back to the first display rather than
+        // refusing to show the overlay at all.
+        assert_eq!(
+            shortcut_reminder_placement(&[LEFT], None, None, 160.0, 40.0).map(|p| p.x),
+            Some(-1920 + (1920 - 160) / 2)
+        );
+
+        // Nothing to place on: the caller has to handle it, not guess.
+        assert!(shortcut_reminder_placement(&[], None, None, 160.0, 40.0).is_none());
+    }
+
+    #[test]
+    fn a_display_narrower_than_the_overlay_pins_it_to_the_left_edge() {
+        // Centring with unsigned arithmetic underflows here; the overlay would
+        // be positioned billions of pixels off-screen.
+        let tiny = MonitorPlacement {
+            x: 300,
+            y: 0,
+            width: 100,
+            height: 100,
+            scale: 1.0,
+        };
+        assert_eq!(
+            shortcut_reminder_placement(&[tiny], Some(tiny), None, 160.0, 40.0).map(|p| p.x),
+            Some(300)
+        );
+    }
 }
 
 #[tauri::command]
