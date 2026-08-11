@@ -463,10 +463,11 @@ mod text_positions;
 mod write_ops;
 
 pub use self::semantic::{
-    SemanticActor, SemanticActorAlias, SemanticActorReference, SemanticCleanupResult,
-    SemanticContextQuery, SemanticFrameContext, SemanticProjectionWriteResult,
+    SemanticActor, SemanticActorAlias, SemanticActorReference, SemanticAttachResult,
+    SemanticCleanupResult, SemanticContextQuery, SemanticFrameContext,
+    SemanticProjectionWriteResult,
 };
-pub(crate) use self::text_positions::calculate_confidence;
+pub(crate) use self::text_positions::{calculate_confidence, match_on_screen_a11y};
 pub use self::text_positions::{
     find_matching_a11y_positions, find_matching_positions, parse_all_text_positions,
 };

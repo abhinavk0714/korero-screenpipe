@@ -989,29 +989,19 @@ pub async fn set_cloud_token(
     }
 
     // `loadUser` writes the fresh plan before calling this command. Refresh the
-    // already-running manager before any fallible persistence, so a keychain
-    // error cannot leave a paid→free transition temporarily unlimited.
+    // already-running pipe manager before any fallible persistence.
     let settings = crate::store::SettingsStore::get(&app).ok().flatten();
-    let is_free_plan = settings
-        .as_ref()
-        .is_some_and(|settings| settings.has_free_plan_policy());
     // Missing/corrupt settings are Unknown, never paid. Keep the non-destructive
     // cap until positive paid truth is available.
     let restrict_paid_features = settings
         .as_ref()
         .map(|settings| settings.restricts_paid_local_features())
         .unwrap_or(true);
-    let server_handles = {
+    let pipe_manager = {
         let server = state.server.lock().await;
-        server.as_ref().map(|core| {
-            (
-                core.pipe_manager.clone(),
-                core.enforce_free_plan_retention.clone(),
-            )
-        })
+        server.as_ref().map(|core| core.pipe_manager.clone())
     };
-    if let Some((pipe_manager, enforce_free_plan_retention)) = server_handles {
-        enforce_free_plan_retention.store(is_free_plan, std::sync::atomic::Ordering::SeqCst);
+    if let Some(pipe_manager) = pipe_manager {
         let mut pipe_manager = pipe_manager.lock().await;
         if pipe_manager.set_max_non_template_pipes(restrict_paid_features.then_some(2)) {
             pipe_manager
@@ -1623,6 +1613,81 @@ fn login_url() -> String {
     crate::web_base::screenpipe_web_url("/login")
 }
 
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LoginMode {
+    SignIn,
+    SignUp,
+}
+
+impl LoginMode {
+    fn as_query_value(self) -> &'static str {
+        match self {
+            Self::SignIn => "sign-in",
+            Self::SignUp => "sign-up",
+        }
+    }
+}
+
+fn login_url_with_intent(
+    auth_mode: Option<LoginMode>,
+    return_scheme: Option<&str>,
+) -> Result<String, String> {
+    let mut url: tauri::Url = login_url()
+        .parse()
+        .map_err(|error| format!("invalid login URL: {error}"))?;
+    {
+        let mut query = url.query_pairs_mut();
+        if let Some(mode) = auth_mode {
+            query.append_pair("mode", mode.as_query_value());
+        }
+        if let Some(scheme) = return_scheme {
+            query.append_pair("return_scheme", scheme);
+        }
+    }
+    Ok(url.to_string())
+}
+
+#[cfg(test)]
+mod login_url_intent_tests {
+    use super::{login_url_with_intent, LoginMode};
+
+    #[test]
+    fn carries_explicit_signup_intent_and_return_scheme() {
+        let login_url = login_url_with_intent(Some(LoginMode::SignUp), Some("screenpipe"))
+            .expect("valid login URL");
+        let parsed: tauri::Url = login_url.parse().expect("parse generated login URL");
+        let pairs = parsed
+            .query_pairs()
+            .collect::<std::collections::HashMap<_, _>>();
+
+        assert_eq!(
+            pairs.get("mode").map(|value| value.as_ref()),
+            Some("sign-up")
+        );
+        assert_eq!(
+            pairs.get("return_scheme").map(|value| value.as_ref()),
+            Some("screenpipe")
+        );
+    }
+
+    #[test]
+    fn keeps_neutral_login_urls_free_of_mode() {
+        let login_url =
+            login_url_with_intent(None, Some("screenpipe-enterprise")).expect("valid login URL");
+        let parsed: tauri::Url = login_url.parse().expect("parse generated login URL");
+        let pairs = parsed
+            .query_pairs()
+            .collect::<std::collections::HashMap<_, _>>();
+
+        assert!(!pairs.contains_key("mode"));
+        assert_eq!(
+            pairs.get("return_scheme").map(|value| value.as_ref()),
+            Some("screenpipe-enterprise")
+        );
+    }
+}
+
 /// The custom URL scheme this build registers for deep links. The enterprise
 /// build uses a distinct scheme so it does not collide with the consumer app's
 /// `screenpipe://` on machines that have both installed (see #3890). Login
@@ -1678,6 +1743,7 @@ fn reset_existing_login_window<R: tauri::Runtime>(
 pub async fn open_login_window(
     app_handle: tauri::AppHandle,
     fresh_session: Option<bool>,
+    auth_mode: Option<LoginMode>,
 ) -> Result<String, String> {
     let fresh_session = fresh_session.unwrap_or(false);
     #[cfg(target_os = "macos")]
@@ -1687,7 +1753,7 @@ pub async fn open_login_window(
         // with another installed build here (#3890) and stays correct until
         // the website honours `return_scheme`.
         let callback_url = match crate::auth_session::start_session(
-            login_url(),
+            login_url_with_intent(auth_mode, None)?,
             "screenpipe".to_string(),
             fresh_session,
         )
@@ -1735,7 +1801,7 @@ pub async fn open_login_window(
             // from the default browser, so none of that is necessary: the
             // deep-link handler (mounted outside the entitlement gate) receives
             // the token exactly as it does today.
-            let login_url = format!("{}?return_scheme={}", login_url(), deep_link_scheme());
+            let login_url = login_url_with_intent(auth_mode, Some(deep_link_scheme()))?;
             match app_handle
                 .opener()
                 .open_url(login_url.as_str(), None::<&str>)
@@ -1762,7 +1828,7 @@ pub async fn open_login_window(
             "login-browser".to_string()
         };
 
-        let login_url = format!("{}?return_scheme={}", login_url(), deep_link_scheme());
+        let login_url = login_url_with_intent(auth_mode, Some(deep_link_scheme()))?;
         let parsed_login_url = login_url
             .parse()
             .map_err(|e| format!("invalid login URL: {e}"))?;
@@ -3927,6 +3993,22 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("clipboard error: {}", e))?;
     clipboard
         .set_text(text)
+        .map_err(|e| format!("failed to set clipboard: {}", e))?;
+    Ok(())
+}
+
+/// Copy rich text to the system clipboard: HTML plus a plain-text alternative
+/// on the same clipboard write. Pasting into Gmail, Notion, Slack, or Docs keeps
+/// headings, bold, and lists; plain-text targets get `text` instead. Used by the
+/// meeting summary share actions so a summary lands formatted, not as raw
+/// markdown.
+#[tauri::command]
+#[specta::specta]
+pub async fn copy_rich_text_to_clipboard(html: String, text: String) -> Result<(), String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("clipboard error: {}", e))?;
+    clipboard
+        .set()
+        .html(html, Some(text))
         .map_err(|e| format!("failed to set clipboard: {}", e))?;
     Ok(())
 }

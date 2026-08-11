@@ -11,6 +11,7 @@ import AcquisitionStep from "@/components/onboarding/acquisition-step";
 import PermissionsStep from "@/components/onboarding/permissions-step";
 import TimelineChoice from "@/components/onboarding/timeline-choice";
 import EngineStartup from "@/components/onboarding/engine-startup";
+import PlanSelectionStep from "@/components/onboarding/plan-selection-step";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -18,13 +19,15 @@ import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt"
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
 import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
+import type { AppUser } from "@/lib/app-entitlement";
 
 type SlideKey =
   | "login"
   | "acquisition"
   | "permissions"
   | "timeline"
-  | "engine";
+  | "engine"
+  | "plan";
 
 const SLIDE_WINDOW_SIZES: Record<SlideKey, { width: number; height: number }> =
   {
@@ -33,6 +36,7 @@ const SLIDE_WINDOW_SIZES: Record<SlideKey, { width: number; height: number }> =
     permissions: { width: 500, height: 560 },
     timeline: { width: 500, height: 680 },
     engine: { width: 500, height: 620 },
+    plan: { width: 760, height: 720 },
   };
 
 // When shown, the timeline choice sits before "engine" so disableTimeline is
@@ -43,6 +47,7 @@ const SLIDE_ORDER: SlideKey[] = [
   "permissions",
   "timeline",
   "engine",
+  "plan",
 ];
 
 // endowed progress: the bar first renders on permissions with login already
@@ -123,6 +128,7 @@ export default function OnboardingPage() {
   );
   const { onboardingData, isLoading, completeOnboarding } = useOnboarding();
   const { settings, isSettingsLoaded } = useSettings();
+  const user = settings.user as AppUser | null | undefined;
   const completedForHiddenUiRef = React.useRef(false);
   const transitioningRef = React.useRef(false);
   const funnelStartedRef = React.useRef(false);
@@ -157,9 +163,27 @@ export default function OnboardingPage() {
     settings.deviceTier === "high"
       ? settings.deviceTier
       : "unknown";
+  const shouldShowPlanSelection =
+    !isManagedDeployment && user?.has_payment_method !== true;
+  // "plan" is the last slide, so auto-advancing onto it without a token traps
+  // the user in onboarding: PlanSelectionStep can neither load embedded
+  // checkout (it renders "sign in to continue") nor start the cardless trial,
+  // and handleNextSlide stops calling completeOnboarding once a next slide
+  // exists. Someone who skipped sign-in would sit on /onboarding forever.
+  //
+  // This gates only the automatic walk out of the engine slide. The slide stays
+  // in visibleOrder — and so in the progress total and the restore mapping — so
+  // navigating to it directly still renders card capture.
+  const canAdvanceIntoPlanSelection =
+    shouldShowPlanSelection && Boolean(user?.token);
   const visibleOrder = useMemo(
-    () => SLIDE_ORDER.filter((s) => s !== "timeline" || timelineChoiceVisible),
-    [timelineChoiceVisible],
+    () =>
+      SLIDE_ORDER.filter(
+        (s) =>
+          (s !== "timeline" || timelineChoiceVisible) &&
+          (s !== "plan" || shouldShowPlanSelection),
+      ),
+    [shouldShowPlanSelection, timelineChoiceVisible],
   );
   // Read by the hydration-gated restore effect below. Assigned during render,
   // per the ref-mirror rule in CLAUDE.md.
@@ -186,6 +210,7 @@ export default function OnboardingPage() {
           permissions: "permissions",
           timeline: "timeline",
           engine: "engine",
+          plan: "plan",
           // Native Rust now connects detected AI tools in the background, and
           // the goal/dashboard slide is gone: setup no longer asks the user to
           // declare intent before anything has been observed. Saved installs
@@ -209,16 +234,21 @@ export default function OnboardingPage() {
         if (mapped) {
           // A saved step must not resume onto a slide that this device or its
           // managed policy is no longer eligible to see.
-          setCurrentSlide(
-            mapped === "timeline" && !timelineChoiceVisibleRef.current
+          const mappedSlide =
+            (mapped === "timeline" && !timelineChoiceVisibleRef.current) ||
+            (mapped === "plan" && !shouldShowPlanSelection)
               ? "engine"
-              : mapped,
-          );
+              : mapped;
+          setCurrentSlide(mappedSlide);
         }
       }
     };
     init();
-  }, [isManagedDeploymentResolved, isSettingsLoaded]);
+  }, [
+    isManagedDeploymentResolved,
+    isSettingsLoaded,
+    shouldShowPlanSelection,
+  ]);
 
   useEffect(() => {
     const persistedStep = onboardingData.currentStep;
@@ -332,11 +362,12 @@ export default function OnboardingPage() {
 
     // Walk SLIDE_ORDER (never the filtered list) so the index stays valid even
     // for a slide that policy hides, then land on the next visible slide.
-    // The engine slide is the last one. Finishing it completes setup rather
-    // than advancing, so the first thing after setup is the learning window
-    // and not a dashboard built before anything has been captured.
-    const nextSlide = SLIDE_ORDER.slice(currentIdx + 1).find((s) =>
-      visibleOrder.includes(s),
+    // Consumer onboarding ends on plan selection after the engine is ready.
+    // Managed deployments skip that consumer purchase surface.
+    const nextSlide = SLIDE_ORDER.slice(currentIdx + 1).find(
+      (s) =>
+        visibleOrder.includes(s) &&
+        (s !== "plan" || canAdvanceIntoPlanSelection),
     );
     if (!nextSlide) {
       await completeOnboarding({ method: "setup_finished" });
@@ -358,6 +389,7 @@ export default function OnboardingPage() {
       setIsTransitioning(false);
     }, 300);
   }, [
+    canAdvanceIntoPlanSelection,
     completeOnboarding,
     currentSlide,
     deviceTierForAnalytics,
@@ -479,6 +511,9 @@ export default function OnboardingPage() {
           )}
           {currentSlide === "engine" && (
             <EngineStartup handleNextSlide={handleNextSlide} />
+          )}
+          {currentSlide === "plan" && (
+            <PlanSelectionStep handleNextSlide={handleNextSlide} />
           )}
         </div>
       </div>
