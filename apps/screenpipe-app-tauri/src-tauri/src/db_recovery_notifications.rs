@@ -115,6 +115,18 @@ pub fn notify_quarantined_database(data_dir: PathBuf) {
     send_recovery_offer();
 }
 
+/// Re-show the recovery offer on demand, bypassing the once-per-launch guard
+/// used by `notify_quarantined_database`. Called when the user reaches for a
+/// recording control that the quarantine has disabled: the launch notice may
+/// have been dismissed hours ago, and silently doing nothing would leave them
+/// with no way back to the repair action.
+pub fn offer_recovery_now(data_dir: PathBuf) {
+    if !screenpipe_db::sqlite_quarantine_exists(data_dir.join("db.sqlite")) {
+        return;
+    }
+    send_recovery_offer();
+}
+
 /// Start the protected recovery requested from the `/notify` action. Returns
 /// immediately so the notification panel can close while work continues.
 pub fn start_quarantined_database_recovery(app: AppHandle) -> Result<(), String> {

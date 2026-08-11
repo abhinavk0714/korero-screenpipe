@@ -56,6 +56,10 @@ struct TrayMenuData {
     disable_timeline: bool,
     /// Both audio and vision are disabled in settings — nothing can record.
     all_capture_disabled: bool,
+    /// A durable SQLite quarantine marker is present, so launch skipped the
+    /// server and capture entirely (see main.rs `launch_db_quarantined`).
+    /// Recording cannot be retried until the database is repaired.
+    db_quarantined: bool,
 }
 
 /// Gather all data needed by `create_dynamic_menu` on the current (non-main)
@@ -123,6 +127,14 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
 
     let app_ui_hidden = is_app_ui_hidden();
 
+    // Cheap stat of the marker file, off the main thread like every other read
+    // here. Resolved through the same settings-aware data dir main.rs uses, so
+    // a custom `dataDir` can't make the tray disagree with the boot gate.
+    let db_quarantined = crate::log_files::get_data_dir(app)
+        .map(|dir| screenpipe_db::sqlite_quarantine_exists(dir.join("db.sqlite")))
+        .unwrap_or(false);
+    DB_QUARANTINED.store(db_quarantined, Ordering::Release);
+
     let has_permission_issue = if onboarding_completed || app_ui_hidden {
         #[cfg(target_os = "macos")]
         {
@@ -148,6 +160,7 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
         app_ui_hidden,
         disable_timeline,
         all_capture_disabled,
+        db_quarantined,
     }
 }
 
@@ -407,6 +420,16 @@ static PENDING_TRAY_MENU: Lazy<Mutex<Option<(MenuState, TrayMenuData)>>> =
 #[cfg(target_os = "macos")]
 static TRAY_MENU_DIRTY: AtomicBool = AtomicBool::new(false);
 
+/// Last quarantine state observed by `prefetch_tray_menu_data`, so menu and
+/// shortcut handlers can gate on it without repeating the store read on the
+/// main thread. Stale by at most one refresh tick, and every destructive
+/// consumer re-checks the marker itself before acting.
+static DB_QUARANTINED: AtomicBool = AtomicBool::new(false);
+
+fn db_quarantined() -> bool {
+    DB_QUARANTINED.load(Ordering::Acquire)
+}
+
 fn install_tray_menu(tray: &TrayIcon, menu: tauri::menu::Menu<Wry>) -> Result<()> {
     // `ACTIVE_TRAY_MENU` is our record of what Windows/macOS actually owns.
     // Only publish the replacement after the native tray accepted it. If
@@ -511,6 +534,7 @@ fn snapshot_menu_state(data: &TrayMenuData, effective_status: RecordingStatus) -
         subscription_plan: data.subscription_plan.clone(),
         hd: hd_menu_state(&hd),
         all_capture_disabled: data.all_capture_disabled,
+        db_quarantined: data.db_quarantined,
     }
 }
 
@@ -667,6 +691,9 @@ struct MenuState {
     hd: HdMenuState,
     /// Both audio and vision disabled in settings.
     all_capture_disabled: bool,
+    /// Durable SQLite quarantine. Part of the equality key so the menu swaps
+    /// between the retry and repair shapes the moment recovery clears it.
+    db_quarantined: bool,
 }
 
 pub fn setup_tray(app: &AppHandle, update_item: Option<&tauri::menu::MenuItem<Wry>>) -> Result<()> {
@@ -850,7 +877,14 @@ fn recording_status_text(
     status: RecordingStatus,
     all_capture_disabled: bool,
     audio_capture_status: Option<AudioCaptureStatus>,
+    db_quarantined: bool,
 ) -> &'static str {
+    // A quarantined database is not a generic error: capture is stopped on
+    // purpose to protect the data, and only repair clears it. Say that instead
+    // of "Error", which reads as "something crashed, try again".
+    if db_quarantined && status == RecordingStatus::Error {
+        return "○ Paused — database repair needed";
+    }
     match (status, all_capture_disabled, audio_capture_status) {
         (RecordingStatus::Recording, true, _) => "○ Stopped",
         (RecordingStatus::Recording, false, Some(AudioCaptureStatus::WaitingForMeeting)) => {
@@ -944,6 +978,7 @@ fn create_dynamic_menu(
         effective_status,
         all_capture_disabled,
         info.audio_capture_status,
+        data.db_quarantined,
     );
     menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
 
@@ -1120,6 +1155,21 @@ fn create_dynamic_menu(
     );
 
     // --- Recording controls ---
+    // Quarantine short-circuit. Launch skipped the server and capture, so
+    // "click to retry" can only bounce through optimistic "Starting…" and back
+    // to Error forever — and HD is equally dead. Offer the one action that
+    // actually clears the state instead of a loop that cannot. Deliberately
+    // outside the `tray_recording_controls` gate: like "Fix permissions", this
+    // is error recovery, and hiding the routine controls must not strand the
+    // user with no way out.
+    if data.db_quarantined {
+        menu_builder = menu_builder
+            .item(&PredefinedMenuItem::separator(app)?)
+            .item(&MenuItemBuilder::with_id("recover_database", "⚠ Repair database…").build(app)?);
+        *HD_STOP_MENU_ITEM.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        return finish_menu(app, menu_builder, data);
+    }
+
     if !is_tray_item_hidden("tray_recording_controls") {
         menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
 
@@ -1196,7 +1246,16 @@ fn create_dynamic_menu(
     //             .build(app)?,
     //     );
 
-    // --- Settings + Quit ---
+    finish_menu(app, menu_builder, data)
+}
+
+/// Settings + Quit tail, shared by the normal build and the quarantine
+/// short-circuit so an early return can never drop Quit off the menu.
+fn finish_menu<'a>(
+    app: &'a AppHandle,
+    mut menu_builder: MenuBuilder<'a, Wry, AppHandle>,
+    data: &TrayMenuData,
+) -> Result<tauri::menu::Menu<Wry>> {
     menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_settings") {
         menu_builder = menu_builder.item(
@@ -1330,7 +1389,40 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                 let _ = app.emit("tray-show-chat", ());
             });
         }
+        "recover_database" => {
+            let app = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::headless::wake_from_tray(&app);
+                if let Err(e) =
+                    crate::db_recovery_notifications::start_quarantined_database_recovery(
+                        app.clone(),
+                    )
+                {
+                    warn!("tray: database recovery could not start: {e}");
+                }
+                // Recovery clears the marker on success; rebuild so the menu
+                // returns to normal recording controls without waiting a tick.
+                let app2 = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    if let Err(e) = force_tray_rebuild(&app2) {
+                        error!("tray rebuild failed: {}", e);
+                    }
+                });
+            });
+        }
         "start_recording" | "stop_recording" | "toggle_recording" => {
+            // A quarantined database means capture was never started and can't
+            // be: the retry would only flip to optimistic "Starting…" and snap
+            // back to Error. Route to repair, the action that clears it.
+            if db_quarantined() {
+                let app = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let dir = crate::log_files::get_data_dir(&app)
+                        .unwrap_or_else(|_| screenpipe_core::paths::default_screenpipe_data_dir());
+                    crate::db_recovery_notifications::offer_recovery_now(dir);
+                });
+                return;
+            }
             // Manual toggle cancels any pending auto-resume — otherwise a user
             // who paused for 30 min and then resumed early would get re-paused
             // when the original timer fires.
@@ -1967,6 +2059,7 @@ mod tests {
                 RecordingStatus::Recording,
                 false,
                 Some(AudioCaptureStatus::WaitingForMeeting),
+                false,
             ),
             "● Screen recording · audio waiting for meeting"
         );
@@ -1975,11 +2068,52 @@ mod tests {
                 RecordingStatus::Recording,
                 false,
                 Some(AudioCaptureStatus::MeetingDetectorUnavailable),
+                false,
             ),
             "● Screen recording · meeting detection unavailable"
         );
         assert_eq!(
-            recording_status_text(RecordingStatus::Recording, false, None),
+            recording_status_text(RecordingStatus::Recording, false, None, false),
+            "● Recording"
+        );
+    }
+
+    /// Quarantine is part of the rebuild key: the menu swaps between the retry
+    /// and repair shapes, so a state change has to force a rebuild. Without
+    /// this the repair item would linger after recovery cleared the marker,
+    /// leaving no way back to normal recording controls until some unrelated
+    /// state happened to change.
+    #[test]
+    fn quarantine_change_forces_a_menu_rebuild() {
+        let healthy = MenuState::default();
+        let quarantined = MenuState {
+            db_quarantined: true,
+            ..MenuState::default()
+        };
+        assert!(
+            healthy != quarantined,
+            "quarantine must be part of the rebuild key"
+        );
+    }
+
+    /// A durable SQLite quarantine stops capture on purpose and only repair
+    /// clears it, so the header must name the repair instead of reporting a
+    /// generic "Error" the user is invited to retry.
+    #[test]
+    fn quarantined_database_status_names_the_repair() {
+        assert_eq!(
+            recording_status_text(RecordingStatus::Error, false, None, true),
+            "○ Paused — database repair needed"
+        );
+        // Without a quarantine an error is still a plain error.
+        assert_eq!(
+            recording_status_text(RecordingStatus::Error, false, None, false),
+            "○ Error"
+        );
+        // The quarantine override is scoped to the error state: a healthy
+        // status must never be relabelled by a stale marker read.
+        assert_eq!(
+            recording_status_text(RecordingStatus::Recording, false, None, true),
             "● Recording"
         );
     }
