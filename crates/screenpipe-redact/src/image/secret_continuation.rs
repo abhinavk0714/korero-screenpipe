@@ -50,13 +50,25 @@
 //! ## Known limitation: this walks DOWNWARD only
 //!
 //! If the detector fires on a *later* line of a wrapped token, the lines above
-//! it are still left visible. Measured on a real captured frame: a wrapped
-//! OAuth URL was detected on its third line, so the extension covered that line
-//! and below, while `&state=<token>` on the line above stayed legible.
+//! it are left visible. Measured on a real captured frame: a wrapped OAuth URL
+//! was detected on its third line, and `&state=<token>` on the line above stays
+//! legible. On that frame the walk now declines entirely — with correct column
+//! bounds it finds no short tail below the seed either, so guard A refuses on
+//! ambiguous evidence rather than covering part of it.
 //!
-//! This is an improvement, not a fix, for that shape — coverage on that frame
-//! went from 1 line to 2 — and the honest summary is "the leak is smaller",
-//! not "the leak is closed".
+//! That is the intended behaviour, but it means the leak on a mid-token seed is
+//! **not** reduced at all, and the honest summary is "unfixed for that shape".
+//!
+//! An upward walk was designed and adversarially attacked, and the
+//! recommendation was to ship none of it. Three candidate head rules each
+//! changed only a handful of real frames — all the same OAuth consent URL,
+//! whose visible parameters are public (`client_id`, scope URLs, a single-use
+//! CSRF nonce, a PKCE *challenge* whose matching verifier is never on screen) —
+//! while blacking the user's own prose or source when the detector was wrong.
+//! One candidate was worse than that: its upward growth consumed the frame
+//! budget and pushed the *real JWT's* downward walk into `FrameBudget`, turning
+//! 143,830 blacked pixels back into 11,179. A leak fix that un-redacts a live
+//! credential is not a fix.
 //!
 //! Extending upward is not symmetric and must not be bolted on without the
 //! same adversarial testing the downward walk got. The signal that makes the
@@ -324,6 +336,39 @@ impl InkMap {
         bx // no clean edge inside the cap — refuse to guess, keep the seed's
     }
 
+    /// Right boundary of the text column the seed sits in.
+    ///
+    /// Mirror of [`Self::wrap_column`]. Measuring the right extent out to the
+    /// frame edge instead was a real over-redaction bug: on a frame with a
+    /// second pane beside the terminal, `seed_right` and the running `widest`
+    /// picked up ink from that pane and the committed box ran ~400 px into the
+    /// user's chat window. The token's own column ends at a run of background
+    /// columns; stop there.
+    fn column_right(&self, from: u32, _bw: u32, y0: u32, y1: u32) -> u32 {
+        // Scan to the frame edge and let the gap find the boundary, rather than
+        // capping by box width. A seed that starts mid-line (a token after
+        // `&state=`) sits in a column far wider than the box, so a width-scaled
+        // cap stops short of the real edge and the tail test then never fires.
+        // Panes and columns are separated by background, which is exactly what
+        // the gap detects; the area caps still bound the damage if no gap
+        // exists at all.
+        let limit = self.w;
+        let mut gap = 0;
+        let mut x = from;
+        while x < limit {
+            if (y0..y1.min(self.h)).any(|y| self.at(x, y)) {
+                gap = 0;
+            } else {
+                gap += 1;
+                if gap >= MIN_GAP_COLS {
+                    return x - gap + 1; // last inked column, +1 for exclusive
+                }
+            }
+            x += 1;
+        }
+        limit
+    }
+
     fn at(&self, x: u32, y: u32) -> bool {
         x < self.w && y < self.h && self.ink[(y as usize) * (self.w as usize) + x as usize]
     }
@@ -357,7 +402,11 @@ fn walk_down(
     let x1 = bx.saturating_add(bw);
     let right_tol = RIGHT_TOL_MIN.max((RIGHT_TOL_FRAC * bh as f32) as u32);
 
-    let (_, seed_right) = ink.row_extent(by + bh / 2, x0, ink.w);
+    // Bound the measurement to the seed's own text column. Measuring to the
+    // frame edge pulled in ink from a neighbouring pane and pushed the
+    // committed box ~400 px into the user's chat window on a real frame.
+    let col_right = ink.column_right(x1, bw, by, by + bh);
+    let (_, seed_right) = ink.row_extent(by + bh / 2, x0, col_right);
     let seed_right = match seed_right {
         Some(r) => r,
         None => return (None, StopReason::PatternBreak),
@@ -392,7 +441,7 @@ fn walk_down(
         let mut band_ink = 0;
         let mut band_right = 0u32;
         for y in ry0..ry1 {
-            let (c, r) = ink.row_extent(y, x0, ink.w);
+            let (c, r) = ink.row_extent(y, x0, col_right);
             band_ink += c;
             if let Some(r) = r {
                 band_right = band_right.max(r);
@@ -423,7 +472,7 @@ fn walk_down(
         if band_right + right_tol < seed_right {
             // Continuations start at the wrap column, left of where the token
             // began on its first line. Measured over the absorbed rows only.
-            let left = ink.wrap_column(bx, bw, by + bh, bottom);
+            let left = ink.wrap_column(bx, bw, by, bottom);
             let right = widest.min(ink.w);
             return (
                 Some(ImageRegion {
