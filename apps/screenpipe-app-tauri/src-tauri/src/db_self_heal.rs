@@ -17,11 +17,13 @@
 //! recording stayed off — hours, in the 2026-08-11 case, because nothing resumes
 //! until a human notices the tray and runs a repair.
 //!
-//! So: verify instead of assume. If the marker is from the I/O-error family and
-//! the installed generation passes a read-only health check, resolve the
-//! quarantine and start recording. Corruption (`SQLITE_CORRUPT`, `SQLITE_NOTADB`)
-//! and a full disk (`SQLITE_FULL`) are not self-healable and keep the existing
-//! fail-closed path — those need a verified replacement generation.
+//! So: verify instead of assume, but only for the exact failure supported by
+//! that evidence. If the marker records `SQLITE_IOERR_SHORT_READ` (522) and the
+//! installed generation passes a read-only health check, resolve the quarantine
+//! and start recording. Missing/generic result codes, other IOERR variants,
+//! corruption (`SQLITE_CORRUPT`, `SQLITE_NOTADB`), and a full disk
+//! (`SQLITE_FULL`) keep the existing fail-closed path and require a verified
+//! replacement generation.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -42,8 +44,9 @@ pub enum SelfHealSkip {
     /// semaphore, and it cannot be reopened, so clearing the marker would
     /// leave every writer blocked with no visible reason.
     AlreadyLatchedThisProcess,
-    /// Corrupt, not-a-database, or disk-full. Bytes on disk are wrong, or the
-    /// condition would immediately refault. Needs a verified replacement.
+    /// Anything other than exact IOERR_SHORT_READ (522). The result is missing
+    /// or does not carry the same no-byte-damage evidence, so it needs the
+    /// verified-replacement path.
     NotSelfHealable { code: i32 },
     /// The marker exists but could not be parsed. Fail closed: damaged recovery
     /// metadata is not permission to reopen SQLite.
@@ -104,8 +107,9 @@ pub async fn try_resolve_quarantine(database_path: &Path) -> Result<(), SelfHeal
         }
     };
 
-    // A marker with no recorded code is treated as the conservative IOERR class
-    // elsewhere in the coordinator; mirror that so behaviour cannot diverge.
+    // A marker with no recorded code is represented by generic IOERR elsewhere
+    // in the coordinator. Generic IOERR is deliberately not self-healable: only
+    // exact IOERR_SHORT_READ (522) has the required incident evidence.
     let code = marker.sqlite_code.unwrap_or(10);
     if !screenpipe_db::sqlite_quarantine_is_self_healable(code) {
         info!(
@@ -197,7 +201,7 @@ pub async fn try_self_heal_at_launch(app: AppHandle, database_path: PathBuf) -> 
 
     client::send_typed_with_priority(
         "recording resumed",
-        "screenpipe hit a temporary database error, checked your data, and found it intact. nothing was rebuilt and no recordings were lost.",
+        "screenpipe hit a temporary database error. your existing database passed a health check, so recording resumed without a rebuild.",
         "db_recovery",
         Some(10_000),
         NotificationPriority::Normal,
@@ -244,6 +248,37 @@ mod tests {
                 seen.insert(reason.as_str()),
                 "duplicate log token for {reason:?}"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn launch_path_refuses_every_unproven_io_error_code() {
+        // None; generic IOERR; READ, WRITE, FSYNC, TRUNCATE, DATA, and
+        // CORRUPTFS extended IOERRs; then CORRUPT, FULL, and NOTADB.
+        for (recorded, expected) in [
+            (None, 10),
+            (Some(10), 10),
+            (Some(266), 266),
+            (Some(778), 778),
+            (Some(1034), 1034),
+            (Some(1546), 1546),
+            (Some(8202), 8202),
+            (Some(8458), 8458),
+            (Some(11), 11),
+            (Some(13), 13),
+            (Some(26), 26),
+        ] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let db = dir.path().join("db.sqlite");
+            std::fs::write(&db, b"unchanged generation").expect("write db");
+            screenpipe_db::persist_sqlite_quarantine(&db, recorded, "disk I/O error")
+                .expect("persist quarantine");
+
+            assert_eq!(
+                try_resolve_quarantine(&db).await,
+                Err(SelfHealSkip::NotSelfHealable { code: expected })
+            );
+            assert!(screenpipe_db::sqlite_quarantine_exists(&db));
         }
     }
 }

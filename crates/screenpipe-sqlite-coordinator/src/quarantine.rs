@@ -414,21 +414,22 @@ pub fn archive_resolved_sqlite_quarantine(
     Ok(Some(archive_path.to_path_buf()))
 }
 
-/// True for hard faults that damage no bytes on disk.
+/// True only for the hard fault proven not to damage bytes on disk.
 ///
-/// `SQLITE_IOERR` (primary 10) covers the transient I/O family, of which
-/// `SQLITE_IOERR_SHORT_READ` (522) is the one screenpipe actually hits under
-/// heavy concurrent load: the WAL index desyncs in memory, SQLite reports a
-/// short read, and every pool is torn down. Forensics on three separate
-/// incidents found the file itself intact each time — `PRAGMA quick_check`
-/// returned `ok`, and the cure was a fresh process, not a rebuilt database.
+/// `SQLITE_IOERR_SHORT_READ` (522) is the exact extended result code
+/// screenpipe has hit under heavy concurrent load: the WAL index desyncs in
+/// memory, SQLite reports a short read, and every pool is torn down. Forensics
+/// on three separate incidents found the file itself intact each time —
+/// `PRAGMA quick_check` returned `ok`, and the cure was a fresh process, not a
+/// rebuilt database.
 ///
-/// `SQLITE_CORRUPT` (11) and `SQLITE_NOTADB` (26) mean the opposite: bytes on
-/// disk are wrong, and no amount of reopening fixes them. `SQLITE_FULL` (13)
-/// is excluded because reopening a database on a full disk just refaults.
-/// Those three stay fail-closed until a verified replacement is installed.
+/// The generic `SQLITE_IOERR` primary code and every other extended IOERR
+/// variant remain fail-closed: WRITE, FSYNC, and TRUNCATE can describe failed
+/// persistence rather than a transient in-memory index. Missing result codes,
+/// `SQLITE_CORRUPT` (11), `SQLITE_FULL` (13), and `SQLITE_NOTADB` (26) also
+/// require the existing verified-replacement recovery path.
 pub fn sqlite_quarantine_is_self_healable(code: i32) -> bool {
-    code & 0xff == 10
+    code == libsqlite3_sys::SQLITE_IOERR_SHORT_READ
 }
 
 /// Resolve a quarantine on the *same* physical generation, after the caller
@@ -530,18 +531,19 @@ mod tests {
         assert!(sqlite_quarantine_exists(&db));
     }
 
-    /// Only the I/O-error family self-heals. Corruption and not-a-database
-    /// mean the bytes are wrong, and a full disk would refault on reopen;
-    /// all three must keep demanding a verified replacement generation.
+    /// Only the observed SHORT_READ result self-heals. Generic IOERR and other
+    /// extended IOERR variants can represent failed persistence and must stay
+    /// fail-closed alongside corruption, disk-full, and not-a-database.
     #[test]
-    fn only_the_io_error_family_is_self_healable() {
-        for code in [10, 522, 266, 1546] {
-            assert!(
-                sqlite_quarantine_is_self_healable(code),
-                "{code} is an IOERR-class fault"
-            );
-        }
-        for code in [11, 26, 13, 267, 779] {
+    fn only_short_read_is_self_healable() {
+        assert!(sqlite_quarantine_is_self_healable(
+            libsqlite3_sys::SQLITE_IOERR_SHORT_READ
+        ));
+
+        // SQLITE_IOERR, IOERR_READ, IOERR_WRITE, IOERR_FSYNC, and
+        // IOERR_TRUNCATE respectively, followed by the other hard-fault
+        // primary/extended codes handled by the quarantine gate.
+        for code in [10, 266, 778, 1034, 1546, 8202, 8458, 11, 13, 26, 267, 779] {
             assert!(
                 !sqlite_quarantine_is_self_healable(code),
                 "{code} must not self-heal"
@@ -585,6 +587,22 @@ mod tests {
             sqlite_quarantine_exists(&db),
             "the marker must survive a refused resolution"
         );
+    }
+
+    /// Legacy or reserve markers can lack an extended SQLite result. Absence
+    /// is not evidence of SHORT_READ, so even a healthy unchanged generation
+    /// must remain quarantined.
+    #[test]
+    fn verified_resolution_refuses_a_missing_result_code() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join("db.sqlite");
+        fs::write(&db, b"healthy generation").expect("write db");
+        persist_sqlite_quarantine(&db, None, "unknown hard fault").expect("persist");
+
+        let archive = dir.path().join("archived.json");
+        resolve_verified_sqlite_quarantine(&db, &archive)
+            .expect_err("a marker without exact SHORT_READ evidence must not self-resolve");
+        assert!(sqlite_quarantine_exists(&db));
     }
 
     /// A generation swapped underneath us was never the thing that got

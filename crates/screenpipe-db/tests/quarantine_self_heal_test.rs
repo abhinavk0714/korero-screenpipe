@@ -12,11 +12,10 @@
 //! that was never damaged while recording stayed off in the meantime.
 //!
 //! The contract these tests pin down:
-//!  * a healthy generation under an IOERR marker verifies and self-resolves,
+//!  * a healthy generation under an exact SHORT_READ marker self-resolves,
 //!  * a genuinely corrupt generation fails the probe and stays quarantined,
-//!  * the probe never perturbs the generation it is judging (it is the same
-//!    WAL pair whose index desynced; a checkpoint or truncate here would be
-//!    the app writing to a database it has not yet trusted).
+//!  * the probe preserves the durable database and WAL bytes it is judging;
+//!    SQLite may rebuild the disposable `-shm` WAL index.
 
 use screenpipe_db::{
     persist_sqlite_quarantine, probe_quarantined_generation_health,
@@ -24,11 +23,11 @@ use screenpipe_db::{
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use sqlx::{ConnectOptions, Connection, Executor};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Build a small WAL-mode database with real content, then leave the WAL pair
 /// on disk exactly as a running engine would.
-async fn seed_wal_database(path: &Path) {
+async fn seed_open_wal_database(path: &Path) -> SqliteConnection {
     let options = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
@@ -41,6 +40,10 @@ async fn seed_wal_database(path: &Path) {
         .await
         .expect("enable WAL");
     connection
+        .execute("PRAGMA wal_autocheckpoint=0;")
+        .await
+        .expect("keep WAL content available for the probe");
+    connection
         .execute("CREATE TABLE frames (id INTEGER PRIMARY KEY, text TEXT NOT NULL);")
         .await
         .expect("create table");
@@ -51,7 +54,21 @@ async fn seed_wal_database(path: &Path) {
             .await
             .expect("insert row");
     }
+    connection
+}
+
+async fn seed_wal_database(path: &Path) {
+    let connection = seed_open_wal_database(path).await;
     connection.close().await.expect("close seed database");
+}
+
+fn sqlite_sidecar(database_path: &Path, suffix: &str) -> PathBuf {
+    let mut name = database_path
+        .file_name()
+        .expect("database path must have a filename")
+        .to_os_string();
+    name.push(suffix);
+    database_path.with_file_name(name)
 }
 
 #[tokio::test]
@@ -126,24 +143,40 @@ async fn corrupt_generation_fails_the_probe_and_stays_quarantined() {
 async fn probing_does_not_perturb_the_generation_it_judges() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db = dir.path().join("db.sqlite");
-    seed_wal_database(&db).await;
+    let seed_connection = seed_open_wal_database(&db).await;
     persist_sqlite_quarantine(&db, Some(522), "disk I/O error").expect("quarantine");
 
-    let before = std::fs::read(&db).expect("read before probe");
+    let wal = sqlite_sidecar(&db, "-wal");
+    assert!(wal.exists(), "test must exercise a real WAL sidecar");
+    let db_before = std::fs::read(&db).expect("read database before probe");
+    let wal_before = std::fs::read(&wal).expect("read WAL before probe");
     let identity_before = sqlite_file_identity(&db).expect("identity before");
 
     probe_quarantined_generation_health(&db)
         .await
         .expect("probe healthy generation");
 
-    let after = std::fs::read(&db).expect("read after probe");
+    let db_after = std::fs::read(&db).expect("read database after probe");
+    let wal_after = std::fs::read(&wal).expect("read WAL after probe");
     assert_eq!(
-        before, after,
-        "the probe must be read-only: no checkpoint, no truncate, no header rewrite"
+        db_before, db_after,
+        "the probe must not rewrite the main database"
+    );
+    assert_eq!(
+        wal_before, wal_after,
+        "the probe must not checkpoint, truncate, or append to the WAL"
     );
     assert_eq!(
         sqlite_file_identity(&db).expect("identity after"),
         identity_before,
         "the probe must not replace the generation under evaluation"
     );
+
+    // SQLite may update the disposable -shm WAL index while opening a second
+    // connection; the durable main database and WAL bytes are the safety
+    // boundary this probe promises not to perturb.
+    seed_connection
+        .close()
+        .await
+        .expect("close seed connection");
 }

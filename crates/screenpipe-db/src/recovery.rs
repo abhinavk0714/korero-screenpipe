@@ -32,9 +32,9 @@ pub struct QuarantineHealthProbe {
 /// Distinct from [`verify_fresh_sqlite_recovery_candidate`], which vets a
 /// freshly rebuilt file before installation and may write to it. This one runs
 /// against the database the app refused to open, so it must not perturb that
-/// generation at all: the connection is strictly read-only, which keeps SQLite
-/// from checkpointing, truncating, or otherwise rewriting the WAL pair whose
-/// in-memory index desynced in the first place.
+/// durable database or WAL bytes: the connection is strictly read-only, which
+/// keeps SQLite from checkpointing, truncating, or appending to them. SQLite
+/// may rebuild the disposable `-shm` WAL index while opening the connection.
 ///
 /// `quick_check` — not `integrity_check` — because this runs at launch on a
 /// database that can be tens of gigabytes, and it is the same bar
