@@ -343,6 +343,7 @@ pub async fn restart_for_update(
     // Durable "we are about to apply vX" marker: the next boot compares it
     // with the running version, so a swap that silently failed to apply is
     // detected instead of the app just quietly staying old.
+    #[cfg(target_os = "macos")]
     if let Some(to_version) = crate::staged_update::staged_version() {
         record_update_attempt(&app, &to_version);
     }
