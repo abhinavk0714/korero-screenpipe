@@ -1609,6 +1609,29 @@
       "notes": "Opt-in no-onboarding seed verifies onboarding redirect."
     },
     {
+      "spec": "onboarding-trust-affordances.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "onboarding",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "onboarding",
+        "settings-privacy-api-auth",
+        "storage-retention"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "tests": 6,
+      "notes": "Pre-grant reassurance in setup: the login slide carries both the storage-locality line and the pause affordance (the only slide every platform sees, since permissions auto-advances on non-mac), the mac permissions slide renders the data dir the running app actually resolved rather than a hardcoded ~/.screenpipe and wires its open action to the real reveal_in_default_browser command with that path, and the timeline slide states the capture bounds (incognito skipped, per-app exclusions) where the capture decision is made."
+    },
+    {
       "spec": "screen-recording-restart.spec.ts",
       "platforms": [
         "macos"

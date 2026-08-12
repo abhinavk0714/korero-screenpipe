@@ -10,6 +10,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import posthog from "posthog-js";
 import { isDevBillingBypassEnabled } from "@/lib/app-entitlement";
 import { ArrowRight } from "lucide-react";
+import CaptureControlNote from "./capture-control-note";
 
 const FAILURE_COPY: Record<string, string> = {
   cancelled: "sign in was cancelled in your browser.",
@@ -492,6 +493,19 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
             >
               your recordings are stored on this computer
             </motion.p>
+
+            {/* The off switch, shown before the first ask. Same reach argument
+                as the locality line above: permissions is mac-only, so this is
+                the only place a Windows or Linux user learns recording is
+                pausable before granting anything. */}
+            <motion.div
+              className="mt-1"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.5, delay: 1.3 }}
+            >
+              <CaptureControlNote className="opacity-60" />
+            </motion.div>
           </>
         )}
 

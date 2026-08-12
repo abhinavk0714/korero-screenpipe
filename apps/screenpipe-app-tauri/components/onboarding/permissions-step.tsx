@@ -9,6 +9,8 @@ import { Monitor, Mic, Keyboard, Check, RefreshCw } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "@/lib/utils/tauri";
 import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
+import DataDirChip from "./data-dir-chip";
+import CaptureControlNote from "./capture-control-note";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { motion } from "framer-motion";
 import posthog from "posthog-js";
@@ -389,20 +391,24 @@ export default function PermissionsStep({
         <h1 className="font-mono text-base font-bold text-foreground">
           Unlock the full experience
         </h1>
-        {/* The locality claim is deliberately scoped to STORAGE, not
-            transmission. Paid users are auto-switched to cloud transcription
-            (use-settings.tsx applyProCloudAudioDefaults), so "nothing ever
-            leaves" / "we never store your data" would be false for exactly
-            the users we ask to pay. "Stored on this computer" is true in every
-            configuration: frames, audio files and the index are local even
-            when a transcript round-trips through a provider. Device-neutral
-            wording on purpose so it matches the login-gate line, which is the
-            copy Windows and Linux users see (this step is mac-only). */}
         <p className="font-mono text-[10px] text-muted-foreground mt-1 text-center max-w-xs">
-          Three permissions turn on recording. Your recordings are stored on
-          this computer.
+          Three permissions turn on recording.
         </p>
       </div>
+
+      {/* The locality promise, as evidence rather than prose. The old copy
+          asserted "your recordings are stored on this computer"; the chip
+          names the real directory and opens it, which a user can check.
+          The scoping rationale (storage, never transmission) lives in
+          data-dir-chip.tsx. The prose claim still ships on the login gate,
+          which is the only slide every platform sees — this step auto-advances
+          on non-mac, so the chip alone would leave Windows and Linux told
+          nothing. */}
+      {!screenRestartRequired && (
+        <div className="w-full flex justify-center mb-4">
+          <DataDirChip surface="permissions" />
+        </div>
+      )}
 
       {screenRestartRequired ? (
         <div
@@ -430,7 +436,10 @@ export default function PermissionsStep({
         <>
           {/* Permission wheel — rows recede the further they are from the
               focused step; only the focused row is interactive */}
-          <div className="space-y-2 w-full max-w-sm">
+          <div
+            data-testid="permission-wheel"
+            className="space-y-2 w-full max-w-sm"
+          >
             {activePermissions.map((perm, i) => (
               <PermissionRow
                 key={perm.id}
@@ -444,6 +453,8 @@ export default function PermissionsStep({
               />
             ))}
           </div>
+
+          <CaptureControlNote className="mt-4 pt-3 border-t border-border/40 w-full max-w-sm" />
 
           {/* Skip link */}
           {showSkip && !allRequiredGranted && (
