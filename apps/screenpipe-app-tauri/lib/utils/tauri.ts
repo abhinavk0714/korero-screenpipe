@@ -3696,6 +3696,14 @@ listenOnLan?: boolean }) &
  */
 ({ [key in string]: null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue } }) & { aiPresets: AIPreset[]; isLoading: boolean; devMode: boolean; ocrEngine: string; dataDir: string; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; lockVaultShortcut?: string;
 /**
+ * Unix timestamp until which the user asked to hide the shortcut overlay.
+ */
+shortcutOverlaySnoozedUntil?: number | null;
+/**
+ * Version marker for the bounded re-show of the smaller overlay design.
+ */
+shortcutOverlayMinimalReshowVersion?: number;
+/**
  * Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
  */
 shortcutOverlaySize?: string;
