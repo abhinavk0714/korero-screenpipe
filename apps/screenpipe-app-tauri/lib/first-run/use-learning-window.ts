@@ -16,13 +16,14 @@ import {
   canResolveYet,
   capturedAppsFrom,
   claimLearningSeed,
+  classifyEmptyReason,
   hasEnoughEvidence,
+  learningWindowOpening,
   learningWindowRemainingMs,
   markLearningDone,
   markLearningEmpty,
   markLearningReady,
   releaseLearningSeed,
-  normalizeEmptyReason,
   readLearningWindow,
   type FirstRunCapturedApp,
   type FirstRunLearningState,
@@ -31,6 +32,7 @@ import { fetchRecentActivity } from "@/lib/first-run/recent-activity";
 import {
   fetchFirstRunMedia,
   mediaMarkdown,
+  preserveFirstRunMedia,
 } from "@/lib/first-run/recent-media";
 import { seedFirstRunSummaryChat } from "@/lib/first-run/seed-summary-chat";
 import { summarizeFirstRunWithAi } from "@/lib/first-run/summarize-with-ai";
@@ -82,15 +84,14 @@ export function useLearningWindow(
       try {
         const result = await commands.getOnboardingStatus();
         if (cancelled || result.status !== "ok") return;
-        const completedAt = result.data.completedAt;
-        if (!completedAt) return;
-        const elapsed = Date.now() - Date.parse(completedAt);
-        // Only a setup that just finished opens a window. Anything older is a
-        // returning user, who must never see a first-run banner.
-        if (!Number.isFinite(elapsed) || elapsed < 0) return;
-        if (elapsed > LEARNING_WINDOW_CEILING_MS) return;
+        const opening = learningWindowOpening(result.data.completedAt);
+        if (opening.kind === "none") return;
         if (readLearningWindow().phase !== "idle") return;
-        setState(beginLearningWindow(completedAt));
+        // The only signal that a window ever opened. Without it an absent
+        // outcome is indistinguishable from a window that never started, and
+        // "never started" was by far the most common outcome.
+        posthog.capture("first_run_learning_started", { opening: opening.kind });
+        setState(beginLearningWindow(opening.anchor));
       } catch {
         // Without a status read there is no window; the app is unaffected.
       }
@@ -171,7 +172,12 @@ export function useLearningWindow(
       // is the thing itself. Appended after whichever text won so a media
       // failure can never cost the user the summary — and skipped entirely
       // when screenshots are off, where frame rows exist but pixels do not.
-      const media = await fetchFirstRunMedia(startedAt);
+      // Preserved before embedding, never after: the capture path is live and
+      // snapshot compaction deletes stills once they are ten minutes old, so a
+      // summary that links capture directly loses its proof long before most
+      // users open it — silently, because a broken local image hides itself.
+      const found = await fetchFirstRunMedia(startedAt);
+      const media = found ? await preserveFirstRunMedia(found) : null;
       const summary = media
         ? `${written ?? fallback}\n\n${mediaMarkdown(media)}`
         : (written ?? fallback);
@@ -202,6 +208,12 @@ export function useLearningWindow(
         // first impression and the part most likely to be silently absent.
         has_media: Boolean(media),
         media_kind: media?.kind ?? "none",
+        // Whether the proof will still be there when the user opens the chat.
+        // `has_media` alone counted images that compaction was about to
+        // delete, so it read as success for a summary that arrived empty.
+        media_durable: media
+          ? media.kind === "video" || media.path !== found?.path
+          : false,
       });
       setState(markLearningReady(chatId));
     };
@@ -222,8 +234,14 @@ export function useLearningWindow(
     const settle = async () => {
       if (seedingRef.current) return;
       const activity = await fetchRecentActivity(startedAt);
-      const reason = normalizeEmptyReason(activity?.data_status);
-      posthog.capture("first_run_learning_empty", { reason });
+      const reason = classifyEmptyReason(activity);
+      posthog.capture("first_run_learning_empty", {
+        reason,
+        // The raw engine verdict alongside the derived one, so a future engine
+        // status cannot be silently folded into a local guess.
+        data_status: activity?.data_status ?? "none",
+        frame_count: Number(activity?.total_frames ?? 0),
+      });
       setState(markLearningEmpty(reason));
     };
 
