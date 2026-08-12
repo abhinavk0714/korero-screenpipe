@@ -921,7 +921,7 @@ struct MeetingTranscriptPreview: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: s(6)) {
+            HStack(spacing: s(5)) {
                 Circle()
                     .fill(Color.red)
                     .frame(width: s(7), height: s(7))
@@ -974,7 +974,7 @@ struct MeetingTranscriptPreview: View {
                             .fixedSize()
                     }
                     .foregroundColor(.white.opacity(0.82))
-                    .padding(.horizontal, s(8))
+                    .padding(.horizontal, s(7))
                     .frame(height: s(22))
                     .background(Color.white.opacity(0.06))
                     .overlay(Rectangle().stroke(Color.white.opacity(0.18), lineWidth: 1))
@@ -998,7 +998,7 @@ struct MeetingTranscriptPreview: View {
                             .fixedSize()
                     }
                     .foregroundColor(.white.opacity(0.82))
-                    .padding(.horizontal, s(8))
+                    .padding(.horizontal, s(7))
                     .frame(height: s(22))
                     .background(Color.white.opacity(0.06))
                     .overlay(Rectangle().stroke(Color.white.opacity(0.18), lineWidth: 1))
@@ -1008,7 +1008,7 @@ struct MeetingTranscriptPreview: View {
                 .disabled(metrics.meetingStopping)
                 .help("stop this meeting")
             }
-            .padding(.horizontal, s(12))
+            .padding(.horizontal, s(10))
             .frame(height: s(34))
 
             Rectangle().fill(Color.white.opacity(0.14)).frame(height: 1)
@@ -1953,14 +1953,23 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         let visible = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? panel.frame
         let width = transcriptPanel.frame.width
         let height = transcriptPanel.frame.height
-        let centeredX = panel.frame.midX - width / 2
+        // Anchor to the *visible* bar, not the window. The window stays at the
+        // expanded size while the resting chip is only 16pt of it, so anchoring
+        // to the window edge left a ~46pt hole between the chip and the card.
+        // This is the same rect the hover tracking uses, so the two stay in sync.
+        let anchor = overlayHoverRect(
+            in: panel.frame,
+            expanded: metrics.isHovering || metrics.forceExpanded,
+            disclosureDown: metrics.disclosureDown,
+            scale: gOverlayScale
+        )
+        let centeredX = anchor.midX - width / 2
         let x = min(max(centeredX, visible.minX + 4), visible.maxX - width - 4)
-        // Butt the card against the window instead of leaving a 4pt gap: dead
-        // space here is a gap in the hover corridor, and the pointer crossing it
-        // reads as leaving both surfaces.
+        // Butt the card against the bar: dead space here is a gap in the hover
+        // corridor, and the pointer crossing it reads as leaving both surfaces.
         let preferredY = metrics.disclosureDown
-            ? panel.frame.minY - height
-            : panel.frame.maxY
+            ? anchor.minY - height
+            : anchor.maxY
         let y = min(max(preferredY, visible.minY + 4), visible.maxY - height - 4)
         transcriptPanel.setFrameOrigin(NSPoint(x: x, y: y))
     }
