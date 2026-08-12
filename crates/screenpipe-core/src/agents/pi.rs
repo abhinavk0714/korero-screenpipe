@@ -902,29 +902,28 @@ impl PiExecutor {
         Ok(())
     }
 
-    /// Install or remove the screenpipe-permissions extension based on config.
-    /// Only installed when the pipe has data permission restrictions.
+    /// Install the screenpipe-permissions extension.
+    ///
+    /// Always installed. The extension carries the filesystem sandbox, which
+    /// applies to every pipe because `pipe_dir` is always set, so gating the
+    /// install on `has_any_restrictions()` used to leave the sandbox
+    /// uninstalled for any pipe that declared no API or schedule rules. The
+    /// permissions JSON was written for those pipes regardless, so they
+    /// advertised a sandbox that nothing enforced.
     pub fn ensure_permissions_extension(
         project_dir: &Path,
-        config: &crate::pipes::PipeConfig,
+        _config: &crate::pipes::PipeConfig,
     ) -> Result<()> {
-        use crate::pipes::permissions::PipePermissions;
-        let perms = PipePermissions::from_config(config);
         let ext_dir = project_dir.join(".pi").join("extensions");
         let ext_path = ext_dir.join("screenpipe-permissions.ts");
 
-        if perms.has_any_restrictions() {
-            std::fs::create_dir_all(&ext_dir)?;
-            let ext_content = include_str!("../../assets/extensions/screenpipe-permissions.ts");
-            std::fs::write(&ext_path, ext_content)?;
-            debug!(
-                "screenpipe-permissions extension installed at {:?}",
-                ext_path
-            );
-        } else if ext_path.exists() {
-            std::fs::remove_file(&ext_path)?;
-            info!("screenpipe-permissions extension removed (no restrictions configured)");
-        }
+        std::fs::create_dir_all(&ext_dir)?;
+        let ext_content = include_str!("../../assets/extensions/screenpipe-permissions.ts");
+        std::fs::write(&ext_path, ext_content)?;
+        debug!(
+            "screenpipe-permissions extension installed at {:?}",
+            ext_path
+        );
 
         Ok(())
     }

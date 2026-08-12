@@ -24,6 +24,8 @@ interface Permissions {
   days: number[] | null;
   pipe_token: string | null;
   pipe_dir: string | null;
+  write_roots: string[];
+  inferred_write_roots: string[];
 }
 
 const DEFAULT_ALLOWED_ENDPOINTS: string[] = [
@@ -68,6 +70,8 @@ try {
         : null,
       pipe_token: parsed.pipe_token || null,
       pipe_dir: parsed.pipe_dir || null,
+      write_roots: parsed.write_roots || [],
+      inferred_write_roots: parsed.inferred_write_roots || [],
     };
   }
 } catch {
@@ -256,14 +260,29 @@ function resolvePath(p: string, cwd: string): string {
   return path.normalize(p);
 }
 
-function isInsidePipeDir(targetPath: string, pipeDir: string): boolean {
+function isUnder(resolved: string, root: string): boolean {
   const path = require("path");
-  const resolved = resolvePath(targetPath, pipeDir);
-  const normalizedPipeDir = path.normalize(pipeDir);
+  const normalizedRoot = path.normalize(root);
   return (
-    resolved === normalizedPipeDir ||
-    resolved.startsWith(normalizedPipeDir + path.sep)
+    resolved === normalizedRoot || resolved.startsWith(normalizedRoot + path.sep)
   );
+}
+
+/// Every root this pipe may write to: its own folder, roots declared as
+/// `write_paths` in pipe.md, and roots inferred from pipe.md for pipes
+/// authored before `write_paths` existed.
+function writableRoots(): string[] {
+  if (!PERMS?.pipe_dir) return [];
+  return [
+    PERMS.pipe_dir,
+    ...(PERMS.write_roots || []),
+    ...(PERMS.inferred_write_roots || []),
+  ];
+}
+
+function isInsidePipeDir(targetPath: string, pipeDir: string): boolean {
+  const resolved = resolvePath(targetPath, pipeDir);
+  return writableRoots().some((root) => isUnder(resolved, root));
 }
 
 /// A shell token. `expandable` is true when the source text contained a
@@ -635,9 +654,13 @@ function inlineSnippets(tokens: Token[]): string[] {
 }
 
 function outsideMessage(target: string, pipeDir: string): string {
+  const extra = writableRoots().slice(1);
+  const allowed = extra.length
+    ? `${pipeDir} (also allowed: ${extra.join(", ")})`
+    : pipeDir;
   return (
     `Filesystem write blocked: "${target}" is outside the pipe directory. ` +
-    `Pipes can only write files within: ${pipeDir}`
+    `Pipes can only write files within: ${allowed}`
   );
 }
 
@@ -796,6 +819,12 @@ function buildPermissionRules(): string {
     rules.push(
       `You can ONLY write files inside your pipe directory: \`${PERMS.pipe_dir}\``
     );
+    const extraRoots = writableRoots().slice(1);
+    if (extraRoots.length > 0) {
+      rules.push(
+        `Also writable: ${extraRoots.map((r) => `\`${r}\``).join(", ")}`
+      );
+    }
     rules.push(
       "Writing, moving, copying, or deleting files outside this directory is BLOCKED."
     );

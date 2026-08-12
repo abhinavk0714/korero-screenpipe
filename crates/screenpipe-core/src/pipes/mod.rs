@@ -308,6 +308,19 @@ pub struct PipeConfig {
     )]
     pub permissions: PipePermissionsConfig,
 
+    /// Directories outside the pipe folder this pipe is allowed to write to.
+    /// The pipe folder itself is always writable and need not be listed.
+    ///
+    /// ```yaml
+    /// write_paths:
+    ///   - ~/Documents/Bitacoras
+    /// ```
+    ///
+    /// Anything not listed is blocked, so an agent cannot wander onto an
+    /// unrelated file. `~` is expanded at load time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub write_paths: Vec<String>,
+
     /// Execution timeout in seconds. Default: 300 (5 minutes).
     /// Set higher for long-running pipes (e.g. coding agents): `timeout: 2400`
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2241,6 +2254,68 @@ pub(crate) const DEFAULT_TIMEOUT_SECS: u64 = 600;
 /// rolling-minute rate-limit window. No-op when nothing is waiting.
 const SCHEDULED_RUN_SPACING_SECS: u64 = 5;
 
+/// Maximum inferred roots kept for one pipe. A pipe.md mentioning more paths
+/// than this is treated as too broad to infer from; the author declares them.
+const MAX_INFERRED_WRITE_ROOTS: usize = 8;
+
+/// Infer write roots from absolute and `~`-relative paths named in a pipe's
+/// own `pipe.md`. Directory-looking paths are kept as-is; a path with a file
+/// extension contributes its parent directory. Paths inside the pipe folder
+/// are skipped because that is already writable.
+///
+/// This is a compatibility shim for pipes authored before `write_paths`, not a
+/// security boundary: it widens the sandbox only to locations the pipe's own
+/// instructions already name.
+fn infer_write_roots(pipe_dir: &Path) -> Vec<String> {
+    let Ok(body) = std::fs::read_to_string(pipe_dir.join("pipe.md")) else {
+        return Vec::new();
+    };
+    let home = dirs::home_dir();
+    let pipe_dir_str = pipe_dir.to_string_lossy().to_string();
+    let mut out: Vec<String> = Vec::new();
+
+    for raw in body
+        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | ')' | '(' | ',' | ';'))
+    {
+        let token = raw.trim_end_matches(['.', ':', '>', ']', '}']);
+        let candidate = if let Some(rest) = token.strip_prefix("~/") {
+            match home.as_ref() {
+                Some(h) => h.join(rest).to_string_lossy().to_string(),
+                None => continue,
+            }
+        } else if token.starts_with('/') && token.len() > 1 {
+            token.to_string()
+        } else {
+            continue;
+        };
+
+        // A path that points at a file contributes its directory.
+        let path = Path::new(&candidate);
+        let dir = match path.extension() {
+            Some(_) => match path.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p.to_string_lossy().to_string(),
+                _ => continue,
+            },
+            None => candidate,
+        };
+
+        // Already writable, or too broad to be a useful root.
+        if dir == pipe_dir_str || dir.starts_with(&format!("{pipe_dir_str}/")) {
+            continue;
+        }
+        if dir.matches('/').count() < 2 {
+            continue;
+        }
+        if !out.contains(&dir) {
+            out.push(dir);
+        }
+        if out.len() >= MAX_INFERRED_WRITE_ROOTS {
+            break;
+        }
+    }
+    out
+}
+
 /// Set up permissions for a Pi pipe: install extension, filtered skills,
 /// write the permissions JSON file, and register the token with the server.
 /// Returns the generated token (if any) so the caller can clean it up later.
@@ -2273,6 +2348,22 @@ async fn setup_pipe_permissions(
 
     let mut perms = permissions::PipePermissions::from_config(config);
     perms.pipe_dir = Some(pipe_dir.to_string_lossy().to_string());
+
+    // Pipes written before `write_paths` existed name their output locations in
+    // their own instructions. Allow those so enabling the sandbox does not
+    // silently break them, and report each one so the author can promote it to
+    // an explicit `write_paths` entry. A location the instructions never
+    // mention stays blocked.
+    if perms.write_roots.is_empty() {
+        perms.inferred_write_roots = infer_write_roots(pipe_dir);
+        for root in &perms.inferred_write_roots {
+            info!(
+                "pipe '{}' writes outside its folder to {} (inferred from pipe.md). \
+                 Declare it under `write_paths` in pipe.md to make this explicit.",
+                config.name, root
+            );
+        }
+    }
 
     // Always write permissions JSON when filesystem sandbox is active.
     let force_write = perms.pipe_dir.is_some();
@@ -9594,6 +9685,7 @@ mod tests {
             provider: None,
             preset: vec!["default".to_string()],
             permissions: PipePermissionsConfig::default(),
+            write_paths: vec![],
             schedule_config: None,
             config: HashMap::new(),
             connections: vec![],
@@ -10318,6 +10410,7 @@ mod tests {
             provider: None,
             preset: vec!["default".to_string()],
             permissions: PipePermissionsConfig::default(),
+            write_paths: vec![],
             schedule_config: Some(cfg_every_30m),
             config: HashMap::new(),
             connections: vec![],
@@ -10477,6 +10570,7 @@ mod tests {
             provider: None,
             preset: vec![],
             permissions: PipePermissionsConfig::default(),
+            write_paths: vec![],
             schedule_config: None,
             config: HashMap::new(),
             connections: vec![],
@@ -10513,6 +10607,7 @@ mod tests {
             provider: None,
             preset: vec![],
             permissions: PipePermissionsConfig::default(),
+            write_paths: vec![],
             schedule_config: None,
             config: HashMap::new(),
             connections: vec![],
@@ -10541,6 +10636,7 @@ mod tests {
             provider: None,
             preset: vec![],
             permissions: PipePermissionsConfig::default(),
+            write_paths: vec![],
             schedule_config: None,
             config: HashMap::new(),
             connections: vec![],
@@ -10578,6 +10674,7 @@ mod tests {
             provider: None,
             preset: vec![],
             permissions: PipePermissionsConfig::default(),
+            write_paths: vec![],
             schedule_config: None,
             config: HashMap::new(),
             connections: vec![],
@@ -10703,6 +10800,7 @@ mod tests {
                 provider: None,
                 preset: vec![],
                 permissions: PipePermissionsConfig::default(),
+                write_paths: vec![],
                 schedule_config: None,
                 config: HashMap::new(),
                 connections: vec![],
@@ -11458,5 +11556,98 @@ mod tests {
                 "should be queueable after removal"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod write_sandbox_install_tests {
+    use super::*;
+
+    fn unrestricted_config() -> PipeConfig {
+        PipeConfig {
+            name: "daily-report".to_string(),
+            schedule: "manual".to_string(),
+            enabled: true,
+            agent: "pi".to_string(),
+            model: "claude-haiku-4-5".to_string(),
+            provider: None,
+            preset: vec![],
+            permissions: PipePermissionsConfig::default(),
+            write_paths: vec![],
+            connections: vec![],
+            timeout: None,
+            source_slug: None,
+            installed_version: None,
+            source_hash: None,
+            subagent: false,
+            history: false,
+            privacy_filter: false,
+            artifacts: vec![],
+            trigger: None,
+            schedule_config: None,
+            config: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Regression: the extension carries the filesystem sandbox, so gating its
+    /// install on `has_any_restrictions()` left every pipe without a
+    /// permissions block unsandboxed while still writing a permissions JSON
+    /// that advertised `pipe_dir`.
+    #[test]
+    fn installs_the_sandbox_for_a_pipe_with_no_declared_restrictions() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = unrestricted_config();
+        assert!(
+            !crate::pipes::permissions::PipePermissions::from_config(&config)
+                .has_any_restrictions(),
+            "fixture must have no declared restrictions"
+        );
+
+        crate::agents::pi::PiExecutor::ensure_permissions_extension(dir.path(), &config).unwrap();
+
+        let ext = dir
+            .path()
+            .join(".pi")
+            .join("extensions")
+            .join("screenpipe-permissions.ts");
+        assert!(ext.exists(), "sandbox extension must be installed");
+        let body = std::fs::read_to_string(&ext).unwrap();
+        assert!(body.contains("checkFileToolWrite"));
+    }
+
+    #[test]
+    fn infers_write_roots_from_paths_the_pipe_already_names() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("pipe.md"),
+            "---\nschedule: daily\n---\nWrite the log to /home/u/Documents/Bitacoras/today.md\nand keep scratch in ./out.json\n",
+        )
+        .unwrap();
+
+        let roots = infer_write_roots(dir.path());
+        assert_eq!(roots, vec!["/home/u/Documents/Bitacoras".to_string()]);
+    }
+
+    #[test]
+    fn inference_skips_the_pipe_folder_and_overly_broad_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let inside = dir.path().join("output").to_string_lossy().to_string();
+        std::fs::write(
+            dir.path().join("pipe.md"),
+            format!("---\nschedule: daily\n---\nwrite {inside}/a.json and /tmp and /etc/passwd\n"),
+        )
+        .unwrap();
+
+        let roots = infer_write_roots(dir.path());
+        assert!(!roots
+            .iter()
+            .any(|r| r.starts_with(dir.path().to_str().unwrap())));
+        assert!(!roots.contains(&"/tmp".to_string()));
+    }
+
+    #[test]
+    fn inference_is_empty_without_a_pipe_md() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(infer_write_roots(dir.path()).is_empty());
     }
 }

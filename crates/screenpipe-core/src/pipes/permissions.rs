@@ -31,6 +31,32 @@ use std::collections::HashSet;
 
 use super::{PipeConfig, PipePermissionsConfig};
 
+/// Expand `~` and drop empties from author-declared `write_paths`.
+/// Paths are kept as written otherwise; containment is checked at runtime by
+/// the extension, which normalises before comparing.
+pub fn expand_write_paths(paths: &[String]) -> Vec<String> {
+    let home = dirs::home_dir();
+    let mut out = Vec::new();
+    for raw in paths {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let expanded = match (trimmed.strip_prefix("~/"), home.as_ref()) {
+            (Some(rest), Some(h)) => h.join(rest).to_string_lossy().to_string(),
+            _ if trimmed == "~" => match home.as_ref() {
+                Some(h) => h.to_string_lossy().to_string(),
+                None => continue,
+            },
+            _ => trimmed.to_string(),
+        };
+        if !out.contains(&expanded) {
+            out.push(expanded);
+        }
+    }
+    out
+}
+
 /// Registry for active pipe tokens.
 #[async_trait::async_trait]
 pub trait PipeTokenRegistry: Send + Sync {
@@ -182,6 +208,20 @@ pub struct PipePermissions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipe_dir: Option<String>,
 
+    /// Extra roots this pipe may write to, declared as `write_paths` in
+    /// `pipe.md`. `~` is expanded. The pipe directory is always allowed and
+    /// does not need to be listed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub write_roots: Vec<String>,
+
+    /// Roots inferred from paths the pipe's own instructions mention, used to
+    /// keep pipes written before `write_paths` existed working. Allowed at
+    /// runtime but reported so the author can promote them to `write_roots`.
+    /// A path the instructions never mention stays blocked, which is the case
+    /// that matters: an agent wandering onto an unrelated file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inferred_write_roots: Vec<String>,
+
     /// Mirrors `PipeConfig.privacy_filter`. When true, the `/search`
     /// handler force-sets `query.filter_pii = true` for any request
     /// carrying this pipe's bearer token, regardless of what the
@@ -210,6 +250,8 @@ impl PipePermissions {
             days,
             pipe_token: None,
             pipe_dir: None,
+            write_roots: expand_write_paths(&config.write_paths),
+            inferred_write_roots: Vec::new(),
             privacy_filter: config.privacy_filter,
         }
     }
@@ -662,6 +704,8 @@ mod tests {
     fn make_perms() -> PipePermissions {
         // Fully open — no restrictions
         PipePermissions {
+            write_roots: vec![],
+            inferred_write_roots: vec![],
             pipe_name: "test".to_string(),
             allow_rules: vec![],
             deny_rules: vec![],
@@ -954,6 +998,7 @@ mod tests {
             provider: None,
             preset: vec![],
             permissions: PipePermissionsConfig::default(),
+            write_paths: vec![],
             connections: vec![],
             timeout: None,
             source_slug: None,
@@ -984,6 +1029,7 @@ mod tests {
             provider: None,
             preset: vec![],
             permissions: PipePermissionsConfig::Preset("reader".to_string()),
+            write_paths: vec![],
             connections: vec![],
             timeout: None,
             source_slug: None,
@@ -1026,6 +1072,7 @@ mod tests {
                 time: Some("09:00-17:00".to_string()),
                 days: Some("Mon,Tue,Wed,Thu,Fri".to_string()),
             },
+            write_paths: vec![],
             connections: vec![],
             timeout: None,
             source_slug: None,
@@ -1066,5 +1113,72 @@ mod tests {
         // Days: weekdays
         assert!(perms.is_day_allowed(Weekday::Mon));
         assert!(!perms.is_day_allowed(Weekday::Sat));
+    }
+}
+
+#[cfg(test)]
+mod write_path_tests {
+    use super::*;
+
+    #[test]
+    fn expands_tilde_and_drops_empties() {
+        let home = dirs::home_dir().expect("home dir");
+        let out = expand_write_paths(&[
+            "~/Documents/Bitacoras".to_string(),
+            "   ".to_string(),
+            "/tmp/exact".to_string(),
+        ]);
+        assert_eq!(
+            out,
+            vec![
+                home.join("Documents/Bitacoras")
+                    .to_string_lossy()
+                    .to_string(),
+                "/tmp/exact".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn deduplicates_repeated_roots() {
+        let out = expand_write_paths(&["/tmp/a".to_string(), "/tmp/a".to_string()]);
+        assert_eq!(out, vec!["/tmp/a".to_string()]);
+    }
+
+    #[test]
+    fn declared_write_paths_reach_resolved_permissions() {
+        let config = PipeConfig {
+            name: "test".to_string(),
+            schedule: "manual".to_string(),
+            enabled: true,
+            agent: "pi".to_string(),
+            model: "claude-haiku-4-5".to_string(),
+            provider: None,
+            preset: vec![],
+            permissions: PipePermissionsConfig::default(),
+            write_paths: vec!["~/Declared".to_string(), "/tmp/declared".to_string()],
+            connections: vec![],
+            timeout: None,
+            source_slug: None,
+            installed_version: None,
+            source_hash: None,
+            subagent: false,
+            history: false,
+            privacy_filter: false,
+            artifacts: vec![],
+            trigger: None,
+            schedule_config: None,
+            config: std::collections::HashMap::new(),
+        };
+        let perms = PipePermissions::from_config(&config);
+        let home = dirs::home_dir().expect("home dir");
+        assert_eq!(
+            perms.write_roots,
+            vec![
+                home.join("Declared").to_string_lossy().to_string(),
+                "/tmp/declared".to_string(),
+            ]
+        );
+        assert!(perms.inferred_write_roots.is_empty());
     }
 }

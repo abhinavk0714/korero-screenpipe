@@ -15,6 +15,8 @@ const restrictedPermissions = {
   days: null,
   pipe_token: "sp_pipe_test",
   pipe_dir: "/tmp/test-pipe",
+  write_roots: [],
+  inferred_write_roots: [],
 };
 
 describe("screenpipe permissions curl guard", () => {
@@ -79,6 +81,8 @@ const sandboxPermissions = {
   days: null,
   pipe_token: null,
   pipe_dir: PIPE_DIR,
+  write_roots: [],
+  inferred_write_roots: [],
 };
 
 describe("screenpipe permissions filesystem sandbox", () => {
@@ -379,5 +383,60 @@ describe("screenpipe permissions tool_call hook", () => {
   it("ignores tools that do not touch the filesystem", async () => {
     const handler = register();
     expect(await handler({ tool: "read", input: { file_path: OUTSIDE } })).toBeUndefined();
+  });
+});
+
+describe("screenpipe permissions declared write roots", () => {
+  const DECLARED = "/home/u/Documents/Bitacoras";
+  afterEach(() => __testing.setPermissions(null));
+
+  it("allows writes under a declared write_paths root", () => {
+    __testing.setPermissions({
+      ...sandboxPermissions,
+      write_roots: [DECLARED],
+    });
+    expect(
+      __testing.checkFilesystemWrite(`echo x > ${DECLARED}/2026-08-12.md`)
+    ).toBeNull();
+    expect(
+      __testing.checkFileToolWrite("write", { file_path: `${DECLARED}/a.md` })
+    ).toBeNull();
+  });
+
+  it("still blocks a sibling of a declared root", () => {
+    __testing.setPermissions({
+      ...sandboxPermissions,
+      write_roots: [DECLARED],
+    });
+    expect(
+      __testing.checkFilesystemWrite(`echo x > ${DECLARED}-other/a.md`)
+    ).toContain("is outside the pipe directory");
+    expect(__testing.checkFilesystemWrite(`rm -f ${OUTSIDE}`)).toContain(
+      "is outside the pipe directory"
+    );
+  });
+
+  // Compatibility for pipes authored before write_paths existed.
+  it("allows an inferred root but keeps unrelated paths blocked", () => {
+    __testing.setPermissions({
+      ...sandboxPermissions,
+      inferred_write_roots: [DECLARED],
+    });
+    expect(
+      __testing.checkFilesystemWrite(`echo x > ${DECLARED}/log.md`)
+    ).toBeNull();
+    expect(__testing.checkFilesystemWrite(`rm -f ${OUTSIDE}`)).toContain(
+      "is outside the pipe directory"
+    );
+  });
+
+  it("names the extra roots in the block message", () => {
+    __testing.setPermissions({
+      ...sandboxPermissions,
+      write_roots: [DECLARED],
+    });
+    expect(__testing.checkFilesystemWrite(`rm -f ${OUTSIDE}`)).toContain(
+      DECLARED
+    );
   });
 });
