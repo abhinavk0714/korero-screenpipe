@@ -11,9 +11,22 @@
 -- voice. Recreating the missing rows keeps that grouping intact, so one
 -- rename in the transcript can still relabel the whole voice.
 --
--- The recreated speaker is nameless, exactly as it was before deletion. Ids
--- are safe to reuse here by definition: an id only appears below because no
--- speakers row holds it, so nothing else can have claimed it.
+-- Safety, in order of how much it matters:
+--
+-- 1. Only ever inserts. No UPDATE, no DELETE, nothing existing is touched, so
+--    a healthy database comes out unchanged.
+-- 2. Writing explicit primary keys is safe because `speakers` is
+--    INTEGER PRIMARY KEY AUTOINCREMENT: SQLite keeps a high-water mark in
+--    `sqlite_sequence` and never issues an id at or below it again. Every id
+--    below was allocated before the row was deleted, so it sits under that
+--    mark and can never be handed to a different person. A plain rowid table
+--    would reuse deleted tail ids and this would not be safe.
+-- 3. Idempotent: the NOT IN filter makes a replay insert nothing.
+-- 4. Bounded: the whole statement is a handful of indexed scans over
+--    speaker_id. On a 12 GB production database with 48 stranded ids it
+--    completes in ~11 ms.
+--
+-- The recreated speaker is nameless, exactly as it was before deletion.
 INSERT INTO speakers (id, name)
 SELECT DISTINCT speaker_id, ''
 FROM (

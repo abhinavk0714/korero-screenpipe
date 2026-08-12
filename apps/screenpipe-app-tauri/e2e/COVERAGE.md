@@ -7,8 +7,8 @@ and layer declared in the manifest, weighted by confidence and criticality.
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
 - Mapped specs: 106
-- Declared test blocks: 307
-- Weighted coverage points: 239.5
+- Declared test blocks: 308
+- Weighted coverage points: 240.5
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 83 | 268 | 218.6 | 15 | 90 | 92% |
-| macos | 102 | 270 | 210.3 | 17 | 92 | 90% |
-| linux | 72 | 225 | 187.2 | 14 | 85 | 88% |
+| windows | 83 | 269 | 219.6 | 15 | 90 | 92% |
+| macos | 102 | 271 | 211.3 | 17 | 92 | 90% |
+| linux | 72 | 226 | 188.2 | 14 | 85 | 88% |
 
 ## Runtime Results
 
@@ -39,7 +39,7 @@ pass/fail/skip counts.
 | capture-ocr | 2 specs / 16 tests / 6.4 pts | 8 specs / 12 tests / 4.8 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 25 specs / 50 tests / 36.9 pts | 34 specs / 69 tests / 48.5 pts | 24 specs / 49 tests / 36.4 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 23 specs / 111 tests / 92.0 pts | 28 specs / 96 tests / 80.0 pts | 18 specs / 79 tests / 70.2 pts |
+| local-api | 23 specs / 112 tests / 93.0 pts | 28 specs / 97 tests / 81.0 pts | 18 specs / 80 tests / 71.2 pts |
 | notifications | 4 specs / 25 tests / 16.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
 | onboarding | 6 specs / 27 tests / 24.0 pts | 7 specs / 28 tests / 24.4 pts | 6 specs / 27 tests / 24.0 pts |
 | os-integration | 7 specs / 29 tests / 24.8 pts | 13 specs / 25 tests / 14.8 pts | 2 specs / 12 tests / 8.7 pts |
@@ -184,7 +184,7 @@ pass/fail/skip counts.
 | screen-recording-restart.spec.ts | macos | onboarding, os-integration, real-ui-e2e, tauri-command | onboarding, permission-recovery | high | conditional | real-user-flow | 1 | A deterministic post-Later TCC mismatch drives the packaged onboarding UI through the explicit restart button and into the native restart command without destroying the WebDriver session. |
 | search-request-priority.spec.ts | windows, macos, linux | real-ui-e2e, local-api | home-search, local-api-search | medium | partial | synthetic | 1 | Verifies keyword search request fires before secondary search, facet, and speaker requests. |
 | settings-sections.spec.ts | windows, macos, linux | settings, real-ui-e2e, storage-privacy | settings-recording, screen-share-privacy, settings-ai, settings-privacy-api-auth, settings-permissions, storage-retention, low-disk-recording-guard, audio-device-health | high | strong | real-user-flow | 13 | Separate Screen and Audio & meetings destinations, persisted screen-share privacy toggle with native-status readback, AI preset/preferences split and toggle flows, low-disk capture stop with persistent notification, storage, privacy, macOS-only permissions recovery hub (asserted absent on Windows/Linux), and rapid switching crash guard. |
-| speaker-rename-scope.spec.ts | windows, macos, linux | local-api | meeting-notes, speaker-rename-scope | high | strong | real-user-flow | 2 | Seeds one unnamed voice across three chunks through the public API, renames a single line with scope=auto, and verifies the whole voice is relabelled while a correction on a named speaker stays on its line and no row is left pointing at a deleted speaker. |
+| speaker-rename-scope.spec.ts | windows, macos, linux | local-api | meeting-notes, speaker-rename-scope | high | strong | real-user-flow | 3 | Seeds one unnamed voice across three chunks through the public API, renames a single line with scope=auto, and verifies the whole voice is relabelled while a correction on a named speaker stays on its line and no row is left pointing at a deleted speaker. |
 | spotlight-exclusion.spec.ts | macos | storage-privacy, os-integration | spotlight-exclusion | high | strong | mixed | 2 | Requires the launched app's exact E2E data directory to appear in Spotlight Search Privacy, then force-imports paired excluded/control canaries and proves only the control becomes searchable. |
 | timeline-daily-summary.spec.ts | windows, macos, linux | real-ui-e2e | timeline, settings-ai | medium | strong | real-user-flow | 1 | Opens a cached Pi-generated daily summary in Timeline, checks its bounded scrolling layout, captures a screenshot, and closes it. |
 | timeline.spec.ts | windows, macos, linux | real-ui-e2e, capture-ocr | timeline, capture-ocr | high | conditional | real-user-flow | 3 | Timeline shell always runs; seeded frame assertion skips under no-recording. |

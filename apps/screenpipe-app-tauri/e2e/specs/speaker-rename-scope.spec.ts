@@ -159,6 +159,20 @@ describe("speaker rename scope", function () {
     }
   });
 
+  it("applied the orphan repair migration on the real startup path", async () => {
+    // The app just booted this database through the production migrator, so
+    // this is the migration running for real rather than as raw SQL in a test.
+    const applied = await sql<{ success: number }>(
+      cfg,
+      `SELECT success FROM _sqlx_migrations
+       WHERE version = 20260812120000 LIMIT 1`,
+    );
+    expect(applied).toHaveLength(1);
+    expect(applied[0].success).toBe(1);
+    // And it left nothing dangling behind it.
+    expect(await orphanCount(cfg)).toBe(0);
+  });
+
   it("names the whole voice, not just the line that was clicked", async () => {
     const before = await orphanCount(cfg);
 

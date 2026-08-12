@@ -990,12 +990,9 @@ mod speaker_reassignment_tests {
             .unwrap();
         assert_eq!(orphaned_reference_count(&db).await, 3);
 
-        sqlx::raw_sql(include_str!(
-            "../src/migrations/20260812120000_restore_orphaned_speaker_references.sql"
-        ))
-        .execute(&db.pool)
-        .await
-        .unwrap();
+        // Re-run through the real migrator, not raw SQL: this is the code path
+        // that will touch users' databases, sequencing and all.
+        rerun_orphan_repair_migration(&db).await;
 
         assert_eq!(orphaned_reference_count(&db).await, 0);
         // The grouping survives, so one rename can still reach the whole voice.
@@ -1010,5 +1007,131 @@ mod speaker_reassignment_tests {
             .unwrap();
         assert!(outcome.renamed_whole_speaker);
         assert_eq!(speaker_of(&db, second).await, Some(outcome.speaker_id));
+    }
+
+    /// Un-apply the repair migration and let the real `sqlx` migrator put it
+    /// back. `set_ignore_missing(true)` mirrors production's migrator config.
+    async fn rerun_orphan_repair_migration(db: &DatabaseManager) {
+        sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20260812120000")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let mut migrator = sqlx::migrate!("./src/migrations");
+        migrator.set_ignore_missing(true);
+        migrator.run(&db.pool).await.unwrap();
+    }
+
+    /// The repair inserts explicit primary keys, which is only safe because
+    /// `speakers` is AUTOINCREMENT: SQLite keeps a high-water mark in
+    /// `sqlite_sequence` and never re-issues an id below it, so a recreated id
+    /// can never collide with a different person created later. Without
+    /// AUTOINCREMENT a plain rowid table would hand out max(id)+1 and could
+    /// reuse a deleted tail id.
+    #[tokio::test]
+    async fn test_repair_cannot_collide_with_a_future_speaker() {
+        let db = setup_test_db().await;
+
+        let doomed = create_speaker_with_embedding(&db, &vec![0.7; 512]).await;
+        let chunk = create_audio_with_speaker(&db, doomed, "line from a deleted speaker").await;
+        sqlx::query("DELETE FROM speaker_embeddings WHERE speaker_id = ?1")
+            .bind(doomed)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM speakers WHERE id = ?1")
+            .bind(doomed)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        // A brand-new speaker must not be handed the dead id back.
+        let fresh = db.create_speaker_with_name("Someone Else").await.unwrap();
+        assert!(
+            fresh.id > doomed,
+            "AUTOINCREMENT must not reuse {doomed}, got {}",
+            fresh.id,
+        );
+
+        rerun_orphan_repair_migration(&db).await;
+
+        assert_eq!(orphaned_reference_count(&db).await, 0);
+        assert_eq!(speaker_of(&db, chunk).await, Some(doomed));
+        // The unrelated speaker is untouched and still distinct.
+        assert_eq!(
+            db.get_speaker_by_id(fresh.id).await.unwrap().name,
+            "Someone Else",
+        );
+        assert_eq!(db.get_speaker_by_id(doomed).await.unwrap().name, "");
+    }
+
+    /// Migrations must be safe to replay, and must never touch a healthy row.
+    #[tokio::test]
+    async fn test_repair_is_idempotent_and_leaves_healthy_rows_alone() {
+        let db = setup_test_db().await;
+
+        let named = db.create_speaker_with_name("Leslie").await.unwrap();
+        let kept = create_audio_with_speaker(&db, named.id, "a healthy labelled line").await;
+
+        let doomed = create_speaker_with_embedding(&db, &vec![0.55; 512]).await;
+        let stranded = create_audio_with_speaker(&db, doomed, "a stranded line").await;
+        sqlx::query("DELETE FROM speaker_embeddings WHERE speaker_id = ?1")
+            .bind(doomed)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM speakers WHERE id = ?1")
+            .bind(doomed)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let speakers_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM speakers")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+
+        rerun_orphan_repair_migration(&db).await;
+        let after_first: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM speakers")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(after_first, speakers_before + 1, "exactly one row restored");
+
+        rerun_orphan_repair_migration(&db).await;
+        let after_second: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM speakers")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(after_second, after_first, "replaying must insert nothing");
+
+        // Healthy data is untouched: same speaker, same name, same line.
+        assert_eq!(speaker_of(&db, kept).await, Some(named.id));
+        assert_eq!(db.get_speaker_by_id(named.id).await.unwrap().name, "Leslie");
+        assert_eq!(speaker_of(&db, stranded).await, Some(doomed));
+        assert_eq!(orphaned_reference_count(&db).await, 0);
+    }
+
+    /// A database with nothing wrong must come out byte-identical in the only
+    /// dimension the repair can touch: the speakers table.
+    #[tokio::test]
+    async fn test_repair_is_a_no_op_on_a_healthy_database() {
+        let db = setup_test_db().await;
+
+        let leslie = db.create_speaker_with_name("Leslie").await.unwrap();
+        create_audio_with_speaker(&db, leslie.id, "all good here").await;
+        let before: Vec<(i64, Option<String>)> =
+            sqlx::query_as("SELECT id, name FROM speakers ORDER BY id")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+
+        rerun_orphan_repair_migration(&db).await;
+
+        let after: Vec<(i64, Option<String>)> =
+            sqlx::query_as("SELECT id, name FROM speakers ORDER BY id")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(before, after);
     }
 }
