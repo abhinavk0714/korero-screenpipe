@@ -152,23 +152,6 @@ fn overlay_geometry(app_handle: tauri::AppHandle, label: String) -> Result<Overl
     }
 }
 
-/// E2E helper: pick which main-overlay surface the show path builds.
-///
-/// The two modes are genuinely different windows — "fullscreen" is the
-/// transparent, undecorated, Win32-styled panel under the `main` label,
-/// "window" is a normal decorated window under `main-window` — and Windows
-/// defaults to "window". Covering only the default would leave the fullscreen
-/// overlay's monitor-rect handling untested.
-#[command]
-fn set_overlay_mode(app_handle: tauri::AppHandle, mode: String) -> Result<(), String> {
-    if mode != "fullscreen" && mode != "window" {
-        return Err(format!("unsupported overlay mode: {mode}"));
-    }
-    let mut settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
-    settings.overlay_mode = mode;
-    settings.save(&app_handle)
-}
-
 /// E2E helper: backdate the recorded setup completion.
 ///
 /// The first-run window keys off how long ago setup finished, and the two
@@ -743,7 +726,6 @@ pub(super) fn plugin() -> TauriPlugin<Wry> {
         .invoke_handler(tauri::generate_handler![
             main_overlay_visible,
             overlay_geometry,
-            set_overlay_mode,
             mark_capture_intended,
             emit_disk_space_low,
             emit_disk_space_recovered,
