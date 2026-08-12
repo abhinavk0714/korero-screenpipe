@@ -30,6 +30,7 @@
 // meaningless assertion.
 
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { E2E_DATA_DIR, E2E_SEED_FLAGS } from "../helpers/app-launcher.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import {
@@ -101,6 +102,35 @@ const waitForTestId = async (testId: string, timeout = 20_000) => {
       timeoutMsg: `[data-testid="${testId}"] never appeared`,
     },
   );
+};
+
+/**
+ * Force the timeline slide into the shipped slide order.
+ *
+ * `timelineChoiceVisible` is `settings.deviceTier === "low"`, so on normal CI
+ * and dev hardware the slide is filtered out of `visibleOrder` entirely and
+ * `set_onboarding_step("timeline")` resolves to a different slide — which
+ * reads as a spec bug rather than a hidden slide. Writing the tier straight to
+ * store.bin is the same seam first-run-ai-summary.spec.ts uses for presets.
+ */
+const seedLowDeviceTier = async () => {
+  const storePath = join(E2E_DATA_DIR, "store.bin");
+  const rid = await invokeOrThrow<number | null>("plugin:store|get_store", {
+    path: storePath,
+  });
+  if (rid == null) throw new Error(`settings store is not loaded: ${storePath}`);
+
+  const [settings, exists] = await invokeOrThrow<
+    [Record<string, unknown>, boolean]
+  >("plugin:store|get", { rid, key: "settings" });
+  if (!exists || !settings) throw new Error("settings are not loaded");
+
+  await invokeOrThrow("plugin:store|set", {
+    rid,
+    key: "settings",
+    value: { ...settings, deviceTier: "low" },
+  });
+  await invokeOrThrow("plugin:store|save", { rid });
 };
 
 const textOfTestId = async (testId: string): Promise<string> =>
@@ -249,20 +279,27 @@ const textOfTestId = async (testId: string): Promise<string> =>
     });
 
     // ─── timeline slide: where the capture decision is made ──────────────
+    //
+    // Nested describe so this runs LAST. Mocha executes a suite's own tests
+    // before its child suites, so as a bare `it` this would run before the
+    // macOS block and leak its low-tier settings write into those tests.
 
-    it("states the capture bounds on the timeline choice", async () => {
-      await gotoSlide("timeline");
-      await browser.waitUntil(
-        async () => (await bodyText()).includes("meet the timeline"),
-        { timeout: t(45_000), timeoutMsg: "timeline slide never rendered" },
-      );
+    describe("timeline choice", function () {
+      it("states the capture bounds where the user decides", async () => {
+        await seedLowDeviceTier();
+        await gotoSlide("timeline");
+        await browser.waitUntil(
+          async () => (await bodyText()).includes("meet the timeline"),
+          { timeout: t(45_000), timeoutMsg: "timeline slide never rendered" },
+        );
 
-      const text = await bodyText();
-      expect(text).toContain("skips incognito windows");
-      expect(text).toContain("exclude any app in settings");
+        const text = await bodyText();
+        expect(text).toContain("skips incognito windows");
+        expect(text).toContain("exclude any app in settings");
 
-      const filepath = await saveScreenshot("onboarding-trust-timeline");
-      expect(existsSync(filepath)).toBe(true);
+        const filepath = await saveScreenshot("onboarding-trust-timeline");
+        expect(existsSync(filepath)).toBe(true);
+      });
     });
   },
 );

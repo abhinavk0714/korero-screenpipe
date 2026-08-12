@@ -22,12 +22,11 @@ const mocks = vi.hoisted(() => ({
   requestPermissionWithFlow: vi.fn(async () => undefined),
   windowSetFocus: vi.fn(async () => undefined),
   posthogCapture: vi.fn(),
-  getDataDir: vi.fn(async () => "/Users/test/.screenpipe"),
+  getActiveDataDir: vi.fn(async () => ({
+    status: "ok",
+    data: "/Users/test/.screenpipe",
+  })),
   revealInDefaultBrowser: vi.fn(async () => ({ status: "ok", data: null })),
-}));
-
-vi.mock("@/lib/hooks/use-settings", () => ({
-  useSettings: () => ({ getDataDir: mocks.getDataDir }),
 }));
 
 vi.mock("@/lib/hooks/use-platform", () => ({
@@ -45,6 +44,7 @@ vi.mock("@/lib/utils/tauri", () => ({
       mocks.restartAfterScreenRecordingPermission,
     requestPermission: mocks.requestPermission,
     revealInDefaultBrowser: mocks.revealInDefaultBrowser,
+    getActiveDataDir: mocks.getActiveDataDir,
   },
 }));
 
@@ -79,7 +79,10 @@ describe("onboarding permission wheel", () => {
     mocks.checkAccessibilityPermissionCmd.mockResolvedValue("denied");
     mocks.checkAccessibilityPermissionLiveCmd.mockResolvedValue("denied");
     mocks.checkScreenRecordingPermission.mockResolvedValue("denied");
-    mocks.getDataDir.mockResolvedValue("/Users/test/.screenpipe");
+    mocks.getActiveDataDir.mockResolvedValue({
+      status: "ok",
+      data: "/Users/test/.screenpipe",
+    });
     mocks.revealInDefaultBrowser.mockResolvedValue({
       status: "ok",
       data: null,
@@ -279,8 +282,14 @@ describe("onboarding permission wheel", () => {
     );
   });
 
+  // The engine, not the settings helper: getDataDir() reconstructs
+  // ~/.screenpipe when settings.dataDir is unset, so it disagrees with the
+  // engine whenever the directory came from SCREENPIPE_DATA_DIR or a flag.
   it("shows a relocated data dir rather than a hardcoded ~/.screenpipe", async () => {
-    mocks.getDataDir.mockResolvedValue("/Volumes/Vault/screenpipe-data");
+    mocks.getActiveDataDir.mockResolvedValue({
+      status: "ok",
+      data: "/Volumes/Vault/screenpipe-data",
+    });
 
     render(<PermissionsStep handleNextSlide={vi.fn()} />);
 
@@ -309,7 +318,10 @@ describe("onboarding permission wheel", () => {
   });
 
   it("hides the chip rather than inventing a path when the data dir cannot resolve", async () => {
-    mocks.getDataDir.mockRejectedValue(new Error("no home dir"));
+    mocks.getActiveDataDir.mockResolvedValue({
+      status: "error",
+      error: "engine not running",
+    });
 
     render(<PermissionsStep handleNextSlide={vi.fn()} />);
     await screen.findByRole("button", { name: /capture what you say/i });

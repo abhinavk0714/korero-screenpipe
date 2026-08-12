@@ -7,7 +7,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Folder } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
-import { useSettings } from "@/lib/hooks/use-settings";
 import posthog from "posthog-js";
 
 /**
@@ -15,9 +14,15 @@ import posthog from "posthog-js";
  *
  * Onboarding used to make the locality promise in prose ("your recordings are
  * stored on this computer"). Prose is a claim; a path the user can open is
- * evidence. This resolves the REAL data dir — `getDataDir()` honours a custom
- * `settings.dataDir`, so a user who relocated storage is not shown a fictional
- * `~/.screenpipe` — and reveals it with the same command the media viewer uses.
+ * evidence. But evidence has to be right: a chip showing the wrong folder is
+ * worse than the prose it replaces, because the user can check it.
+ *
+ * Uses `get_active_data_dir`, the path the RUNNING ENGINE writes to, and not
+ * the `getDataDir()` settings helper. That helper returns `settings.dataDir`
+ * when set and otherwise *reconstructs* `~/.screenpipe`, so it silently
+ * disagrees with the engine whenever the directory came from `SCREENPIPE_DATA_DIR`
+ * or a CLI flag rather than the settings UI. The E2E caught exactly that: the
+ * chip claimed `~/.screenpipe` while the app was writing to `~/.screenpipe/.e2e`.
  *
  * Deliberately says "lands here", not "never leaves". Paid users are
  * auto-switched to cloud transcription (applyProCloudAudioDefaults in
@@ -31,7 +36,6 @@ export default function DataDirChip({
   /** Onboarding slide this rendered on, for adoption telemetry. */
   surface: string;
 }) {
-  const { getDataDir } = useSettings();
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [revealFailed, setRevealFailed] = useState(false);
 
@@ -39,9 +43,13 @@ export default function DataDirChip({
     let cancelled = false;
     // A failed resolve must not render a fake path — the chip simply stays
     // hidden, which is honest, rather than promising a folder we can't name.
-    getDataDir()
-      .then((dir) => {
-        if (!cancelled) setDataDir(dir);
+    commands
+      .getActiveDataDir()
+      .then((res) => {
+        if (cancelled) return;
+        if (res && res.status === "error") throw new Error(res.error);
+        const dir = typeof res === "string" ? res : res?.data;
+        if (dir) setDataDir(dir);
       })
       .catch((error) => {
         console.error("failed to resolve data dir for onboarding chip:", error);
@@ -49,7 +57,7 @@ export default function DataDirChip({
     return () => {
       cancelled = true;
     };
-  }, [getDataDir]);
+  }, []);
 
   const reveal = useCallback(async () => {
     if (!dataDir) return;
