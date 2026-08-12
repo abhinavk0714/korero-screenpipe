@@ -248,16 +248,53 @@ export const __testing = {
 // Filesystem sandbox helpers
 // ---------------------------------------------------------------------------
 
+/// `$HOME` and `~` resolve to the same knowable location, so a target using
+/// them is not actually ambiguous. Everything else stays unresolved.
+function substituteKnownVars(p: string): string {
+  const os = require("os");
+  const home = os.homedir();
+  return p
+    .replace(/^\$\{HOME\}/, home)
+    .replace(/^\$HOME(?=\/|$)/, home)
+    .replace(/^~(?=\/|$)/, home);
+}
+
+/// True once every substitution in the token is one we can resolve.
+function isResolvableAfterSubstitution(token: Token): boolean {
+  if (!token.expandable) return true;
+  return !/\$|`/.test(substituteKnownVars(token.text));
+}
+
 function resolvePath(p: string, cwd: string): string {
   const path = require("path");
-  if (p.startsWith("~")) {
-    const os = require("os");
-    p = path.join(os.homedir(), p.slice(1));
-  }
+  p = substituteKnownVars(p);
   if (!path.isAbsolute(p)) {
     p = path.resolve(cwd, p);
   }
   return path.normalize(p);
+}
+
+/// Character devices that discard or echo output. Redirecting to these is not
+/// a filesystem write, and `2>/dev/null` is on a large share of real commands.
+const DEVICE_SINKS = new Set([
+  "/dev/null",
+  "/dev/stdout",
+  "/dev/stderr",
+  "/dev/tty",
+  "/dev/fd/1",
+  "/dev/fd/2",
+]);
+
+function isDeviceSink(target: string): boolean {
+  return DEVICE_SINKS.has(target);
+}
+
+/// The OS scratch directory. Pipes stage intermediate files there routinely,
+/// it is ephemeral, and it is not user work, so it is writable by default.
+function tempRoots(): string[] {
+  const os = require("os");
+  const roots = [os.tmpdir(), "/tmp", "/private/tmp"];
+  return roots.filter((r: string) => typeof r === "string" && r.length > 0);
 }
 
 function isUnder(resolved: string, root: string): boolean {
@@ -275,6 +312,7 @@ function writableRoots(): string[] {
   if (!PERMS?.pipe_dir) return [];
   return [
     PERMS.pipe_dir,
+    ...tempRoots(),
     ...(PERMS.write_roots || []),
     ...(PERMS.inferred_write_roots || []),
   ];
@@ -448,6 +486,33 @@ const WRITE_COMMANDS: Record<string, TargetRule> = {
   git: "git",
 };
 
+/// git subcommands that modify a working tree or repository. Anything absent
+/// here is treated as a read, so `git -C other log` stays allowed.
+const GIT_WRITING_SUBCOMMANDS = new Set([
+  "add",
+  "am",
+  "apply",
+  "checkout",
+  "cherry-pick",
+  "clean",
+  "clone",
+  "commit",
+  "fetch",
+  "gc",
+  "init",
+  "merge",
+  "mv",
+  "pull",
+  "rebase",
+  "reset",
+  "restore",
+  "revert",
+  "rm",
+  "stash",
+  "switch",
+  "worktree",
+]);
+
 /// Shells. An inline `-c` snippet is shell source, so it is re-scanned with
 /// the same rules rather than being refused outright.
 const SHELL_INTERPRETERS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
@@ -550,22 +615,47 @@ function segmentTargets(tokens: Token[]): Token[] | null {
   if (SHELL_INTERPRETERS.has(cmd)) {
     const args = tokens.slice(cmdIndex + 1);
     const inline = args.some((a) => !a.operator && a.text === "-c");
-    // `sh -c '<shell>'` is re-scanned by the caller. A script file argument is
-    // opaque, so refuse to certify the segment.
-    if (!inline && args.some((a) => !a.operator && !isFlag(a.text))) return null;
+    // `sh -c '<shell>'` is re-scanned by the caller. A script file is opaque
+    // for the same reason an interpreter script is: report, do not block.
+    if (!inline && args.some((a) => !a.operator && !isFlag(a.text))) {
+      reportUnsandboxedInterpreter(cmd);
+    }
     return targets;
   }
 
   if (CODE_INTERPRETERS.has(cmd)) {
     const args = tokens.slice(cmdIndex + 1);
-    // A bare `python3 --version` writes nothing. Anything carrying code, inline
-    // or as a script file, is opaque to a shell-level scan.
-    const carriesCode = args.some(
-      (a) =>
-        !a.operator &&
-        (a.text === "-c" || a.text === "-e" || a.text === "-i" || !isFlag(a.text))
+
+    // `perl -i` / `ruby -i` edit their operands in place, so those operands
+    // really are write targets and are visible here.
+    const inPlace = args.some(
+      (a) => !a.operator && (a.text === "-i" || a.text.startsWith("-i."))
     );
-    return carriesCode ? null : targets;
+    if (inPlace) {
+      return targets.concat(operands(tokens, cmdIndex + 1));
+    }
+
+    // Inline code is short and rare. Scan it for path literals so the blatant
+    // case (`python3 -c "open('/outside/x','w')"`) is still caught.
+    const inlineTargets: Token[] = [];
+    for (const snippet of inlineSnippets(args)) {
+      for (const literal of pathLiteralsIn(snippet)) {
+        inlineTargets.push({ text: literal, expandable: false, operator: false });
+      }
+    }
+    if (inlineTargets.length > 0) {
+      return targets.concat(inlineTargets);
+    }
+
+    // Otherwise the interpreter runs a script this scan cannot read. A script
+    // operand is executed, not written, so it is not a write target. What the
+    // script itself writes is genuinely invisible here: report it rather than
+    // block, and leave real containment to an OS-level boundary.
+    const runsScript = args.some((a) => !a.operator && !isFlag(a.text));
+    if (runsScript) {
+      reportUnsandboxedInterpreter(cmd);
+    }
+    return targets;
   }
 
   const rule = WRITE_COMMANDS[cmd];
@@ -598,7 +688,15 @@ function segmentTargets(tokens: Token[]): Token[] | null {
     }
     case "git": {
       // Without a relocation flag git works in the cwd, which is the pipe
-      // directory. `-C`, `--git-dir` and `--work-tree` move that anywhere.
+      // directory. `-C`, `--git-dir` and `--work-tree` move that anywhere,
+      // but only matter when the subcommand actually writes: `git -C x log`
+      // and `git -C x status` are reads and are common in real pipes.
+      const sub = operands(tokens, cmdIndex + 1).find(
+        (o) => !o.text.includes("/") || GIT_WRITING_SUBCOMMANDS.has(o.text)
+      );
+      if (sub && !GIT_WRITING_SUBCOMMANDS.has(sub.text)) {
+        return targets;
+      }
       const relocations: Token[] = [];
       for (let i = cmdIndex + 1; i < tokens.length; i++) {
         const t = tokens[i];
@@ -640,6 +738,37 @@ function segmentTargets(tokens: Token[]): Token[] | null {
     }
   }
   return targets;
+}
+
+/// Interpreters already reported this run. Reported once each so a scheduled
+/// pipe does not fill its log with the same line.
+const reportedInterpreters = new Set<string>();
+
+function reportUnsandboxedInterpreter(cmd: string): void {
+  if (reportedInterpreters.has(cmd)) return;
+  reportedInterpreters.add(cmd);
+  // Surfaces in the pipe's execution log.
+  console.error(
+    `[screenpipe-permissions] ${cmd} runs a script this sandbox cannot inspect; ` +
+      `its file writes are NOT contained to ${PERMS?.pipe_dir}. ` +
+      `Prefer doing file work in bash with literal relative paths.`
+  );
+}
+
+/// Absolute and `~` path literals inside a snippet of inline interpreter code.
+/// Quoted strings first, then bare tokens, so `open('/a/b','w')` is found.
+function pathLiteralsIn(code: string): string[] {
+  const out: string[] = [];
+  const quoted = code.match(/(['"])((?:~\/|\/)[^'"]{1,512})\1/g) || [];
+  for (const q of quoted) {
+    out.push(q.slice(1, -1));
+  }
+  if (out.length === 0) {
+    for (const bare of code.split(/[\s,()[\]{}]+/)) {
+      if (bare.startsWith("/") || bare.startsWith("~/")) out.push(bare);
+    }
+  }
+  return out;
 }
 
 /// Extract inline interpreter code so it can be scanned as a nested command.
@@ -705,7 +834,8 @@ function checkFilesystemWrite(cmd: string, depth = 0): string | null {
 
     for (const target of targets) {
       if (!target.text) continue;
-      if (hasUnresolvableExpansion(target)) {
+      if (isDeviceSink(target.text)) continue;
+      if (!isResolvableAfterSubstitution(target)) {
         return unverifiableMessage(
           `write target "${target.text}" expands at runtime`,
           pipeDir
@@ -840,9 +970,10 @@ function buildPermissionRules(): string {
         "cannot be checked before it runs."
     );
     rules.push(
-      "Running a script through an interpreter (python, node, ruby, …) is " +
-        "blocked, because its writes cannot be checked. Do the file work in " +
-        "bash with literal relative paths instead."
+      "Writes made inside a script you run through an interpreter (python, " +
+        "node, ruby, …) cannot be checked, so they are NOT contained. Keep " +
+        "file work in bash with literal relative paths where you can, and " +
+        "never have a script write outside the directories listed above."
     );
   }
   if (PERMS.pipe_token) {

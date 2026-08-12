@@ -159,7 +159,6 @@ describe("screenpipe permissions filesystem sandbox", () => {
   // Regression: the guard used to allow anything it could not parse.
   it("fails closed on write targets that expand at runtime", () => {
     const blocked = [
-      "echo x > $HOME/Documents/panel.html",
       'T=~/Documents/panel.html; echo x > "$T"',
       "echo x > $(echo /home/u/Documents/panel.html)",
       "echo x > `cat target.txt`",
@@ -173,28 +172,92 @@ describe("screenpipe permissions filesystem sandbox", () => {
     }
   });
 
+  // $HOME and ~ resolve to the same knowable place, so they are checked as
+  // real paths rather than refused as ambiguous.
+  it("resolves $HOME rather than failing closed on it", () => {
+    expect(
+      __testing.checkFilesystemWrite("echo x > $HOME/Documents/panel.html")
+    ).toContain("is outside the pipe directory");
+    expect(
+      __testing.checkFilesystemWrite("mkdir -p ${HOME}/Documents/x")
+    ).toContain("is outside the pipe directory");
+  });
+
+  // Redirecting to a discard device is not a filesystem write, and appears on
+  // a large share of real pipe commands as `2>/dev/null`.
+  it("does not treat device sinks as write targets", () => {
+    for (const cmd of [
+      "curl -s http://localhost:3030/health 2>/dev/null",
+      "node ./run.mjs 2>/dev/null",
+      "cat ./a.json 2>/dev/null || echo '{}'",
+      "echo hi > /dev/stdout",
+    ]) {
+      expect([cmd, __testing.checkFilesystemWrite(cmd)]).toEqual([cmd, null]);
+    }
+  });
+
+  // Pipes stage intermediate files in the OS scratch directory routinely.
+  it("allows the OS temp directory", () => {
+    expect(__testing.checkFilesystemWrite("cat > /tmp/brief.txt")).toBeNull();
+    expect(
+      __testing.checkFilesystemWrite("curl -s http://localhost:3030/x -o /tmp/x.json")
+    ).toBeNull();
+  });
+
+  // git relocated onto another tree only matters when it writes.
+  it("allows a read-only git in another repo, blocks a writing one", () => {
+    expect(
+      __testing.checkFilesystemWrite("git -C /home/u/Documents/repo log --oneline")
+    ).toBeNull();
+    expect(
+      __testing.checkFilesystemWrite("git -C /home/u/Documents/repo status --short")
+    ).toBeNull();
+    expect(
+      __testing.checkFilesystemWrite("git -C /home/u/Documents/repo checkout -- .")
+    ).toContain("is outside the pipe directory");
+  });
+
   it("treats single-quoted substitutions as literal paths", () => {
     expect(__testing.checkFilesystemWrite("echo x > './$HOME.json'")).toBeNull();
   });
 
-  // Regression: an interpreter hides its writes from any static scan. This is
-  // the shape of a scheduled pipe that mutated files outside its directory.
-  it("fails closed on interpreters running an opaque script", () => {
-    const blocked = [
+  // A script operand is executed, not written, so blocking it would break
+  // pipes that legitimately run their own scripts. Its writes are invisible,
+  // so they are reported rather than blocked.
+  it("allows an interpreter running a script and reports it", () => {
+    for (const cmd of [
       "python3 cleanup.py --apply",
-      "node build.js",
+      "node build.js > ./out.json",
       "bun run task.ts",
       "ruby script.rb",
       "sh ./run.sh",
       "osascript automate.scpt",
-      "echo /home/u/Documents/panel.html | xargs rm -f",
-    ];
-    for (const cmd of blocked) {
-      expect([cmd, __testing.checkFilesystemWrite(cmd)]).toEqual([
-        cmd,
-        expect.stringContaining("cannot inspect"),
-      ]);
+      // A pipe running its own script by absolute path, and one reaching a
+      // sibling pipe's script: both execute code, neither writes here.
+      `bun run ${PIPE_DIR}/eval/run.ts`,
+      "bun run /home/u/.screenpipe/pipes/other-pipe/eval/score.ts",
+    ]) {
+      expect([cmd, __testing.checkFilesystemWrite(cmd)]).toEqual([cmd, null]);
     }
+  });
+
+  it("still blocks the writes an interpreter line makes visible", () => {
+    expect(
+      __testing.checkFilesystemWrite(`python3 report.py > ${OUTSIDE}`)
+    ).toContain("is outside the pipe directory");
+    // perl -i edits its operands in place, so those operands are write targets
+    expect(
+      __testing.checkFilesystemWrite(`perl -i -pe s/a/b/ ${OUTSIDE}`)
+    ).toContain("is outside the pipe directory");
+    expect(
+      __testing.checkFilesystemWrite(`perl -i -pe s/a/b/ ./local.md`)
+    ).toBeNull();
+    // xargs takes its targets from stdin: nothing to inspect
+    expect(
+      __testing.checkFilesystemWrite(
+        "echo /home/u/Documents/panel.html | xargs rm -f"
+      )
+    ).toContain("cannot inspect");
   });
 
   it("re-scans an inline shell snippet as shell", () => {
@@ -206,17 +269,16 @@ describe("screenpipe permissions filesystem sandbox", () => {
     ).toBeNull();
   });
 
-  // Inline code for another language is not shell, so scanning it with shell
-  // rules would silently miss the write.
-  it("fails closed on inline code for a non-shell interpreter", () => {
+  // Inline code is short enough to scan for the blatant case.
+  it("blocks a path literal in inline interpreter code", () => {
     expect(
       __testing.checkFilesystemWrite(
         `python3 -c "open('${OUTSIDE}','w').write('')"`
       )
-    ).toContain("cannot inspect");
+    ).toContain("is outside the pipe directory");
     expect(
-      __testing.checkFilesystemWrite(`perl -i -pe 's/a/b/' ${OUTSIDE}`)
-    ).toContain("cannot inspect");
+      __testing.checkFilesystemWrite(`node -e "fs.writeFileSync('./ok.json')"`)
+    ).toBeNull();
   });
 
   it("allows an interpreter invoked with no code", () => {
@@ -231,6 +293,7 @@ describe("screenpipe permissions filesystem sandbox", () => {
       "git -C /home/u/Documents/repo checkout -- .",
       "git --work-tree /home/u/Documents/repo checkout -- .",
       "git --git-dir=/home/u/Documents/repo/.git gc",
+      "git -C /home/u/Documents/repo clean -fd",
     ]) {
       expect([cmd, __testing.checkFilesystemWrite(cmd)]).toEqual([
         cmd,
