@@ -782,7 +782,6 @@ let DEFAULT_SETTINGS: Settings = {
 			},
 			semanticContextMode: "memory",
 			useAllMonitors: true,
-			showShortcutOverlay: true,
 			chatHistory: {
 				conversations: [],
 				activeConversationId: null,
