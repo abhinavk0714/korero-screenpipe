@@ -1599,6 +1599,8 @@ mod tests {
             days: None,
             pipe_token: Some("sp_pipe_test".to_string()),
             pipe_dir: None,
+            write_roots: vec![],
+            inferred_write_roots: vec![],
             privacy_filter: false,
         }
     }

@@ -1858,6 +1858,8 @@ mod tests {
             days: None,
             pipe_token: None,
             pipe_dir: None,
+            write_roots: vec![],
+            inferred_write_roots: vec![],
             privacy_filter: false,
         };
         tokens.insert("sp_pipe_active".to_string(), Arc::new(permissions));
