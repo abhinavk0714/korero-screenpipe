@@ -547,9 +547,15 @@ export function findOverlappingEvent(
  * identity (an event is the same event when title and exact window match).
  */
 export function calendarBindingKey(event: CalendarEvent): string {
-  return event.id && event.id.length > 0
-    ? event.id
-    : `${event.title}|${event.start}|${event.end}`;
+  if (event.id && event.id.length > 0) return event.id;
+  // Normalize to epoch ms: the same instant reaches the detector and this
+  // client in different shapes ("...:00Z" vs "...:00.000+00:00"), and the key
+  // must be byte-identical or the same event gets claimed twice.
+  const part = (raw: string) => {
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) ? String(ms) : raw;
+  };
+  return `${event.title}|${part(event.start)}|${part(event.end)}`;
 }
 
 export function attendeesToString(attendees?: string[] | null): string {

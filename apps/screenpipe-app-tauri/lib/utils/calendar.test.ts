@@ -395,12 +395,31 @@ describe("calendarBindingKey", () => {
       start: "2026-08-13T18:30:00Z",
       end: "2026-08-13T19:00:00Z",
     };
-    // Same shape the detector builds: `title|start|end`.
+    // Same shape the detector builds: `title|startMs|endMs`.
     expect(calendarBindingKey(event)).toBe(
-      "Weekly review|2026-08-13T18:30:00Z|2026-08-13T19:00:00Z",
+      `Weekly review|${Date.parse(event.start)}|${Date.parse(event.end)}`,
     );
     expect(calendarBindingKey({ ...event, id: "" })).toBe(
       calendarBindingKey(event),
+    );
+  });
+
+  it("keys the same instant identically however the feed formats it", async () => {
+    const { calendarBindingKey } = await import("./calendar");
+    // The detector and this client receive the same event in different
+    // shapes; a format difference must not mint a second identity.
+    expect(
+      calendarBindingKey({
+        title: "Weekly review",
+        start: "2026-08-13T18:30:00Z",
+        end: "2026-08-13T19:00:00Z",
+      }),
+    ).toBe(
+      calendarBindingKey({
+        title: "Weekly review",
+        start: "2026-08-13T18:30:00.000+00:00",
+        end: "2026-08-13T19:00:00.000+00:00",
+      }),
     );
   });
 

@@ -2455,3 +2455,33 @@ async fn manually_started_meeting_claims_its_calendar_event() {
         row.title
     );
 }
+
+/// The detector and the client each build this key from their own copy of the
+/// event. Publishers spell the same instant differently, so the key has to
+/// normalize or one event would be claimed twice under two identities.
+#[test]
+fn binding_key_is_stable_across_timestamp_formats() {
+    let now = Utc::now();
+    let base = Utc::now() - chrono::Duration::minutes(5);
+    let end = base + chrono::Duration::minutes(30);
+    let mk = |start: String, end: String| CalendarEventSignal {
+        id: String::new(),
+        title: "Weekly review".to_string(),
+        start,
+        end,
+        attendees: vec![],
+        is_all_day: false,
+    };
+
+    let rfc = mk(base.to_rfc3339(), end.to_rfc3339());
+    let zulu = mk(
+        base.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+        end.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+    );
+    let a = find_overlapping_calendar_event(&[rfc], now).unwrap();
+    let b = find_overlapping_calendar_event(&[zulu], now).unwrap();
+    assert_eq!(
+        a.key, b.key,
+        "the same instant in two RFC3339 spellings is one event"
+    );
+}

@@ -42,7 +42,17 @@ pub(crate) struct DetectorStopSignal {
 /// How early a meeting may start and still belong to a scheduled event.
 /// People join a minute or two before the hour; without this the row lands
 /// with no title and no attendees even though the event is right there.
-const CALENDAR_JOIN_LEAD_SECS: i64 = 180;
+const CALENDAR_JOIN_LEAD: chrono::TimeDelta = chrono::TimeDelta::minutes(3);
+
+/// Epoch milliseconds for an RFC3339 timestamp, falling back to the raw string
+/// when it will not parse. Used only for the binding key: two publishers can
+/// describe the same instant as `...:00Z` and `...:00.000+00:00`, and the key
+/// has to be identical either way or the same event would be claimed twice.
+fn timestamp_key_part(raw: &str) -> String {
+    DateTime::parse_from_rfc3339(raw)
+        .map(|t| t.timestamp_millis().to_string())
+        .unwrap_or_else(|_| raw.to_string())
+}
 
 /// A calendar event resolved for a meeting, with the identity used to keep it
 /// bound to exactly one meeting.
@@ -61,7 +71,12 @@ impl CalendarBinding {
         // event's natural identity — an event is the same event when its
         // title and exact window match.
         let key = if event.id.is_empty() {
-            format!("{}|{}|{}", event.title, event.start, event.end)
+            format!(
+                "{}|{}|{}",
+                event.title,
+                timestamp_key_part(&event.start),
+                timestamp_key_part(&event.end)
+            )
         } else {
             event.id.clone()
         };
@@ -86,7 +101,6 @@ pub(crate) fn find_overlapping_calendar_event(
     events: &[CalendarEventSignal],
     now: DateTime<Utc>,
 ) -> Option<CalendarBinding> {
-    let lead = chrono::Duration::seconds(CALENDAR_JOIN_LEAD_SECS);
     let mut best: Option<((u8, i64), &CalendarEventSignal)> = None;
 
     for event in events {
@@ -104,7 +118,7 @@ pub(crate) fn find_overlapping_calendar_event(
 
         let rank = if start <= now && end >= now {
             0 // in progress
-        } else if start > now && start <= now + lead {
+        } else if start > now && start <= now + CALENDAR_JOIN_LEAD {
             1 // about to start, we joined early
         } else {
             continue;
