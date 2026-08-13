@@ -64,6 +64,15 @@ struct ShortcutReminderPreview {
             ShortcutReminderController.shared.setPreviewExpanded(true)
         }
 
+        if arguments.contains("--drag-stage") {
+            // Hold the stage open so it can be looked at. `--highlight` picks
+            // which landing pad reads as the one the pill would snap to.
+            let highlight = requestedHighlight(from: arguments)
+            DispatchQueue.main.async {
+                ShortcutReminderController.shared.setPreviewDragStage(highlight: highlight)
+            }
+        }
+
         if arguments.contains("--notification") {
             // Same shape `/notify` sends for a detected meeting, so the preview
             // exercises the real parse and action plumbing.
@@ -118,6 +127,12 @@ struct ShortcutReminderPreview {
             return OverlayAnchor.topCenter.rawValue
         }
         return anchor.rawValue
+    }
+
+    private static func requestedHighlight(from arguments: [String]) -> OverlayAnchor? {
+        guard let flag = arguments.firstIndex(of: "--highlight"),
+              arguments.indices.contains(flag + 1) else { return nil }
+        return OverlayAnchor(rawValue: arguments[flag + 1])
     }
 
     private static func requestedSize(from arguments: [String]) -> String {
