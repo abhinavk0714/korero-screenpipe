@@ -34,7 +34,12 @@ impl Rect {
         px >= self.x && px < self.right() && py >= self.y && py < self.bottom()
     }
     pub fn inset(&self, dx: f32, dy: f32) -> Rect {
-        Rect::new(self.x + dx, self.y + dy, self.w - dx * 2.0, self.h - dy * 2.0)
+        Rect::new(
+            self.x + dx,
+            self.y + dy,
+            self.w - dx * 2.0,
+            self.h - dy * 2.0,
+        )
     }
     pub fn offset(&self, dx: f32, dy: f32) -> Rect {
         Rect::new(self.x + dx, self.y + dy, self.w, self.h)
@@ -165,7 +170,11 @@ pub fn compute(state: &OverlayState) -> Layout {
     // Blocks stacked away from the screen edge, in edge-outward order.
     let mut blocks: Vec<(Block, f32, f32)> = vec![(Block::Primary, pw, ph)];
     if state.shows_dock() {
-        blocks.push((Block::Disclosure, BASE_EXPANDED_W * s, BASE_DISCLOSURE_H * s));
+        blocks.push((
+            Block::Disclosure,
+            BASE_EXPANDED_W * s,
+            BASE_DISCLOSURE_H * s,
+        ));
     }
     if state.shows_transcript() {
         blocks.push((
@@ -275,21 +284,11 @@ fn dock_cells(dock: Rect, s: f32) -> (Vec<(Control, Rect)>, Vec<Rect>) {
         cells.push((c, Rect::new(x, dock.y, cell_w, dock.h)));
         x += cell_w;
     }
-    dividers.push(Rect::new(
-        x,
-        dock.y + 4.0 * s,
-        divider_w,
-        dock.h - 8.0 * s,
-    ));
+    dividers.push(Rect::new(x, dock.y + 4.0 * s, divider_w, dock.h - 8.0 * s));
     x += divider_w;
     cells.push((Control::Audio, Rect::new(x, dock.y, cell_w, dock.h)));
     x += cell_w;
-    dividers.push(Rect::new(
-        x,
-        dock.y + 4.0 * s,
-        divider_w,
-        dock.h - 8.0 * s,
-    ));
+    dividers.push(Rect::new(x, dock.y + 4.0 * s, divider_w, dock.h - 8.0 * s));
     x += divider_w;
     cells.push((
         Control::Settings,
@@ -525,7 +524,10 @@ mod tests {
             ..Default::default()
         })
         .primary;
-        assert!((large.w / small.w - 1.2).abs() < 0.01, "chip grows 20% at 2x");
+        assert!(
+            (large.w / small.w - 1.2).abs() < 0.01,
+            "chip grows 20% at 2x"
+        );
 
         let small_dock = compute(&hovered()).primary;
         let large_dock = compute(&OverlayState {

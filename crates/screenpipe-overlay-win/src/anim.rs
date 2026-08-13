@@ -137,7 +137,10 @@ mod tests {
         }
         assert!(!eq.is_settling(), "meter must stop asking for redraws");
         for h in eq.heights(false, 0.0) {
-            assert!(h <= 0.07, "silent meter should rest at the baseline, got {h}");
+            assert!(
+                h <= 0.07,
+                "silent meter should rest at the baseline, got {h}"
+            );
         }
     }
 

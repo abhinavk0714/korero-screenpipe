@@ -13,14 +13,12 @@
 use std::time::Duration;
 
 use crate::anim::Equalizer;
-use crate::snapshot::{
-    capture_desktop, write_bgra_png, write_png, Backdrop, DesktopShot,
-};
+use crate::render::Renderer;
+use crate::snapshot::{capture_desktop, write_bgra_png, write_png, Backdrop, DesktopShot};
 use crate::state::{
     Anchor, Control, Health, Notification, NotificationAction, OverlaySize, OverlayState,
     TranscriptItem,
 };
-use crate::render::Renderer;
 use crate::window::Overlay;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::HiDpi::{
@@ -301,10 +299,16 @@ pub fn run() -> windows::core::Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
-        Some("shots") => shots(args.get(2).map(String::as_str).unwrap_or("target/overlay-shots")),
-        Some("live-shots") => {
-            live_shots(args.get(2).map(String::as_str).unwrap_or("target/overlay-live"))
-        }
+        Some("shots") => shots(
+            args.get(2)
+                .map(String::as_str)
+                .unwrap_or("target/overlay-shots"),
+        ),
+        Some("live-shots") => live_shots(
+            args.get(2)
+                .map(String::as_str)
+                .unwrap_or("target/overlay-live"),
+        ),
         Some("live") => {
             live();
             Ok(())

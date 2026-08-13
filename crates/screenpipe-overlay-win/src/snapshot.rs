@@ -12,13 +12,13 @@
 
 use windows::core::{Interface, Result, GUID, PCWSTR};
 use windows::Win32::Foundation::GENERIC_WRITE;
+use windows::Win32::Graphics::Direct2D::Common::D2D_SIZE_U;
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
 use windows::Win32::Graphics::Direct2D::{
     ID2D1RenderTarget, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_PROPERTIES,
     D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_NONE,
 };
-use windows::Win32::Graphics::Direct2D::Common::D2D_SIZE_U;
 use windows::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC,
     SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC, SRCCOPY,
@@ -73,7 +73,17 @@ pub fn capture_desktop() -> Result<DesktopShot> {
         let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
         let dib: HBITMAP = CreateDIBSection(mem, &info, DIB_RGB_COLORS, &mut bits, None, 0)?;
         let old = SelectObject(mem, dib);
-        let _ = BitBlt(mem, 0, 0, width as i32, height as i32, screen, 0, 0, SRCCOPY);
+        let _ = BitBlt(
+            mem,
+            0,
+            0,
+            width as i32,
+            height as i32,
+            screen,
+            0,
+            0,
+            SRCCOPY,
+        );
 
         let len = (width * height * 4) as usize;
         let mut bgra = vec![0u8; len];
@@ -124,13 +134,8 @@ pub fn write_bgra_png(w: u32, h: u32, bgra: &[u8], path: &str) -> Result<()> {
     unsafe {
         let wic: IWICImagingFactory =
             CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
-        let source = wic.CreateBitmapFromMemory(
-            w,
-            h,
-            &GUID_WICPixelFormat32bppPBGRA,
-            w * 4,
-            bgra,
-        )?;
+        let source =
+            wic.CreateBitmapFromMemory(w, h, &GUID_WICPixelFormat32bppPBGRA, w * 4, bgra)?;
         encode_png(&wic, &source, w, h, path)
     }
 }
@@ -186,7 +191,8 @@ pub fn write_png(
     unsafe {
         let wic: IWICImagingFactory =
             CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
-        let target = wic.CreateBitmap(w, h, &GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad)?;
+        let target =
+            wic.CreateBitmap(w, h, &GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad)?;
 
         let props = D2D1_RENDER_TARGET_PROPERTIES {
             r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
@@ -196,7 +202,9 @@ pub fn write_png(
             usage: D2D1_RENDER_TARGET_USAGE_NONE,
             minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
         };
-        let rt: ID2D1RenderTarget = renderer.factory.CreateWicBitmapRenderTarget(&target, &props)?;
+        let rt: ID2D1RenderTarget = renderer
+            .factory
+            .CreateWicBitmapRenderTarget(&target, &props)?;
         renderer.invalidate_device();
 
         rt.BeginDraw();

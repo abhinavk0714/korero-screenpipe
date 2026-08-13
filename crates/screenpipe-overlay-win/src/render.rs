@@ -31,8 +31,8 @@ use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
     DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-    DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
-    DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
+    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Imaging::{
@@ -127,8 +127,7 @@ impl Renderer {
     pub fn new() -> Result<Renderer> {
         let factory: ID2D1Factory =
             unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)? };
-        let dwrite: IDWriteFactory =
-            unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
+        let dwrite: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
         let wic: IWICImagingFactory =
             unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)? };
 
@@ -152,7 +151,13 @@ impl Renderer {
         *self.app_icon.borrow_mut() = None;
     }
 
-    fn format(&self, family: Family, size: f32, weight: DWRITE_FONT_WEIGHT, align: Align) -> IDWriteTextFormat {
+    fn format(
+        &self,
+        family: Family,
+        size: f32,
+        weight: DWRITE_FONT_WEIGHT,
+        align: Align,
+    ) -> IDWriteTextFormat {
         let key = (family, (size * 100.0) as u32, weight.0 as u32, align);
         if let Some(f) = self.formats.borrow().get(&key) {
             return f.clone();
@@ -568,7 +573,13 @@ impl Renderer {
         let cx = r.x + 12.0 * s;
         for i in 0..3 {
             let a = 0.25 + 0.25 * ((i as f32) + 1.0);
-            self.dot(rt, cx + i as f32 * 4.0 * s, r.y + r.h / 2.0, 1.4 * s, white(a));
+            self.dot(
+                rt,
+                cx + i as f32 * 4.0 * s,
+                r.y + r.h / 2.0,
+                1.4 * s,
+                white(a),
+            );
         }
 
         let label = if state.health_detail.is_empty() {
@@ -692,11 +703,13 @@ impl Renderer {
             ICON_CLOSE,
             8.0 * s,
             dismiss,
-            white(if state.hovered_control == Some(Control::NotificationDismiss) {
-                0.9
-            } else {
-                0.55
-            }),
+            white(
+                if state.hovered_control == Some(Control::NotificationDismiss) {
+                    0.9
+                } else {
+                    0.55
+                },
+            ),
         );
 
         let brush = self.brush(rt, white(0.42));
@@ -711,7 +724,13 @@ impl Renderer {
 
         let pad = 10.0 * s;
         let header = Rect::new(r.x + pad, r.y + 4.0 * s, r.w - pad * 2.0, 20.0 * s);
-        self.dot(rt, header.x + 3.0 * s, header.y + header.h / 2.0, 3.0 * s, red(1.0));
+        self.dot(
+            rt,
+            header.x + 3.0 * s,
+            header.y + header.h / 2.0,
+            3.0 * s,
+            red(1.0),
+        );
         self.mono_text(
             rt,
             "live meeting",
@@ -726,12 +745,7 @@ impl Renderer {
         let pin_rect = Rect::new(r.right() - btn - 6.0 * s, r.y + 4.0 * s, btn, btn);
         let note_rect = Rect::new(r.right() - btn * 2.0 - 10.0 * s, r.y + 4.0 * s, btn, btn);
         for (rect, glyph, control, on) in [
-            (
-                note_rect,
-                ICON_NOTE,
-                Control::TranscriptOpenNote,
-                false,
-            ),
+            (note_rect, ICON_NOTE, Control::TranscriptOpenNote, false),
             (
                 pin_rect,
                 if state.transcript_pinned {
@@ -766,7 +780,9 @@ impl Renderer {
         // the webview card.
         let line_h = 26.0 * s;
         let body_top = r.y + 32.0 * s;
-        let capacity = ((r.bottom() - 6.0 * s - body_top) / line_h).floor().max(0.0) as usize;
+        let capacity = ((r.bottom() - 6.0 * s - body_top) / line_h)
+            .floor()
+            .max(0.0) as usize;
         let start = state.transcript.len().saturating_sub(capacity);
         for (i, item) in state.transcript[start..].iter().enumerate() {
             let y = body_top + i as f32 * line_h;
@@ -800,7 +816,10 @@ impl Renderer {
 fn pick_family(dwrite: &IDWriteFactory, candidates: &[&str]) -> HSTRING {
     unsafe {
         let mut collection = None;
-        if dwrite.GetSystemFontCollection(&mut collection, false).is_ok() {
+        if dwrite
+            .GetSystemFontCollection(&mut collection, false)
+            .is_ok()
+        {
             let Some(collection) = collection else {
                 return HSTRING::from(candidates[0]);
             };
@@ -828,7 +847,8 @@ unsafe fn decode_png(
 ) -> Result<ID2D1Bitmap> {
     let stream = wic.CreateStream()?;
     stream.InitializeFromMemory(bytes)?;
-    let decoder = wic.CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnLoad)?;
+    let decoder =
+        wic.CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnLoad)?;
     let frame = decoder.GetFrame(0)?;
     let converter = wic.CreateFormatConverter()?;
     converter.Initialize(
@@ -907,7 +927,10 @@ pub fn disclosure_hint(state: &OverlayState) -> String {
         Some(Control::Settings) => "overlay settings".into(),
         Some(Control::Audio) => {
             if state.audio_active {
-                format!("listening · {}%", (state.speech_ratio * 100.0).round() as i32)
+                format!(
+                    "listening · {}%",
+                    (state.speech_ratio * 100.0).round() as i32
+                )
             } else {
                 "mic idle".into()
             }

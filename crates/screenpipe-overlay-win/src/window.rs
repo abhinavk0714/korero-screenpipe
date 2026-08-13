@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex};
 use windows::core::Result;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Direct2D::{
-    ID2D1DCRenderTarget, ID2D1RenderTarget,
-    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
+    ID2D1DCRenderTarget, ID2D1RenderTarget, D2D1_FEATURE_LEVEL_DEFAULT,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
@@ -30,8 +30,8 @@ use windows::Win32::Graphics::Gdi::{
     AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS,
     HBITMAP, HDC, HGDIOBJ,
 };
-use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFO};
+use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -41,9 +41,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW,
     GetWindowLongPtrW, GetWindowRect, KillTimer, PostMessageW, PostQuitMessage, RegisterClassExW,
-    SetTimer,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW,
-    CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, MSG, SWP_NOACTIVATE, SWP_NOSIZE, SW_HIDE,
+    SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, UpdateLayeredWindow,
+    CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, MSG, SWP_NOACTIVATE, SWP_NOSIZE, SW_HIDE,
     SW_SHOWNOACTIVATE, ULW_ALPHA, WM_APP, WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     WS_POPUP,
@@ -315,15 +314,7 @@ fn reposition(hwnd: HWND) {
             return;
         }
         let (x, y) = origin_for(hwnd, &ctx.layout, ctx.state.anchor);
-        let _ = SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            x,
-            y,
-            0,
-            0,
-            SWP_NOSIZE | SWP_NOACTIVATE,
-        );
+        let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
     }
 }
 
@@ -404,8 +395,7 @@ fn repaint(hwnd: HWND) {
 
         let target: ID2D1RenderTarget = rt.clone().into();
         target.BeginDraw();
-        ctx.renderer
-            .draw(&target, &ctx.state, &ctx.layout, &ctx.eq);
+        ctx.renderer.draw(&target, &ctx.state, &ctx.layout, &ctx.eq);
         let _ = target.EndDraw(None, None);
 
         let size = SIZE { cx: w, cy: h };
@@ -547,10 +537,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                         let scale = dpi_scale(hwnd);
                         let mut pt = POINT::default();
                         let _ = GetCursorPos(&mut pt);
-                        ctx.drag_offset = (
-                            pt.x - (ox * scale) as i32,
-                            pt.y - (oy * scale) as i32,
-                        );
+                        ctx.drag_offset = (pt.x - (ox * scale) as i32, pt.y - (oy * scale) as i32);
                         let _ = SetWindowPos(
                             hwnd,
                             HWND_TOPMOST,
@@ -674,4 +661,3 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         }
     }
 }
-
