@@ -2254,6 +2254,27 @@ fn normalize_metadata_value(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Whether this capture still needs the platform's lightweight focused-app
+/// query, or whether the trigger already carries the answer.
+///
+/// An app-switch trigger normally names the app it switched to, which is why
+/// the extra blocking lookup was skipped for it. But
+/// `capture_trigger_kind_with_ignored` builds the trigger with
+/// `unwrap_or_default()`, so a UI event that arrived without an app name
+/// yields `AppSwitch { app_name: "" }`. `resolve_capture_metadata` then
+/// correctly refuses to write that empty string — and with the lookup skipped
+/// too, the frame lands with no attribution at all: OCR text, no app, no
+/// window (#6164). `/activity-summary` drops those rows outright, so the time
+/// does not merely go unattributed, it disappears.
+///
+/// Only an app switch that actually names an app is authoritative.
+pub(crate) fn should_query_lightweight_focus(trigger: &CaptureTrigger) -> bool {
+    match trigger {
+        CaptureTrigger::AppSwitch { app_name, .. } => app_name.trim().is_empty(),
+        _ => true,
+    }
+}
+
 fn resolve_capture_metadata(
     tree_snapshot: Option<&screenpipe_a11y::tree::TreeSnapshot>,
     trigger: &CaptureTrigger,
@@ -2313,30 +2334,40 @@ fn resolve_capture_metadata_with_policy(
         }
     }
 
+    // Trigger names go through the same normalization as every other source:
+    // a whitespace-only name is as useless as a blank one, and
+    // `/activity-summary` only filters on `!= ''`, so "   " would otherwise
+    // land in the database as a phantom app. It must also agree with
+    // `should_query_lightweight_focus` — a name discarded here has to have
+    // been replaced by the platform lookup, or the frame ends up unattributed.
     match trigger {
         CaptureTrigger::AppSwitch {
             app_name: trigger_app_name,
             ..
-        } if !trigger_app_name.is_empty() => {
-            if app_name.as_deref() != Some(trigger_app_name.as_str()) {
-                debug!(
-                    "focused app mismatch on app_switch: trigger='{}', tree={:?}; using trigger value",
-                    trigger_app_name, app_name
-                );
+        } => {
+            if let Some(name) = normalize_metadata_value(Some(trigger_app_name.as_str())) {
+                if app_name.as_deref() != Some(name.as_str()) {
+                    debug!(
+                        "focused app mismatch on app_switch: trigger='{}', tree={:?}; using trigger value",
+                        trigger_app_name, app_name
+                    );
+                }
+                app_name = Some(name);
             }
-            app_name = Some(trigger_app_name.clone());
         }
         CaptureTrigger::WindowFocus {
             window_name: trigger_window_name,
             ..
-        } if !trigger_window_name.is_empty() => {
-            if window_name.as_deref() != Some(trigger_window_name.as_str()) {
-                debug!(
-                    "focused window mismatch on window_focus: trigger='{}', tree={:?}; using trigger value",
-                    trigger_window_name, window_name
-                );
+        } => {
+            if let Some(name) = normalize_metadata_value(Some(trigger_window_name.as_str())) {
+                if window_name.as_deref() != Some(name.as_str()) {
+                    debug!(
+                        "focused window mismatch on window_focus: trigger='{}', tree={:?}; using trigger value",
+                        trigger_window_name, window_name
+                    );
+                }
+                window_name = Some(name);
             }
-            window_name = Some(trigger_window_name.clone());
         }
         _ => {}
     }
@@ -2762,10 +2793,9 @@ async fn do_capture(
     // the name directly; for all other triggers (visual change, idle, manual)
     // we do a lightweight platform query. This ensures the walk budget applies
     // to ALL captures, not just app switches.
-    let lightweight_focused_metadata = if monitor_hosts_focus {
-        match trigger {
-            CaptureTrigger::AppSwitch { .. } => None,
-            _ => match tokio::time::timeout(
+    let lightweight_focused_metadata =
+        if monitor_hosts_focus && should_query_lightweight_focus(trigger) {
+            match tokio::time::timeout(
                 Duration::from_secs(1),
                 tokio::task::spawn_blocking(get_focused_metadata_lightweight),
             )
@@ -2780,11 +2810,10 @@ async fn do_capture(
                     debug!("focused metadata lookup timed out");
                     None
                 }
-            },
-        }
-    } else {
-        None
-    };
+            }
+        } else {
+            None
+        };
     let trigger_app = if monitor_hosts_focus {
         match trigger {
             CaptureTrigger::AppSwitch { app_name, .. } => Some(app_name.clone()),
@@ -3636,6 +3665,109 @@ mod tests {
         assert_eq!(CaptureTrigger::VisualChange.as_str(), "visual_change");
         assert_eq!(CaptureTrigger::Idle.as_str(), "idle");
         assert_eq!(CaptureTrigger::Manual.as_str(), "manual");
+    }
+
+    /// #6164: an app-switch trigger is only authoritative when it names an
+    /// app. `capture_trigger_kind_with_ignored` fills the name with
+    /// `unwrap_or_default()`, so a UI event without one produces
+    /// `AppSwitch { app_name: "" }` — and skipping the lightweight lookup for
+    /// it left the frame with no attribution at all.
+    #[test]
+    fn a_named_app_switch_skips_the_lightweight_focus_query() {
+        assert!(!should_query_lightweight_focus(
+            &CaptureTrigger::AppSwitch {
+                app_name: "Arc".into(),
+                target: None,
+            }
+        ));
+    }
+
+    #[test]
+    fn an_unnamed_app_switch_still_asks_the_platform_who_is_focused() {
+        for blank in ["", " ", "\t", "\n  "] {
+            assert!(
+                should_query_lightweight_focus(&CaptureTrigger::AppSwitch {
+                    app_name: blank.into(),
+                    target: Some((10, 20)),
+                }),
+                "AppSwitch with {blank:?} carries no usable name — it must not \
+                 suppress the only remaining metadata source",
+            );
+        }
+    }
+
+    /// Every other trigger already queried; that must not regress.
+    #[test]
+    fn every_other_trigger_queries_the_lightweight_focus() {
+        for trigger in [
+            CaptureTrigger::WindowFocus {
+                window_name: "Inbox".into(),
+                target: None,
+            },
+            CaptureTrigger::WindowFocus {
+                window_name: String::new(),
+                target: None,
+            },
+            CaptureTrigger::Click { x: 1, y: 2 },
+            CaptureTrigger::TypingPause,
+            CaptureTrigger::ScrollStop,
+            CaptureTrigger::KeyPress,
+            CaptureTrigger::Clipboard,
+            CaptureTrigger::VisualChange,
+            CaptureTrigger::Idle,
+            CaptureTrigger::Manual,
+        ] {
+            assert!(
+                should_query_lightweight_focus(&trigger),
+                "{} must keep querying focused metadata",
+                trigger.as_str(),
+            );
+        }
+    }
+
+    /// The two halves have to agree: whenever the resolver would discard the
+    /// trigger's app name, the capture must have asked the platform instead.
+    /// Otherwise the frame is written with a NULL app_name and
+    /// `/activity-summary` drops it.
+    #[test]
+    fn a_trigger_name_is_either_used_or_replaced_by_a_lookup() {
+        for name in ["Arc", "", "   "] {
+            let trigger = CaptureTrigger::AppSwitch {
+                app_name: name.into(),
+                target: None,
+            };
+            // What the resolver produces with no tree and no lightweight data.
+            let (resolved, _, _, _) = resolve_capture_metadata(None, &trigger, None);
+            let trigger_name_was_used = resolved.is_some();
+            assert_eq!(
+                trigger_name_was_used,
+                !should_query_lightweight_focus(&trigger),
+                "AppSwitch {name:?}: trigger name used = {trigger_name_was_used}, \
+                 but lookup skipped = {}",
+                !should_query_lightweight_focus(&trigger),
+            );
+        }
+    }
+
+    /// End to end through the resolver: a blank app-switch plus the lookup
+    /// this change re-enables produces an attributed frame.
+    #[test]
+    fn an_unnamed_app_switch_recovers_attribution_from_the_lookup() {
+        let trigger = CaptureTrigger::AppSwitch {
+            app_name: String::new(),
+            target: None,
+        };
+        assert!(should_query_lightweight_focus(&trigger));
+
+        let metadata = LightweightFocusedMetadata {
+            app_name: Some("Explorer".into()),
+            window_name: Some("Downloads".into()),
+        };
+        let (app_name, window_name, _, _) =
+            resolve_capture_metadata(None, &trigger, Some(&metadata));
+
+        assert_eq!(app_name.as_deref(), Some("Explorer"));
+        assert_eq!(window_name.as_deref(), Some("Downloads"));
     }
 
     #[test]
