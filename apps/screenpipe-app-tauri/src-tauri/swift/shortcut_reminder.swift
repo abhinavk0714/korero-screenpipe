@@ -438,31 +438,51 @@ enum OverlayHorizontal {
     case trailing
 }
 
-/// Discrete places the pill can be pinned to. A floating control that lands
-/// wherever the pointer let go looks dropped; landing on a corner or an edge
-/// centre looks placed.
+/// Discrete places the pill can be pinned to: the centre of each screen edge.
+///
+/// Corners were tried and dropped. Six targets over one screen meant two of
+/// them were always a near-tie, so a drop had to be aimed rather than thrown,
+/// and a corner puts the pill where menu bar extras and desktop icons already
+/// live. Four edge centres are unambiguous at a glance and each one is the
+/// obvious "park it out of the way on this side".
 enum OverlayAnchor: String, CaseIterable {
-    case topLeft = "top-left"
     case topCenter = "top-center"
-    case topRight = "top-right"
-    case bottomLeft = "bottom-left"
+    case rightCenter = "right-center"
     case bottomCenter = "bottom-center"
-    case bottomRight = "bottom-right"
+    case leftCenter = "left-center"
 
-    /// Top anchors keep the pill at the panel top so the disclosure, dock menu
-    /// and notification all have room to open downward, and vice versa.
+    /// Whether the pill sits at the top of its panel, so the disclosure, dock
+    /// menu and notification all open downward. The side anchors are vertically
+    /// centred and have room either way, so they open downward too.
     var pillAtPanelTop: Bool {
+        self != .bottomCenter
+    }
+
+    /// Which side of the panel the pill hugs. Side anchors pin to their edge so
+    /// the dock expands inward; top and bottom stay centred.
+    var horizontal: OverlayHorizontal {
         switch self {
-        case .topLeft, .topCenter, .topRight: return true
-        case .bottomLeft, .bottomCenter, .bottomRight: return false
+        case .leftCenter: return .leading
+        case .rightCenter: return .trailing
+        case .topCenter, .bottomCenter: return .center
         }
     }
 
-    var horizontal: OverlayHorizontal {
-        switch self {
-        case .topLeft, .bottomLeft: return .leading
-        case .topCenter, .bottomCenter: return .center
-        case .topRight, .bottomRight: return .trailing
+    /// Whether the pill is centred on the vertical axis rather than pinned to
+    /// the top or bottom edge.
+    var pillAtVerticalCentre: Bool {
+        self == .leftCenter || self == .rightCenter
+    }
+
+    /// Anchors that existed before the edge-centre set. Kept so a stored corner
+    /// resolves instead of silently falling back to the default; the vertical
+    /// half is what people notice, so a corner keeps its top or bottom.
+    static func fromStored(_ raw: String) -> OverlayAnchor? {
+        if let exact = OverlayAnchor(rawValue: raw) { return exact }
+        switch raw {
+        case "top-left", "top-right": return .topCenter
+        case "bottom-left", "bottom-right": return .bottomCenter
+        default: return nil
         }
     }
 }
@@ -511,9 +531,14 @@ func anchorPillCenter(
     case .center: x = visible.midX
     case .trailing: x = visible.maxX - margin - halfW
     }
-    let y = anchor.pillAtPanelTop
-        ? visible.maxY - margin - halfH
-        : visible.minY + margin + halfH
+    let y: CGFloat
+    if anchor.pillAtVerticalCentre {
+        y = visible.midY
+    } else if anchor.pillAtPanelTop {
+        y = visible.maxY - margin - halfH
+    } else {
+        y = visible.minY + margin + halfH
+    }
     return NSPoint(x: x, y: y)
 }
 
@@ -540,8 +565,15 @@ func dragPadRect(
     return NSRect(x: x, y: y, width: rect.width, height: rect.height)
 }
 
-/// Anchor whose resting spot is closest to where the pill was dropped. Ties go
-/// to the current anchor so a stray nudge never re-pins the pill.
+/// Edge the pill was dropped nearest to. Ties go to the current anchor so a
+/// stray nudge never re-pins the pill.
+///
+/// Distance is measured to the edge, not to the anchor point. Measuring to the
+/// point makes the side targets nearly unreachable on a wide screen: on
+/// 1920x1050 the centre of the desktop is 513pt from the top and bottom
+/// anchors but 945pt from the side ones, so "drop it on the left" only works
+/// within a sliver hugging the left edge. Edge distance splits the screen on
+/// the diagonals instead, which is what docking to an edge should mean.
 func nearestAnchor(
     to pillCenter: NSPoint,
     in visible: NSRect,
@@ -550,10 +582,14 @@ func nearestAnchor(
     current: OverlayAnchor
 ) -> OverlayAnchor {
     func distance(_ anchor: OverlayAnchor) -> CGFloat {
-        let target = anchorPillCenter(
-            anchor, in: visible, pillSize: pillSize, scale: scale
-        )
-        return hypot(target.x - pillCenter.x, target.y - pillCenter.y)
+        // Absolute, so a drop past an edge still reads as nearest to it rather
+        // than going negative and beating every other edge.
+        switch anchor {
+        case .topCenter: return abs(visible.maxY - pillCenter.y)
+        case .bottomCenter: return abs(pillCenter.y - visible.minY)
+        case .leftCenter: return abs(pillCenter.x - visible.minX)
+        case .rightCenter: return abs(visible.maxX - pillCenter.x)
+        }
     }
     var best = current
     var bestDistance = distance(current)
@@ -1739,7 +1775,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         if let s = dict["chat"] { chatShortcut = prettifyShortcut(s) }
         if let s = dict["search"] { searchShortcut = prettifyShortcut(s) }
         if let s = dict["shortcutOverlaySize"] { setOverlayScale(s) }
-        if let s = dict["shortcutOverlayAnchor"], let anchor = OverlayAnchor(rawValue: s) {
+        if let s = dict["shortcutOverlayAnchor"], let anchor = OverlayAnchor.fromStored(s) {
             overlayAnchor = anchor
         }
         // Empty means "no display pinned yet", so fall back to the cursor.

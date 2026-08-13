@@ -35,7 +35,7 @@ import {
   anchorAtTop,
   anchorHorizontal,
   DEFAULT_OVERLAY_ANCHOR,
-  isOverlayAnchor,
+  overlayAnchorFromStored,
   type OverlayAnchor,
 } from "./overlay-anchor";
 
@@ -106,9 +106,13 @@ export default function ShortcutReminderPage() {
       setOverlayScale(s === "large" ? 2 : s === "medium" ? 1.5 : 1);
     }
 
-    if (isOverlayAnchor(settings.shortcutOverlayAnchor)) {
-      setAnchor(settings.shortcutOverlayAnchor);
-    }
+    // Migrating rather than validating: a store written before the edge-centre
+    // set still holds a corner, and Rust already opens that window on the
+    // matching edge centre. Falling back to the default here instead would
+    // grow the dock off the bottom of the screen and hand the drag the wrong
+    // tie-break.
+    const stored = overlayAnchorFromStored(settings.shortcutOverlayAnchor);
+    if (stored) setAnchor(stored);
   }, []);
 
   // Read shortcuts via the store plugin. This page used to read
@@ -221,8 +225,10 @@ export default function ShortcutReminderPage() {
       // Serialize resize requests so quick enter/leave transitions cannot
       // apply out of order. The pill has to stay put while the hit area grows
       // from the 22x16 resting icon to the expanded dock, so the window grows
-      // away from whichever edge the pill is pinned to. Growing downward from a
-      // bottom anchor, or centring off a corner, would push the dock off screen.
+      // away from whichever edge the pill is pinned to: downward from the top
+      // and from the vertically centred sides, upward from the bottom, and
+      // inward from a side edge rather than out past it. Growing the other way
+      // would push the dock off screen.
       resizeQueue.current = resizeQueue.current
         .then(async () => {
           const appWindow = getCurrentWindow();
@@ -669,15 +675,20 @@ export default function ShortcutReminderPage() {
     WebkitAppRegion: "no-drag",
   } as React.CSSProperties;
 
+  const dockAbove = anchorAtTop(anchor);
+
   return (
     <div
       data-testid="shortcut-reminder-root"
+      data-anchor={anchor}
       className="w-full h-full flex flex-col items-center"
       style={{
         background: "transparent",
-        // Pinned to a bottom edge the window grows upward, so the disclosure
+        // Pinned to the bottom edge the window grows upward, so the disclosure
         // row has to sit above the dock or it reads as detached from the pill.
-        flexDirection: anchorAtTop(anchor) ? "column" : "column-reverse",
+        // The side anchors ride the vertical middle with room either way, so
+        // they keep the dock on top like the top anchor does.
+        flexDirection: dockAbove ? "column" : "column-reverse",
       }}
       onMouseLeave={() => {
         setExpanded(false);
@@ -766,7 +777,12 @@ export default function ShortcutReminderPage() {
         style={{
           width: `${160 * overlayScale}px`,
           height: `${26 * overlayScale}px`,
-          marginTop: `${4 * overlayScale}px`,
+          // The gap belongs between the two rows, and `column-reverse` does not
+          // flip which physical side a margin lands on. Keeping it on `top`
+          // when the disclosure is drawn above the dock butts the two together
+          // and leaves the gap dangling off the end of the stack.
+          marginTop: dockAbove ? `${4 * overlayScale}px` : 0,
+          marginBottom: dockAbove ? 0 : `${4 * overlayScale}px`,
           background: "rgba(0, 0, 0, 0.9)",
           borderRadius: `${4 * overlayScale}px`,
           fontSize: `${fontPx}px`,

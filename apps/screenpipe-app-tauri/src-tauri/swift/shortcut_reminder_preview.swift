@@ -24,7 +24,9 @@ struct ShortcutReminderPreview {
         let arguments = Array(CommandLine.arguments.dropFirst())
         if arguments.contains("--help") || arguments.contains("-h") {
             print("usage: preview-shortcut-overlay.sh [--once] [--expanded] [--meeting] [--notification]")
-            print("       [--size small|medium|large] [--anchor top-left|top-center|...|bottom-right]")
+            print("       [--size small|medium|large]")
+            print("       [--anchor top-center|right-center|bottom-center|left-center]")
+            print("       [--drag-stage [--highlight <anchor>]]")
             print("hover the resting icon to inspect the expanded native dock; drag it to re-pin it")
             print("press Ctrl-C to quit")
             return
@@ -122,7 +124,7 @@ struct ShortcutReminderPreview {
     private static func requestedAnchor(from arguments: [String]) -> String {
         guard let anchorFlag = arguments.firstIndex(of: "--anchor"),
               arguments.indices.contains(anchorFlag + 1),
-              let anchor = OverlayAnchor(rawValue: arguments[anchorFlag + 1])
+              let anchor = OverlayAnchor.fromStored(arguments[anchorFlag + 1])
         else {
             return OverlayAnchor.topCenter.rawValue
         }
@@ -132,7 +134,7 @@ struct ShortcutReminderPreview {
     private static func requestedHighlight(from arguments: [String]) -> OverlayAnchor? {
         guard let flag = arguments.firstIndex(of: "--highlight"),
               arguments.indices.contains(flag + 1) else { return nil }
-        return OverlayAnchor(rawValue: arguments[flag + 1])
+        return OverlayAnchor.fromStored(arguments[flag + 1])
     }
 
     private static func requestedSize(from arguments: [String]) -> String {

@@ -16,18 +16,35 @@
 // stage CSS pixels while dragging, and the target monitor's logical pixels when
 // committing the final position.
 
+// The centre of each screen edge. Corners were tried and dropped: six targets
+// over one screen meant two were always a near-tie, and a corner puts the pill
+// where menu bar extras and desktop icons already live.
 export const OVERLAY_ANCHORS = [
-  "top-left",
   "top-center",
-  "top-right",
-  "bottom-left",
+  "right-center",
   "bottom-center",
-  "bottom-right",
+  "left-center",
 ] as const;
 
 export type OverlayAnchor = (typeof OVERLAY_ANCHORS)[number];
 
 export const DEFAULT_OVERLAY_ANCHOR: OverlayAnchor = "top-center";
+
+/** Anchors from before the edge-centre set. Kept so a stored corner resolves
+ *  instead of silently falling back to the default; the vertical half is what
+ *  people notice, so a corner keeps its top or bottom. */
+const LEGACY_ANCHORS: Record<string, OverlayAnchor> = {
+  "top-left": "top-center",
+  "top-right": "top-center",
+  "bottom-left": "bottom-center",
+  "bottom-right": "bottom-center",
+};
+
+export function overlayAnchorFromStored(value: unknown): OverlayAnchor | null {
+  if (typeof value !== "string") return null;
+  if (isOverlayAnchor(value)) return value;
+  return LEGACY_ANCHORS[value] ?? null;
+}
 
 export type Rect = { x: number; y: number; width: number; height: number };
 export type Point = { x: number; y: number };
@@ -66,17 +83,24 @@ export function anchorMargin(scale: number): number {
   return BASE_ANCHOR_MARGIN * scale;
 }
 
-/** Top anchors keep the pill at the top of the window so the dock and the
- *  disclosure row have room to open downward, and vice versa. */
+/** Whether the pill sits at the top of the window so the dock and the
+ *  disclosure row open downward. The side anchors are vertically centred and
+ *  have room either way, so they open downward too. */
 export function anchorAtTop(anchor: OverlayAnchor): boolean {
-  return anchor.startsWith("top-");
+  return anchor !== "bottom-center";
+}
+
+/** Whether the pill is centred on the vertical axis rather than pinned to the
+ *  top or bottom edge. */
+export function anchorAtVerticalCentre(anchor: OverlayAnchor): boolean {
+  return anchor === "left-center" || anchor === "right-center";
 }
 
 export function anchorHorizontal(
   anchor: OverlayAnchor,
 ): "leading" | "center" | "trailing" {
-  if (anchor.endsWith("-left")) return "leading";
-  if (anchor.endsWith("-right")) return "trailing";
+  if (anchor === "left-center") return "leading";
+  if (anchor === "right-center") return "trailing";
   return "center";
 }
 
@@ -97,9 +121,11 @@ export function anchorPillCenter(
       : horizontal === "trailing"
         ? area.x + area.width - margin - halfW
         : area.x + area.width / 2;
-  const y = anchorAtTop(anchor)
-    ? area.y + margin + halfH
-    : area.y + area.height - margin - halfH;
+  const y = anchorAtVerticalCentre(anchor)
+    ? area.y + area.height / 2
+    : anchorAtTop(anchor)
+      ? area.y + margin + halfH
+      : area.y + area.height - margin - halfH;
   return { x, y };
 }
 
@@ -137,8 +163,14 @@ export function dragPadRect(
   };
 }
 
-/** Anchor whose resting spot is closest to where the pill was dropped. Ties go
- *  to the current anchor so a stray nudge never re-pins the pill. */
+/** Edge the pill was dropped nearest to. Ties go to the current anchor so a
+ *  stray nudge never re-pins the pill.
+ *
+ *  Distance is to the edge, not to the anchor point. Measuring to the point
+ *  makes the side targets nearly unreachable on a wide screen: on 1920x1050 the
+ *  centre of the desktop is 513px from the top and bottom anchors but 945px
+ *  from the side ones. Edge distance splits the screen on its diagonals, which
+ *  is what docking to an edge should mean. */
 export function nearestAnchor(
   pillCenter: Point,
   area: Rect,
@@ -146,9 +178,19 @@ export function nearestAnchor(
   scale: number,
   current: OverlayAnchor,
 ): OverlayAnchor {
+  // Absolute, so a drop past an edge still reads as nearest to it rather than
+  // going negative and beating every other edge.
   const distance = (anchor: OverlayAnchor) => {
-    const target = anchorPillCenter(anchor, area, pill, scale);
-    return Math.hypot(target.x - pillCenter.x, target.y - pillCenter.y);
+    switch (anchor) {
+      case "top-center":
+        return Math.abs(pillCenter.y - area.y);
+      case "bottom-center":
+        return Math.abs(area.y + area.height - pillCenter.y);
+      case "left-center":
+        return Math.abs(pillCenter.x - area.x);
+      case "right-center":
+        return Math.abs(area.x + area.width - pillCenter.x);
+    }
   };
   let best = current;
   let bestDistance = distance(current);

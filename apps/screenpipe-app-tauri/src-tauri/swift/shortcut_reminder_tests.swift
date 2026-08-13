@@ -10,7 +10,7 @@
 //
 // Everything here is a pure function of a rect, a pill size and a scale, which
 // is the part that decides where a dropped pill lands and was previously
-// covered only by Rust tests asserting the six strings round-trip.
+// covered only by Rust tests asserting the anchor strings round-trip.
 
 import Cocoa
 
@@ -57,11 +57,60 @@ private func testAnchorPlacement() {
         case .trailing:
             expectClose(c.x, visible.maxX - 4 - 11, "\(anchor.rawValue) x")
         }
-        let expectedY = anchor.pillAtPanelTop
-            ? visible.maxY - 4 - 8
-            : visible.minY + 4 + 8
+        let expectedY: CGFloat
+        if anchor.pillAtVerticalCentre {
+            expectedY = visible.midY
+        } else if anchor.pillAtPanelTop {
+            expectedY = visible.maxY - 4 - 8
+        } else {
+            expectedY = visible.minY + 4 + 8
+        }
         expectClose(c.y, expectedY, "\(anchor.rawValue) y")
     }
+}
+
+/// Exactly four targets, one per edge, each centred on its own edge.
+private func testEdgeCentreSet() {
+    expect(OverlayAnchor.allCases.count == 4, "expected four anchors")
+
+    let top = anchorPillCenter(.topCenter, in: visible, pillSize: pill, scale: 1)
+    let bottom = anchorPillCenter(.bottomCenter, in: visible, pillSize: pill, scale: 1)
+    let left = anchorPillCenter(.leftCenter, in: visible, pillSize: pill, scale: 1)
+    let right = anchorPillCenter(.rightCenter, in: visible, pillSize: pill, scale: 1)
+
+    // Top and bottom share the horizontal centre line.
+    expectClose(top.x, visible.midX, "top x is centred")
+    expectClose(bottom.x, visible.midX, "bottom x is centred")
+    // Left and right share the vertical centre line.
+    expectClose(left.y, visible.midY, "left y is centred")
+    expectClose(right.y, visible.midY, "right y is centred")
+    // Each hugs its own edge.
+    expect(top.y > visible.midY, "top sits above centre")
+    expect(bottom.y < visible.midY, "bottom sits below centre")
+    expect(left.x < visible.midX, "left sits left of centre")
+    expect(right.x > visible.midX, "right sits right of centre")
+}
+
+/// A stored corner from the previous anchor set still resolves.
+private func testLegacyCornersMigrate() {
+    let migrations: [(String, OverlayAnchor)] = [
+        ("top-left", .topCenter),
+        ("top-right", .topCenter),
+        ("bottom-left", .bottomCenter),
+        ("bottom-right", .bottomCenter),
+    ]
+    for (raw, expected) in migrations {
+        let resolved = OverlayAnchor.fromStored(raw)
+        expect(resolved == expected, "\(raw) should migrate to \(expected.rawValue)")
+    }
+    for anchor in OverlayAnchor.allCases {
+        expect(
+            OverlayAnchor.fromStored(anchor.rawValue) == anchor,
+            "\(anchor.rawValue) should round-trip"
+        )
+    }
+    expect(OverlayAnchor.fromStored("middle") == nil, "unknown anchor must not resolve")
+    expect(OverlayAnchor.fromStored("") == nil, "empty anchor must not resolve")
 }
 
 /// The edge margin used to be a flat 4pt while everything drawn around the
@@ -71,9 +120,12 @@ private func testMarginScales() {
     expectClose(anchorMargin(scale: 2), 8, "margin at 2x")
 
     let big = NSSize(width: 44, height: 32)
-    let c = anchorPillCenter(.topLeft, in: visible, pillSize: big, scale: 2)
-    expectClose(c.x, visible.minX + 8 + 22, "scaled leading x")
-    expectClose(c.y, visible.maxY - 8 - 16, "scaled top y")
+    let left = anchorPillCenter(.leftCenter, in: visible, pillSize: big, scale: 2)
+    expectClose(left.x, visible.minX + 8 + 22, "scaled leading x")
+    expectClose(left.y, visible.midY, "left stays vertically centred")
+
+    let top = anchorPillCenter(.topCenter, in: visible, pillSize: big, scale: 2)
+    expectClose(top.y, visible.maxY - 8 - 16, "scaled top y")
 }
 
 /// Every pad has to stay inside the visible frame. At 2x the inset grows to
@@ -112,18 +164,33 @@ private func testPadStaysOnScreen() {
 }
 
 /// A drop lands on the anchor it is closest to. These are the cases a user
-/// actually produces: near a corner, near an edge centre, and dead centre.
+/// actually produces: near an edge centre, and anywhere along an edge.
 private func testNearestAnchor() {
     let cases: [(NSPoint, OverlayAnchor, String)] = [
-        (NSPoint(x: 40, y: 1020), .topLeft, "near top-left corner"),
         (NSPoint(x: 960, y: 1020), .topCenter, "near top edge centre"),
-        (NSPoint(x: 1880, y: 1020), .topRight, "near top-right corner"),
-        (NSPoint(x: 40, y: 30), .bottomLeft, "near bottom-left corner"),
         (NSPoint(x: 960, y: 30), .bottomCenter, "near bottom edge centre"),
-        (NSPoint(x: 1880, y: 30), .bottomRight, "near bottom-right corner"),
-        // Well inside a quadrant, not near any edge.
-        (NSPoint(x: 300, y: 800), .topLeft, "upper-left quadrant"),
-        (NSPoint(x: 1600, y: 200), .bottomRight, "lower-right quadrant"),
+        (NSPoint(x: 30, y: 525), .leftCenter, "near left edge centre"),
+        (NSPoint(x: 1890, y: 525), .rightCenter, "near right edge centre"),
+        // Anywhere along an edge resolves to that edge, not just its midpoint.
+        (NSPoint(x: 400, y: 1040), .topCenter, "along the top edge"),
+        (NSPoint(x: 1500, y: 20), .bottomCenter, "along the bottom edge"),
+        (NSPoint(x: 20, y: 900), .leftCenter, "high on the left edge"),
+        (NSPoint(x: 1900, y: 150), .rightCenter, "low on the right edge"),
+        // The screen splits on its diagonals, so a side is reachable from well
+        // inside the desktop and not only from a sliver at the edge.
+        (NSPoint(x: 300, y: 525), .leftCenter, "left of centre, mid height"),
+        (NSPoint(x: 1620, y: 525), .rightCenter, "right of centre, mid height"),
+        // A drop dragged past an edge still belongs to that edge.
+        (NSPoint(x: 960, y: 1200), .topCenter, "above the top edge"),
+        (NSPoint(x: -40, y: 525), .leftCenter, "past the left edge"),
+        // Overshooting one edge must not beat a nearer one. One case per edge,
+        // so a missing abs() on any single edge is caught.
+        (NSPoint(x: 1970, y: 1040), .topCenter, "past the right edge, near the top"),
+        (NSPoint(x: -50, y: 1040), .topCenter, "past the left edge, near the top"),
+        (NSPoint(x: 1970, y: 10), .bottomCenter, "past the right edge, near the bottom"),
+        (NSPoint(x: 10, y: 1100), .leftCenter, "above the top edge, near the left"),
+        // AppKit is y-up, so below the bottom edge is a negative y.
+        (NSPoint(x: 10, y: -50), .leftCenter, "below the bottom edge, near the left"),
     ]
     for (point, expected, label) in cases {
         let landed = nearestAnchor(
@@ -136,19 +203,29 @@ private func testNearestAnchor() {
 /// Ties go to the anchor the pill is already on, so a nudge that lands exactly
 /// between two targets never re-pins it.
 private func testTieBreaksToCurrent() {
-    // Equidistant from top-left and top-right by symmetry about the midline.
-    let midline = NSPoint(x: visible.midX, y: visible.maxY - 12)
-    for current in [OverlayAnchor.topLeft, .topRight] {
+    // Dead centre is equidistant from top and bottom, and on a 16:9 desktop
+    // those are the nearest pair. The tie-break must keep whichever edge the
+    // pill is already on.
+    let centre = NSPoint(x: visible.midX, y: visible.midY)
+    for current in [OverlayAnchor.topCenter, .bottomCenter] {
         let landed = nearestAnchor(
-            to: midline, in: visible, pillSize: pill, scale: 1, current: current
+            to: centre, in: visible, pillSize: pill, scale: 1, current: current
         )
-        // top-center is genuinely closest here, so the tie-break must not win
-        // over a strictly nearer anchor.
         expect(
-            landed == .topCenter,
-            "midline drop should reach top-center from \(current.rawValue), got \(landed.rawValue)"
+            landed == current,
+            "centre drop should stay on \(current.rawValue), got \(landed.rawValue)"
         )
     }
+
+    // A strictly nearer anchor still beats the current one.
+    let nearTop = NSPoint(x: visible.midX, y: visible.maxY - 12)
+    let landed = nearestAnchor(
+        to: nearTop, in: visible, pillSize: pill, scale: 1, current: .bottomCenter
+    )
+    expect(
+        landed == .topCenter,
+        "a drop at the top edge should leave bottom-center, got \(landed.rawValue)"
+    )
 
     // Exactly on an anchor, that anchor wins regardless of current.
     for anchor in OverlayAnchor.allCases {
@@ -167,10 +244,7 @@ private func testTieBreaksToCurrent() {
 /// (`SHORTCUT_OVERLAY_ANCHORS` in `commands/native_actions.rs`). Renaming one
 /// silently stops persistence, so pin them here too.
 private func testWireContract() {
-    let expected = [
-        "top-left", "top-center", "top-right",
-        "bottom-left", "bottom-center", "bottom-right",
-    ]
+    let expected = ["top-center", "right-center", "bottom-center", "left-center"]
     let actual = OverlayAnchor.allCases.map(\.rawValue)
     expect(actual == expected, "anchor raw values drifted: \(actual)")
 }
@@ -181,6 +255,8 @@ struct ShortcutReminderTests {
         testAnchorPlacement()
         testMarginScales()
         testPadStaysOnScreen()
+        testEdgeCentreSet()
+        testLegacyCornersMigrate()
         testNearestAnchor()
         testTieBreaksToCurrent()
         testWireContract()

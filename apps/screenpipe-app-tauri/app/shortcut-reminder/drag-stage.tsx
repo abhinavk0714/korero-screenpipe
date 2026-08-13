@@ -5,8 +5,8 @@
 // The drag stage, matching `DragStageView` in
 // `src-tauri/swift/shortcut_reminder.swift`.
 //
-// Without it the six anchors are invisible. The snap is a plain nearest-point
-// partition of the work area, so a drop into open space looks like the pill
+// Without it the four edge anchors are invisible. The snap partitions the work
+// area by distance to each edge, so a drop into open space looks like the pill
 // flew somewhere arbitrary. Drawing the targets makes the same snap read as a
 // choice the user made.
 

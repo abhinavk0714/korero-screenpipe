@@ -27,13 +27,11 @@ const BASE_ANCHOR_MARGIN: f64 = 4.0;
 /// `swift/shortcut_reminder.swift` and `OVERLAY_ANCHORS` in
 /// `app/shortcut-reminder/overlay-anchor.ts`. Anything else is ignored rather
 /// than persisted, so a bad payload can never strand the pill off screen.
-pub(crate) const SHORTCUT_OVERLAY_ANCHORS: [&str; 6] = [
-    "top-left",
+pub(crate) const SHORTCUT_OVERLAY_ANCHORS: [&str; 4] = [
     "top-center",
-    "top-right",
-    "bottom-left",
+    "right-center",
     "bottom-center",
-    "bottom-right",
+    "left-center",
 ];
 
 /// Matches `default_overlay_anchor` in `store.rs`.
@@ -43,6 +41,21 @@ pub(crate) fn validate_overlay_anchor(anchor: &str) -> Option<&str> {
     SHORTCUT_OVERLAY_ANCHORS
         .into_iter()
         .find(|candidate| *candidate == anchor)
+}
+
+/// Resolve a stored anchor, including corners from before the edge-centre set.
+/// A stored corner keeps its vertical half, which is the part people notice.
+/// Used on the read path only: a corner is never persisted again.
+pub(crate) fn resolve_stored_overlay_anchor(anchor: &str) -> Option<&'static str> {
+    match anchor {
+        "top-center" => Some("top-center"),
+        "right-center" => Some("right-center"),
+        "bottom-center" => Some("bottom-center"),
+        "left-center" => Some("left-center"),
+        "top-left" | "top-right" => Some("top-center"),
+        "bottom-left" | "bottom-right" => Some("bottom-center"),
+        _ => None,
+    }
 }
 
 /// Display identifier the webview overlay reports after a drop. Windows and
@@ -127,8 +140,14 @@ pub async fn set_shortcut_overlay_anchor(
     Ok(())
 }
 
+/// The side anchors are vertically centred and have room either way, so only
+/// `bottom-center` pins the pill to the bottom of its window.
 fn anchor_at_top(anchor: &str) -> bool {
-    anchor.starts_with("top-")
+    anchor != "bottom-center"
+}
+
+fn anchor_at_vertical_centre(anchor: &str) -> bool {
+    anchor == "left-center" || anchor == "right-center"
 }
 
 /// Top-left of the resting pill inside `area`, all in the same unit.
@@ -142,18 +161,20 @@ pub(crate) fn anchor_pill_origin(
     pill: (f64, f64),
     scale: f64,
 ) -> (f64, f64) {
-    let anchor = validate_overlay_anchor(anchor).unwrap_or(DEFAULT_OVERLAY_ANCHOR);
+    let anchor = resolve_stored_overlay_anchor(anchor).unwrap_or(DEFAULT_OVERLAY_ANCHOR);
     let (area_x, area_y, area_w, area_h) = area;
     let (pill_w, pill_h) = pill;
     let margin = BASE_ANCHOR_MARGIN * scale;
-    let x = if anchor.ends_with("-left") {
+    let x = if anchor == "left-center" {
         area_x + margin
-    } else if anchor.ends_with("-right") {
+    } else if anchor == "right-center" {
         area_x + area_w - margin - pill_w
     } else {
         area_x + (area_w - pill_w) / 2.0
     };
-    let y = if anchor_at_top(anchor) {
+    let y = if anchor_at_vertical_centre(anchor) {
+        area_y + (area_h - pill_h) / 2.0
+    } else if anchor_at_top(anchor) {
         area_y + margin
     } else {
         area_y + area_h - margin - pill_h
@@ -232,18 +253,43 @@ mod tests {
     const PILL: (f64, f64) = (22.0, 16.0);
 
     #[test]
-    fn anchors_hug_their_corner_with_the_scaled_margin() {
-        assert_eq!(anchor_pill_origin("top-left", AREA, PILL, 1.0), (4.0, 4.0));
+    fn side_anchors_hug_their_edge_and_centre_vertically() {
         assert_eq!(
-            anchor_pill_origin("bottom-right", AREA, PILL, 1.0),
-            (1000.0 - 4.0 - 22.0, 600.0 - 4.0 - 16.0)
+            anchor_pill_origin("left-center", AREA, PILL, 1.0),
+            (4.0, (600.0 - 16.0) / 2.0)
+        );
+        assert_eq!(
+            anchor_pill_origin("right-center", AREA, PILL, 1.0),
+            (1000.0 - 4.0 - 22.0, (600.0 - 16.0) / 2.0)
         );
         // The margin scales with the overlay so a 2x pill sits proportionally
         // off the edge instead of hugging it.
         assert_eq!(
-            anchor_pill_origin("top-left", AREA, (44.0, 32.0), 2.0),
-            (8.0, 8.0)
+            anchor_pill_origin("left-center", AREA, (44.0, 32.0), 2.0),
+            (8.0, (600.0 - 32.0) / 2.0)
         );
+    }
+
+    #[test]
+    fn stored_corners_keep_their_vertical_half() {
+        // Corners predate the edge-centre set. They must resolve rather than
+        // fall through to the default, or an upgrade silently moves the pill.
+        assert_eq!(
+            anchor_pill_origin("top-left", AREA, PILL, 1.0),
+            anchor_pill_origin("top-center", AREA, PILL, 1.0)
+        );
+        assert_eq!(
+            anchor_pill_origin("bottom-right", AREA, PILL, 1.0),
+            anchor_pill_origin("bottom-center", AREA, PILL, 1.0)
+        );
+        assert_eq!(resolve_stored_overlay_anchor("top-right"), Some("top-center"));
+        assert_eq!(
+            resolve_stored_overlay_anchor("bottom-left"),
+            Some("bottom-center")
+        );
+        assert_eq!(resolve_stored_overlay_anchor("middle"), None);
+        // A corner is accepted on read but never written back.
+        assert_eq!(validate_overlay_anchor("top-left"), None);
     }
 
     #[test]
@@ -264,12 +310,12 @@ mod tests {
         // the pill rather than being ignored.
         let offset = (1920.0, 40.0, 1000.0, 560.0);
         assert_eq!(
-            anchor_pill_origin("top-left", offset, PILL, 1.0),
-            (1924.0, 44.0)
+            anchor_pill_origin("left-center", offset, PILL, 1.0),
+            (1924.0, 40.0 + (560.0 - 16.0) / 2.0)
         );
         assert_eq!(
-            anchor_pill_origin("bottom-left", offset, PILL, 1.0),
-            (1924.0, 40.0 + 560.0 - 4.0 - 16.0)
+            anchor_pill_origin("bottom-center", offset, PILL, 1.0),
+            (1920.0 + (1000.0 - 22.0) / 2.0, 40.0 + 560.0 - 4.0 - 16.0)
         );
     }
 
