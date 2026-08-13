@@ -9,8 +9,7 @@ import { Monitor, Mic, Keyboard, Check, RefreshCw } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "@/lib/utils/tauri";
 import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
-import DataDirChip from "./data-dir-chip";
-import CaptureControlNote from "./capture-control-note";
+import TrustDisclosure from "./trust-disclosure";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { motion } from "framer-motion";
 import posthog from "posthog-js";
@@ -396,20 +395,6 @@ export default function PermissionsStep({
         </p>
       </div>
 
-      {/* The locality promise, as evidence rather than prose. The old copy
-          asserted "your recordings are stored on this computer"; the chip
-          names the real directory and opens it, which a user can check.
-          The scoping rationale (storage, never transmission) lives in
-          data-dir-chip.tsx. The prose claim still ships on the login gate,
-          which is the only slide every platform sees — this step auto-advances
-          on non-mac, so the chip alone would leave Windows and Linux told
-          nothing. */}
-      {!screenRestartRequired && (
-        <div className="w-full flex justify-center mb-4">
-          <DataDirChip surface="permissions" />
-        </div>
-      )}
-
       {screenRestartRequired ? (
         <div
           className="w-full max-w-sm border border-foreground px-5 py-5 text-center"
@@ -454,7 +439,12 @@ export default function PermissionsStep({
             ))}
           </div>
 
-          <CaptureControlNote className="mt-4 pt-3 border-t border-border/40 w-full max-w-sm" />
+          {/* Trust sits BELOW the wheel and collapsed by default: the
+              permissions are the task, and the reassurance should not
+              outweigh them. The login gate carries the same promise as plain
+              copy, because this step auto-advances on non-mac and would leave
+              Windows and Linux told nothing. */}
+          <TrustDisclosure surface="permissions" />
 
           {/* Skip link */}
           {showSkip && !allRequiredGranted && (

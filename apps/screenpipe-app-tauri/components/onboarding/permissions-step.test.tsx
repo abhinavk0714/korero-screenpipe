@@ -267,11 +267,20 @@ describe("onboarding permission wheel", () => {
     );
   });
 
-  it("shows the real data dir and opens it, instead of only claiming locality", async () => {
+  it("keeps the path collapsed until asked, then opens it", async () => {
     render(<PermissionsStep handleNextSlide={vi.fn()} />);
+
+    // Collapsed by default: the permissions are the task, the reassurance is
+    // one line until the user wants proof.
+    const summary = await screen.findByTestId("onboarding-trust-summary");
+    expect(summary).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByTestId("onboarding-data-dir-path")).toBeNull();
+
+    fireEvent.click(summary);
 
     const path = await screen.findByTestId("onboarding-data-dir-path");
     expect(path).toHaveTextContent("/Users/test/.screenpipe");
+    expect(summary).toHaveAttribute("aria-expanded", "true");
 
     fireEvent.click(screen.getByTestId("onboarding-data-dir-open"));
 
@@ -292,6 +301,7 @@ describe("onboarding permission wheel", () => {
     });
 
     render(<PermissionsStep handleNextSlide={vi.fn()} />);
+    fireEvent.click(await screen.findByTestId("onboarding-trust-summary"));
 
     const path = await screen.findByTestId("onboarding-data-dir-path");
     expect(path).toHaveTextContent("/Volumes/Vault/screenpipe-data");
@@ -307,47 +317,54 @@ describe("onboarding permission wheel", () => {
     });
 
     render(<PermissionsStep handleNextSlide={vi.fn()} />);
+    fireEvent.click(await screen.findByTestId("onboarding-trust-summary"));
     await screen.findByTestId("onboarding-data-dir-path");
 
     fireEvent.click(screen.getByTestId("onboarding-data-dir-open"));
 
-    const chip = await screen.findByTestId("onboarding-data-dir-chip");
+    const details = await screen.findByTestId("onboarding-trust-details");
     await waitFor(() =>
-      expect(chip).toHaveTextContent("couldn't open the folder")
+      expect(details).toHaveTextContent("couldn't open the folder")
     );
   });
 
-  it("hides the chip rather than inventing a path when the data dir cannot resolve", async () => {
+  it("hides the path rather than inventing one when the data dir cannot resolve", async () => {
     mocks.getActiveDataDir.mockResolvedValue({
       status: "error",
       error: "engine not running",
     });
 
     render(<PermissionsStep handleNextSlide={vi.fn()} />);
-    await screen.findByRole("button", { name: /capture what you say/i });
+    fireEvent.click(await screen.findByTestId("onboarding-trust-summary"));
 
+    // The summary still stands — "stored on this computer" is true whether or
+    // not we can name the folder — but no invented path is shown.
+    await screen.findByTestId("onboarding-trust-details");
     expect(
-      screen.queryByTestId("onboarding-data-dir-chip")
+      screen.queryByTestId("onboarding-data-dir-path")
     ).not.toBeInTheDocument();
   });
 
-  it("names the pause control before asking for any permission", async () => {
+  it("advertises the pause control in the collapsed summary", async () => {
     render(<PermissionsStep handleNextSlide={vi.fn()} />);
 
-    const note = await screen.findByTestId("onboarding-capture-control-note");
-    expect(note).toHaveTextContent(
-      "pause recording anytime from the screenpipe icon"
-    );
+    const summary = await screen.findByTestId("onboarding-trust-summary");
+    expect(summary).toHaveTextContent("pause anytime");
+
+    fireEvent.click(summary);
+    expect(
+      await screen.findByTestId("onboarding-pause-detail")
+    ).toHaveTextContent("pause recording anytime from the screenpipe icon");
   });
 
-  it("keeps the data dir chip out of the restart-required state", async () => {
+  it("keeps the trust disclosure out of the restart-required state", async () => {
     mocks.checkScreenRecordingPermission.mockResolvedValue("restartRequired");
 
     render(<PermissionsStep handleNextSlide={vi.fn()} />);
     await screen.findByTestId("screen-recording-restart-prompt");
 
     expect(
-      screen.queryByTestId("onboarding-data-dir-chip")
+      screen.queryByTestId("onboarding-trust-disclosure")
     ).not.toBeInTheDocument();
   });
 });

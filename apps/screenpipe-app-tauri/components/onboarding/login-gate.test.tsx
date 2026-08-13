@@ -104,15 +104,17 @@ describe("onboarding login gate", () => {
   it("tells every platform that recording can be paused", () => {
     mocks.settings = { user: {} };
     render(<OnboardingLogin handleNextSlide={vi.fn()} />);
-    const note = screen.getByTestId("onboarding-capture-control-note");
-    expect(note).toHaveTextContent(
-      "pause recording anytime from the screenpipe icon",
+    // One line, not a second stacked note: three muted lines under the CTA
+    // read as noise. The locality assertion above covers the same element.
+    const locality = screen.getByTestId("login-locality");
+    expect(locality).toHaveTextContent("pause anytime");
+    // Device-neutral, and no keystroke: the pause shortcut is user-editable
+    // and can be disabled outright, so a printed chord would go stale on the
+    // user's own machine.
+    expect(locality.textContent ?? "").not.toMatch(
+      /\bmac\b|menu bar|system tray/i,
     );
-    // Device-neutral for the same reason, and no keystroke: the pause
-    // shortcut is user-editable and can be disabled outright, so a printed
-    // chord would go stale on the user's own machine.
-    expect(note.textContent ?? "").not.toMatch(/\bmac\b|menu bar|system tray/i);
-    expect(note.textContent ?? "").not.toMatch(/⌘|ctrl|alt|super/i);
+    expect(locality.textContent ?? "").not.toMatch(/⌘|ctrl|alt|super/i);
   });
 
   it("advances once when signed in AND entitled", async () => {

@@ -67,6 +67,12 @@ const bodyText = async (): Promise<string> =>
  * Same shape as onboarding-first-run.spec.ts.
  */
 const gotoSlide = async (step: string) => {
+  // Re-arm before every visit. The permissions slide auto-advances on a
+  // fully-granted machine and can walk the flow all the way to completed, and
+  // once onboarding is complete the window stops reopening — which surfaces
+  // as "No window could be found" in whichever test happens to run next
+  // rather than in the one that actually consumed the flow.
+  await invokeOrThrow("reset_onboarding");
   await invokeOrThrow("set_onboarding_step", { step });
 
   await showWindow({ Home: { page: null } });
@@ -211,16 +217,12 @@ const textOfTestId = async (testId: string): Promise<string> =>
     it("names storage location and the off switch on the one slide every platform sees", async () => {
       await gotoSlide("login");
       await waitForTestId("login-locality", 45_000);
-      await waitForTestId("onboarding-capture-control-note");
 
-      expect(await textOfTestId("login-locality")).toContain(
-        "your recordings are stored on this computer",
-      );
-      expect(await textOfTestId("onboarding-capture-control-note")).toContain(
-        "pause recording anytime from the screenpipe icon",
-      );
+      const locality = await textOfTestId("login-locality");
+      expect(locality).toContain("your recordings are stored on this computer");
+      expect(locality).toContain("pause anytime");
 
-      await waitForSettledVisible("onboarding-capture-control-note");
+      await waitForSettledVisible("login-locality");
       const filepath = await saveScreenshot("onboarding-trust-login");
       expect(existsSync(filepath)).toBe(true);
     });
@@ -229,9 +231,7 @@ const textOfTestId = async (testId: string): Promise<string> =>
       // Naming one OS excludes the platforms that only ever see this slide,
       // and a printed shortcut goes stale because stopRecordingShortcut is
       // user-editable and can be disabled outright.
-      const note = (
-        await textOfTestId("onboarding-capture-control-note")
-      ).toLowerCase();
+      const note = (await textOfTestId("login-locality")).toLowerCase();
       expect(note).not.toContain("menu bar");
       expect(note).not.toContain("system tray");
       expect(note).not.toMatch(/⌘|ctrl\+|alt\+|super\+/);
@@ -245,68 +245,79 @@ const textOfTestId = async (testId: string): Promise<string> =>
     // spec in e2e/COVERAGE.md.
 
     (isMac ? describe : describe.skip)("on macOS", function () {
-      // Re-enter the slide for every test instead of sharing one visit.
+      // One visit, one test, deliberately.
       //
-      // On a machine where all three permissions are already granted — any
-      // dev box, and any CI runner with TCC pre-seeded — the step correctly
-      // auto-advances and onboarding completes, destroying the window about
-      // two seconds after it opens. Sharing one visit across four tests races
-      // that teardown and fails with "No window could be found" partway
-      // through. A fresh visit per test gives each one its own window.
-      beforeEach(async () => {
+      // permissions-step auto-advances 600ms after the poller confirms all
+      // three grants (see the `allRequiredGranted` effect), which on any
+      // machine with TCC already granted is almost immediately. Every extra
+      // visit therefore burns the slide and pushes onboarding closer to
+      // completed, after which the window stops reopening at all — a
+      // per-test beforeEach died on its third entry for exactly that reason.
+      // Asserting the whole surface inside a single visit keeps this
+      // deterministic instead of racing a 600ms timer four times.
+      it("collapses the trust line by default and proves the real path on expand", async () => {
         await gotoSlide("permissions");
-        await waitForTestId("onboarding-data-dir-chip", 45_000);
-      });
+        await waitForTestId("onboarding-trust-summary", 45_000);
 
-      it("shows the data dir the running app actually resolved", async () => {
+        // Collapsed: the permission wheel is the task. The first cut put a
+        // bordered data dir chip above the wheel, where it read as a fourth
+        // permission row.
+        const summary = await browser.$(
+          '[data-testid="onboarding-trust-summary"]',
+        );
+        expect(await summary.getAttribute("aria-expanded")).toBe("false");
+        const summaryText = await textOfTestId("onboarding-trust-summary");
+        expect(summaryText).toContain("stored on this computer");
+        expect(summaryText).toContain("pause anytime");
+        expect(
+          await browser
+            .$('[data-testid="onboarding-data-dir-path"]')
+            .isExisting(),
+        ).toBe(false);
 
-        // The real assertion: the chip agrees with the directory this app
-        // instance was launched against. A hardcoded ~/.screenpipe passes
-        // every unit test and fails right here.
+        // jsdom has no layout, so a text assertion passes on copy that renders
+        // past the bottom edge — which is what happened at the old 560px
+        // slide height.
+        expect(
+          await bottomOfTestId("onboarding-trust-disclosure"),
+        ).toBeLessThanOrEqual(await viewportHeight());
+
+        const collapsedShot = await saveScreenshot(
+          "onboarding-trust-permissions-collapsed",
+        );
+        expect(existsSync(collapsedShot)).toBe(true);
+
+        await summary.click();
+        await waitForTestId("onboarding-data-dir-path");
+
+        // The assertion the unit test cannot make: the chip agrees with the
+        // directory this app instance was actually launched against. A
+        // hardcoded ~/.screenpipe passes every mock and fails right here.
         const shown = await textOfTestId("onboarding-data-dir-path");
         expect(shown).toBe(E2E_DATA_DIR);
         expect(existsSync(shown)).toBe(true);
 
-        await waitForSettledVisible("onboarding-data-dir-chip");
-        const filepath = await saveScreenshot("onboarding-trust-permissions");
-        expect(existsSync(filepath)).toBe(true);
-      });
-
-      it("offers an enabled open action pointed at that same path", async () => {
-        // Deliberately does NOT click. `reveal_in_default_browser` shells out
-        // to `open -R`, which activates Finder, steals focus from the app and
-        // tore down the suite when this spec tried it. Intercepting the IPC
-        // instead does not work either: the generated binding calls a
-        // module-captured `TAURI_INVOKE`, not `window.__TAURI_INTERNALS__`
-        // at call time, so a monkey-patch silently misses and the real Finder
-        // launch happens anyway.
-        //
-        // The split that does hold: the unit test proves click ->
-        // revealInDefaultBrowser(dataDir) and the failure path, and this
-        // proves dataDir is the engine's real directory rather than a guess.
-        // Together that is the whole chain; clicking here would only re-prove
-        // the mocked half at the cost of a flaky suite.
+        // Not clicked: reveal_in_default_browser shells out to `open -R`,
+        // which activates Finder, steals focus and tore down the suite when
+        // this spec tried it. The unit test covers click -> command(path);
+        // this covers that the path is real.
         const open = await browser.$('[data-testid="onboarding-data-dir-open"]');
-        expect(await open.isExisting()).toBe(true);
         expect(await open.isEnabled()).toBe(true);
-        expect(await open.getAttribute("aria-label")).toBe(
-          `open ${E2E_DATA_DIR}`,
-        );
-      });
+        expect(await open.getAttribute("aria-label")).toBe(`open ${shown}`);
 
-      it("repeats the pause affordance at the permission ask", async () => {
-        expect(await textOfTestId("onboarding-capture-control-note")).toContain(
+        expect(await textOfTestId("onboarding-pause-detail")).toContain(
           "pause recording anytime from the screenpipe icon",
         );
-      });
+        // Disclosure that opens offscreen is the clipping bug with an extra
+        // click, so the expanded state is bounds-checked too.
+        expect(
+          await bottomOfTestId("onboarding-pause-detail"),
+        ).toBeLessThanOrEqual(await viewportHeight());
 
-      it("keeps the pause affordance inside the window", async () => {
-        // The chip pushed the wheel down far enough that at the old 560px
-        // slide height the note rendered past the bottom edge — present in
-        // the DOM, invisible to the user, and green in every text assertion.
-        const bottom = await bottomOfTestId("onboarding-capture-control-note");
-        expect(bottom).toBeGreaterThan(0);
-        expect(bottom).toBeLessThanOrEqual(await viewportHeight());
+        const expandedShot = await saveScreenshot(
+          "onboarding-trust-permissions",
+        );
+        expect(existsSync(expandedShot)).toBe(true);
       });
     });
 
