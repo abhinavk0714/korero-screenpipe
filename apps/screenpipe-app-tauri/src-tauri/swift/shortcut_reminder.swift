@@ -1961,6 +1961,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
             in: panel.frame,
             expanded: metrics.isHovering || metrics.forceExpanded,
             disclosureDown: metrics.disclosureDown,
+            horizontal: metrics.horizontal,
             scale: gOverlayScale
         )
         let centeredX = anchor.midX - width / 2
