@@ -23,7 +23,13 @@ import {
 	type RuleList,
 	type WindowRules,
 } from "@/lib/settings/capture-filters";
+import {
+	setCategoryEnabled,
+	type CaptureCategory,
+	type CategoryTargets,
+} from "@/lib/settings/capture-categories";
 import { AppFilterList } from "./app-filter-list";
+import { CategorySwitches } from "./category-switches";
 import { appIconUrl } from "./icon-urls";
 import { WebsiteFilterList, type ObservedDomain } from "./website-filter-list";
 
@@ -36,6 +42,8 @@ export interface ContentFiltersCardProps {
 	isLoadingApps: boolean;
 	onRulesChange: (next: WindowRules) => void;
 	onIgnoredUrlsChange: (next: string[]) => void;
+	/** Category switches change both lists at once, so they are written together. */
+	onTargetsChange: (next: CategoryTargets) => void;
 	onBrowse: (list: RuleList) => void;
 }
 
@@ -59,6 +67,7 @@ export function ContentFiltersCard({
 	isLoadingApps,
 	onRulesChange,
 	onIgnoredUrlsChange,
+	onTargetsChange,
 	onBrowse,
 }: ContentFiltersCardProps) {
 	const [tab, setTab] = useState<"apps" | "websites">("apps");
@@ -134,6 +143,12 @@ export function ContentFiltersCard({
 		[rules, onRulesChange],
 	);
 
+	const handleCategoryToggle = useCallback(
+		(category: CaptureCategory, enabled: boolean) =>
+			onTargetsChange(setCategoryEnabled({ rules, ignoredUrls }, category, enabled)),
+		[rules, ignoredUrls, onTargetsChange],
+	);
+
 	const handleAdvancedChange = useCallback(
 		(next: string[], list: RuleList) => onRulesChange(replaceAdvancedRules(rules, next, list)),
 		[rules, onRulesChange],
@@ -142,6 +157,14 @@ export function ContentFiltersCard({
 	return (
 		<Card className="border-border bg-card">
 			<CardContent className="px-3 py-2.5">
+				<div className="mb-3">
+					<CategorySwitches
+						rules={rules}
+						ignoredUrls={ignoredUrls}
+						onToggle={handleCategoryToggle}
+					/>
+				</div>
+
 				<Tabs value={tab} onValueChange={(next) => setTab(next as "apps" | "websites")}>
 					<TabsList className="mb-2.5">
 						<TabsTrigger value="apps" className="text-[12px]" data-testid="privacy-tab-apps">

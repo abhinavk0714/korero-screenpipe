@@ -1655,6 +1655,16 @@ export function PrivacySection() {
           onIgnoredUrlsChange={(next) =>
             handleSettingsChange({ ignoredUrls: next }, true)
           }
+          onTargetsChange={(next) =>
+            handleSettingsChange(
+              {
+                ignoredWindows: next.rules.ignored,
+                includedWindows: next.rules.included,
+                ignoredUrls: next.ignoredUrls,
+              },
+              true
+            )
+          }
           onBrowse={(list) => setPicker(list)}
         />
       </div>
