@@ -11,6 +11,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::notification::Notification;
+
 /// Which edge-centre the pill is pinned to. Same nine-value vocabulary as
 /// `app/shortcut-reminder/overlay-anchor.ts`, so a pin made in the webview
 /// overlay is understood by the native one and vice versa.
@@ -121,28 +123,14 @@ impl OverlaySize {
     }
 }
 
-/// One button on a pill notification.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NotificationAction {
-    pub id: String,
-    pub label: String,
-    #[serde(default)]
-    pub primary: bool,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct Notification {
-    pub title: String,
-    #[serde(default)]
-    pub body: String,
-    #[serde(default)]
-    pub actions: Vec<NotificationAction>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TranscriptItem {
     pub speaker: String,
     pub text: String,
+    /// `"input"` (our mic) or `"output"` (the room). Decides the attribution
+    /// shown when the speaker is still unnamed.
+    #[serde(default)]
+    pub device_type: String,
 }
 
 /// Everything the renderer needs. One struct, cloned into the paint thread, so
@@ -165,9 +153,13 @@ pub struct OverlayState {
     pub audio_active: bool,
     pub speech_ratio: f32,
 
-    pub shortcut_overlay: String,
+    /// Settings keys, in the order the dock shows them:
+    /// `showScreenpipeShortcut`, `searchShortcut`, `showChatShortcut`, and the
+    /// overlay's own hide binding.
+    pub shortcut_timeline: String,
     pub shortcut_search: String,
     pub shortcut_chat: String,
+    pub shortcut_overlay: String,
 
     pub notification: Option<Notification>,
     pub transcript: Vec<TranscriptItem>,
@@ -197,27 +189,6 @@ pub enum Control {
     NotificationDismiss,
     TranscriptPin,
     TranscriptOpenNote,
-}
-
-impl Control {
-    /// Action name sent across the FFI boundary. Identical strings to the macOS
-    /// `onAction` callback so the Rust side needs no per-platform mapping.
-    pub fn action(self) -> &'static str {
-        match self {
-            Control::Pill | Control::Timeline => "open_timeline",
-            Control::Search => "open_search",
-            Control::Chat => "open_chat",
-            Control::Audio => "open_audio",
-            Control::Settings => "open_overlay_settings",
-            Control::RestartRecording => "restart_recording",
-            Control::DismissIncident => "dismiss_incident",
-            Control::NotificationAction0 => "notification_action_0",
-            Control::NotificationAction1 => "notification_action_1",
-            Control::NotificationDismiss => "notification_dismiss",
-            Control::TranscriptPin => "toggle_meeting_pin",
-            Control::TranscriptOpenNote => "open_meeting_note",
-        }
-    }
 }
 
 impl OverlayState {
@@ -286,6 +257,7 @@ mod tests {
         s.transcript.push(TranscriptItem {
             speaker: "louis".into(),
             text: "hello".into(),
+            device_type: "input".into(),
         });
         assert!(s.shows_transcript());
         s.hovering = false;

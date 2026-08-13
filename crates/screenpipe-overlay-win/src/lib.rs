@@ -9,15 +9,36 @@
 //! No WebView2, no toolkit, no second runtime — the whole overlay is this crate
 //! plus the OS.
 //!
-//! The layout and animation halves are platform-neutral and unit-tested
-//! everywhere; only `render` and `window` are win32-only, so `cargo test` on the
-//! macOS and Linux CI runners still covers the parts that decide behaviour.
-//!
 //! macOS counterpart: `apps/screenpipe-app-tauri/src-tauri/swift/shortcut_reminder.swift`.
+//!
+//! # Layering
+//!
+//! Everything that *decides* something is platform-neutral and unit-tested on
+//! every CI runner. Only the two modules that talk to the OS are windows-only,
+//! and neither of them makes a decision worth arguing about:
+//!
+//! | module         | owns                                        | platform |
+//! |----------------|---------------------------------------------|----------|
+//! | [`state`]      | what the overlay is showing                 | any      |
+//! | [`layout`]     | geometry, hit rects, window size            | any      |
+//! | [`anim`]       | frame-rate-independent easing               | any      |
+//! | [`text`]       | the words, and shortcut formatting          | any      |
+//! | [`notification`] | pill-alert payloads, and what to refuse   | any      |
+//! | [`actions`]    | the strings reported back to the app        | any      |
+//! | [`render`]     | turning a `Layout` into pixels              | windows  |
+//! | [`window`]     | the layered window and its message loop     | windows  |
+//! | [`snapshot`]   | rendering a state straight to a PNG         | windows  |
+//! | [`preview`]    | the flow catalogue and the CLI harness      | windows  |
+//!
+//! One [`Layout`] drives painting, hit-testing *and* window sizing, so what
+//! lights up and what fires cannot disagree.
 
+pub mod actions;
 pub mod anim;
 pub mod layout;
+pub mod notification;
 pub mod state;
+pub mod text;
 
 #[cfg(target_os = "windows")]
 pub mod preview;
@@ -29,10 +50,8 @@ pub mod snapshot;
 pub mod window;
 
 pub use layout::{Layout, Rect};
-pub use state::{
-    Anchor, Control, Health, Notification, NotificationAction, OverlaySize, OverlayState,
-    TranscriptItem,
-};
+pub use notification::{Notification, NotificationAction};
+pub use state::{Anchor, Control, Health, OverlaySize, OverlayState, TranscriptItem};
 
 #[cfg(target_os = "windows")]
 pub use window::{Overlay, OverlayAction};

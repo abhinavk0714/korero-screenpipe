@@ -13,6 +13,10 @@
 //!
 //! `WS_EX_NOACTIVATE` is the win32 answer to macOS's `.nonactivatingPanel`:
 //! clicking the pill never takes focus from whatever the user was typing in.
+//!
+//! This module deliberately decides nothing. It turns OS events into state
+//! changes and state into pixels; every judgement about what the overlay shows,
+//! where it goes, and what a click means lives in the platform-neutral modules.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -26,12 +30,11 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject,
-    AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS,
-    HBITMAP, HDC, HGDIOBJ,
+    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, GetMonitorInfoW,
+    MonitorFromPoint, MonitorFromWindow, ReleaseDC, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
+    MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
-use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFO};
-use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -43,38 +46,47 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, GetWindowRect, KillTimer, PostMessageW, PostQuitMessage, RegisterClassExW,
     SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, UpdateLayeredWindow,
     CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, MSG, SWP_NOACTIVATE, SWP_NOSIZE, SW_HIDE,
-    SW_SHOWNOACTIVATE, ULW_ALPHA, WM_APP, WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_POPUP,
+    SW_SHOWNOACTIVATE, ULW_ALPHA, WINDOWPOS, WM_APP, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETTINGCHANGE, WM_TIMER, WM_WINDOWPOSCHANGING,
+    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
-/// Lives in `Win32::UI::Controls` in windows-rs, which this crate does not
-/// otherwise need — cheaper to name the constant than to pull the feature in.
-const WM_MOUSELEAVE: u32 = 0x02A3;
-
+use crate::actions::{action_for, anchor_action};
 use crate::anim::Equalizer;
 use crate::layout::{self, Layout, SHADOW_PAD};
+use crate::notification::{self, Notification, Refusal};
 use crate::render::{premultiplied_bgra, Renderer};
 use crate::state::{Anchor, Control, OverlayState};
 
+/// In `Win32::UI::Controls` in windows-rs, a feature this crate does not
+/// otherwise need — cheaper to name the constant than to pull it in.
+const WM_MOUSELEAVE: u32 = 0x02A3;
+/// Returned by `EndDraw` when the device is gone: display driver reset, remote
+/// session reconnect, GPU pre-emption. Everything device-bound must be rebuilt.
+const D2DERR_RECREATE_TARGET: i32 = -2003238892; // 0x8899000C
+
 const WM_OVERLAY_CMD: u32 = WM_APP + 1;
+const WM_OVERLAY_REPAINT: u32 = WM_APP + 2;
 const ANIM_TIMER: usize = 1;
+const DISMISS_TIMER: usize = 2;
 const ANIM_MS: u32 = 83; // ~12 Hz, same cadence as the macOS meter.
 /// Pointer travel before a press on the pill becomes a drag rather than a click.
 const DRAG_THRESHOLD: f32 = 4.0;
 
 /// What the overlay reports back to the app: the same action strings the macOS
-/// panel sends, so the Rust side needs no per-platform mapping.
+/// panel sends, so the rust side needs no per-platform mapping.
 pub type OverlayAction = String;
 
 enum Cmd {
     Update(Box<OverlayState>),
+    Notify(Box<Notification>),
+    DismissNotification,
     Show,
     Hide,
     Quit,
 }
 
-/// Handle to the overlay thread. Cloneable, `Send`, safe to hold in Tauri state.
+/// Handle to the overlay thread. Cloneable, `Send`, safe to hold in tauri state.
 #[derive(Clone)]
 pub struct Overlay {
     tx: Sender<Cmd>,
@@ -99,9 +111,9 @@ impl Overlay {
             .name("screenpipe-overlay".into())
             .spawn(move || {
                 let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-                match run_message_loop(rx, hwnd_out, visible_thread, Box::new(on_action)) {
-                    Ok(()) => {}
-                    Err(e) => tracing::error!("native overlay stopped: {e:?}"),
+                if let Err(e) = run_message_loop(rx, hwnd_out, visible_thread, Box::new(on_action))
+                {
+                    tracing::error!("native overlay stopped: {e:?}");
                 }
             })
             .expect("spawn overlay thread");
@@ -110,16 +122,34 @@ impl Overlay {
     }
 
     pub fn update(&self, state: OverlayState) {
-        let _ = self.tx.send(Cmd::Update(Box::new(state)));
-        self.wake();
+        self.send(Cmd::Update(Box::new(state)));
+    }
+
+    /// Try to render a notification as an extension of the pill.
+    ///
+    /// Returns the reason on refusal so the caller can fall through to the
+    /// standalone notification panel — which is the whole point: a payload this
+    /// row cannot show honestly must go somewhere that can, never be truncated.
+    pub fn show_notification(&self, json: &str) -> std::result::Result<(), Refusal> {
+        if !self.is_visible() {
+            return Err(Refusal::NotOnScreen);
+        }
+        let parsed = notification::parse(json)?;
+        self.send(Cmd::Notify(Box::new(parsed)));
+        Ok(())
+    }
+
+    pub fn dismiss_notification(&self) {
+        self.send(Cmd::DismissNotification);
     }
     pub fn show(&self) {
-        let _ = self.tx.send(Cmd::Show);
-        self.wake();
+        self.send(Cmd::Show);
     }
     pub fn hide(&self) {
-        let _ = self.tx.send(Cmd::Hide);
-        self.wake();
+        self.send(Cmd::Hide);
+    }
+    pub fn quit(&self) {
+        self.send(Cmd::Quit);
     }
     pub fn is_visible(&self) -> bool {
         self.visible.load(Ordering::SeqCst)
@@ -128,24 +158,27 @@ impl Overlay {
     /// Screen rect of the live window, in physical pixels. Used by the preview
     /// harness to crop a desktop grab around the real overlay.
     pub fn window_rect(&self) -> Option<(i32, i32, i32, i32)> {
-        let h = *self.hwnd.lock().unwrap();
-        if h == 0 {
-            return None;
-        }
+        let h = self.raw_hwnd()?;
         let mut r = RECT::default();
-        unsafe { GetWindowRect(HWND(h as *mut _), &mut r).ok()? };
+        unsafe { GetWindowRect(h, &mut r).ok()? };
         Some((r.left, r.top, r.right - r.left, r.bottom - r.top))
     }
-    pub fn quit(&self) {
-        let _ = self.tx.send(Cmd::Quit);
-        self.wake();
+
+    fn raw_hwnd(&self) -> Option<HWND> {
+        let h = *self.hwnd.lock().ok()?;
+        (h != 0).then_some(HWND(h as *mut _))
     }
 
-    fn wake(&self) {
-        let h = *self.hwnd.lock().unwrap();
-        if h != 0 {
+    /// Queue a command and wake the pump. If the window is not up yet the
+    /// command waits in the channel and is drained on creation, so nothing sent
+    /// during startup is lost.
+    fn send(&self, cmd: Cmd) {
+        if self.tx.send(cmd).is_err() {
+            return;
+        }
+        if let Some(h) = self.raw_hwnd() {
             unsafe {
-                let _ = PostMessageW(HWND(h as *mut _), WM_OVERLAY_CMD, WPARAM(0), LPARAM(0));
+                let _ = PostMessageW(h, WM_OVERLAY_CMD, WPARAM(0), LPARAM(0));
             }
         }
     }
@@ -155,19 +188,32 @@ impl Overlay {
 struct Ctx {
     renderer: Renderer,
     rt: Option<ID2D1DCRenderTarget>,
-    dib: Option<(HDC, HBITMAP, HGDIOBJ, i32, i32)>,
+    dib: Option<Dib>,
     state: OverlayState,
     layout: Layout,
     eq: Equalizer,
     on_action: Box<dyn Fn(OverlayAction) + Send>,
     rx: Receiver<Cmd>,
     visible: Arc<AtomicBool>,
-    /// Set between LBUTTONDOWN and LBUTTONUP.
+    /// Work area of the monitor the pill lives on.
+    ///
+    /// Cached rather than probed per frame on purpose. Resolving it from the
+    /// cursor every time — the obvious implementation — teleports the pill to
+    /// whatever screen the mouse happens to be on the next time any state
+    /// changes. The cursor only decides the monitor while the user is dragging.
+    work_area: RECT,
     press_origin: Option<(f32, f32)>,
     dragging: bool,
-    /// Window origin in screen pixels while dragging.
     drag_offset: (i32, i32),
     animating: bool,
+}
+
+struct Dib {
+    dc: HDC,
+    bitmap: HBITMAP,
+    previous: HGDIOBJ,
+    width: i32,
+    height: i32,
 }
 
 fn run_message_loop(
@@ -216,7 +262,10 @@ fn run_message_loop(
             eq: Equalizer::default(),
             on_action,
             rx,
-            visible: visible.clone(),
+            visible,
+            // The user is wherever their pointer is when the overlay first
+            // appears; after this the pill stays on its own monitor.
+            work_area: monitor_work_area_at_cursor(),
             press_origin: None,
             dragging: false,
             drag_offset: (0, 0),
@@ -225,9 +274,10 @@ fn run_message_loop(
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(ctx) as isize);
         *hwnd_out.lock().unwrap() = hwnd.0 as isize;
 
-        // Park it at its anchor before the first paint so it never flashes at 0,0.
-        reposition(hwnd);
-        repaint(hwnd);
+        // Park it at its anchor before the first paint so it never flashes at 0,0,
+        // then drain anything the app queued while the window was coming up.
+        apply_state(hwnd);
+        let _ = PostMessageW(hwnd, WM_OVERLAY_CMD, WPARAM(0), LPARAM(0));
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -256,22 +306,17 @@ fn dpi_scale(hwnd: HWND) -> f32 {
     }
 }
 
-/// Work area of the monitor the pill's anchor lands on.
-fn work_area(anchor: Anchor) -> RECT {
+fn work_area_of(monitor: windows::Win32::Graphics::Gdi::HMONITOR) -> RECT {
     unsafe {
-        // Probe with the cursor's monitor: whichever screen the user is working
-        // on is the one the overlay belongs to.
-        let mut pt = POINT::default();
-        let _ = GetCursorPos(&mut pt);
-        let mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
         let mut info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             ..Default::default()
         };
-        if GetMonitorInfoW(mon, &mut info).as_bool() {
-            let _ = anchor;
+        if GetMonitorInfoW(monitor, &mut info).as_bool() {
             info.rcWork
         } else {
+            // Better a plausible box than a zero rect: the pill still lands
+            // somewhere visible on the primary display.
             RECT {
                 left: 0,
                 top: 0,
@@ -282,14 +327,30 @@ fn work_area(anchor: Anchor) -> RECT {
     }
 }
 
-/// Screen-pixel origin for the current layout. The user pins the *pill*, not the
-/// window, so the shadow padding is subtracted back out — otherwise every anchor
-/// would sit ten pixels away from the edge it claims to hug.
-fn origin_for(hwnd: HWND, layout: &Layout, anchor: Anchor) -> (i32, i32) {
+fn monitor_work_area_at_cursor() -> RECT {
+    unsafe {
+        let mut pt = POINT::default();
+        let _ = GetCursorPos(&mut pt);
+        work_area_of(MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST))
+    }
+}
+
+fn monitor_work_area_of_window(hwnd: HWND) -> RECT {
+    unsafe { work_area_of(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)) }
+}
+
+/// Screen-pixel origin for the current layout.
+///
+/// The user pins the *pill*, not the window, so the shadow padding is
+/// subtracted back out — otherwise every anchor would sit ten pixels away from
+/// the edge it claims to hug.
+fn origin_for(hwnd: HWND, ctx: &Ctx, anchor: Anchor) -> (i32, i32) {
     let scale = dpi_scale(hwnd);
-    let wa = work_area(anchor);
-    let win_w = (layout.window.w * scale).ceil() as i32;
-    let win_h = (layout.window.h * scale).ceil() as i32;
+    let wa = ctx.work_area;
+    let win_w = (ctx.layout.window.w * scale).ceil() as i32;
+    let win_h = (ctx.layout.window.h * scale).ceil() as i32;
+    let wa_w = (wa.right - wa.left).max(1);
+    let wa_h = (wa.bottom - wa.top).max(1);
     let margin = (6.0 * scale) as i32;
     let pad = (SHADOW_PAD * scale) as i32;
     let (fx, fy) = anchor.fractions();
@@ -297,25 +358,46 @@ fn origin_for(hwnd: HWND, layout: &Layout, anchor: Anchor) -> (i32, i32) {
     let x = match fx {
         f if f < 0.25 => wa.left + margin - pad,
         f if f > 0.75 => wa.right - win_w - margin + pad,
-        _ => wa.left + (wa.right - wa.left - win_w) / 2,
+        _ => wa.left + (wa_w - win_w) / 2,
     };
     let y = match fy {
         f if f < 0.25 => wa.top + margin - pad,
         f if f > 0.75 => wa.bottom - win_h - margin + pad,
-        _ => wa.top + (wa.bottom - wa.top - win_h) / 2,
+        _ => wa.top + (wa_h - win_h) / 2,
     };
+
+    // A transcript card on a small screen can be wider or taller than the work
+    // area. Pin the near edge rather than centring it off both sides.
+    let x = if win_w >= wa_w { wa.left } else { x };
+    let y = if win_h >= wa_h { wa.top } else { y };
     (x, y)
 }
 
-fn reposition(hwnd: HWND) {
+/// Where a dragged pill would land if released now.
+fn drop_target(ctx: &Ctx, cursor: POINT) -> Anchor {
+    let wa = ctx.work_area;
+    let fx = (cursor.x - wa.left) as f32 / (wa.right - wa.left).max(1) as f32;
+    let fy = (cursor.y - wa.top) as f32 / (wa.bottom - wa.top).max(1) as f32;
+    Anchor::nearest(fx, fy)
+}
+
+/// Recompute layout, resize, repaint. The single path for any state change.
+fn apply_state(hwnd: HWND) {
     unsafe {
         let Some(ctx) = ctx_of(hwnd) else { return };
-        if ctx.dragging {
-            return;
-        }
-        let (x, y) = origin_for(hwnd, &ctx.layout, ctx.state.anchor);
-        let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+        ctx.layout = layout::compute(&ctx.state);
+        let scale = dpi_scale(hwnd);
+        let w = (ctx.layout.window.w * scale).ceil() as i32;
+        let h = (ctx.layout.window.h * scale).ceil() as i32;
+        let (x, y) = if ctx.dragging {
+            ctx.drag_offset
+        } else {
+            origin_for(hwnd, ctx, ctx.state.anchor)
+        };
+        let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE);
     }
+    repaint(hwnd);
+    update_animation_timer(hwnd);
 }
 
 /// Paint the current state and push it to the compositor.
@@ -331,35 +413,20 @@ fn repaint(hwnd: HWND) {
 
         // Rebuild the backing DIB whenever the content box changes size — which
         // it does every time the dock opens or a notification arrives.
-        let needs_new = match ctx.dib {
-            Some((_, _, _, dw, dh)) => dw != w || dh != h,
-            None => true,
-        };
-        if needs_new {
+        let stale = ctx
+            .dib
+            .as_ref()
+            .map(|d| d.width != w || d.height != h)
+            .unwrap_or(true);
+        if stale {
             release_dib(ctx);
-            let screen = GetDC(None);
-            let mem = CreateCompatibleDC(screen);
-            ReleaseDC(None, screen);
-            let mut info = BITMAPINFO::default();
-            info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-            info.bmiHeader.biWidth = w;
-            info.bmiHeader.biHeight = -h;
-            info.bmiHeader.biPlanes = 1;
-            info.bmiHeader.biBitCount = 32;
-            info.bmiHeader.biCompression = BI_RGB.0;
-            let mut bits = std::ptr::null_mut();
-            let Ok(dib) = CreateDIBSection(mem, &info, DIB_RGB_COLORS, &mut bits, None, 0) else {
-                let _ = DeleteDC(mem);
-                return;
-            };
-            let old = SelectObject(mem, dib);
-            ctx.dib = Some((mem, dib, old, w, h));
+            let Some(dib) = create_dib(w, h) else { return };
+            ctx.dib = Some(dib);
             ctx.rt = None;
         }
 
-        let Some((mem, _, _, _, _)) = ctx.dib else {
-            return;
-        };
+        let Some(dib) = ctx.dib.as_ref() else { return };
+        let mem = dib.dc;
 
         if ctx.rt.is_none() {
             let props = D2D1_RENDER_TARGET_PROPERTIES {
@@ -372,6 +439,7 @@ fn repaint(hwnd: HWND) {
             };
             match ctx.renderer.factory.CreateDCRenderTarget(&props) {
                 Ok(rt) => {
+                    // Bitmaps belong to the device that made them.
                     ctx.renderer.invalidate_device();
                     ctx.rt = Some(rt);
                 }
@@ -396,7 +464,18 @@ fn repaint(hwnd: HWND) {
         let target: ID2D1RenderTarget = rt.clone().into();
         target.BeginDraw();
         ctx.renderer.draw(&target, &ctx.state, &ctx.layout, &ctx.eq);
-        let _ = target.EndDraw(None, None);
+        if let Err(e) = target.EndDraw(None, None) {
+            if e.code().0 == D2DERR_RECREATE_TARGET {
+                // Driver reset or session reconnect. Drop everything device-bound
+                // and try again on the next message rather than recursing here.
+                tracing::debug!("overlay render target lost, rebuilding");
+                release_dib(ctx);
+                let _ = PostMessageW(hwnd, WM_OVERLAY_REPAINT, WPARAM(0), LPARAM(0));
+            } else {
+                tracing::error!("overlay EndDraw: {e:?}");
+            }
+            return;
+        }
 
         let size = SIZE { cx: w, cy: h };
         let src = POINT { x: 0, y: 0 };
@@ -420,34 +499,44 @@ fn repaint(hwnd: HWND) {
     }
 }
 
+fn create_dib(w: i32, h: i32) -> Option<Dib> {
+    unsafe {
+        let screen = GetDC(None);
+        let dc = CreateCompatibleDC(screen);
+        ReleaseDC(None, screen);
+        let mut info = BITMAPINFO::default();
+        info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = w;
+        // Negative height gives a top-down DIB, matching D2D's row order.
+        info.bmiHeader.biHeight = -h;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB.0;
+        let mut bits = std::ptr::null_mut();
+        let Ok(bitmap) = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, None, 0) else {
+            let _ = DeleteDC(dc);
+            return None;
+        };
+        let previous = SelectObject(dc, bitmap);
+        Some(Dib {
+            dc,
+            bitmap,
+            previous,
+            width: w,
+            height: h,
+        })
+    }
+}
+
 fn release_dib(ctx: &mut Ctx) {
-    if let Some((mem, dib, old, _, _)) = ctx.dib.take() {
+    if let Some(dib) = ctx.dib.take() {
         unsafe {
-            SelectObject(mem, old);
-            let _ = DeleteObject(dib);
-            let _ = DeleteDC(mem);
+            SelectObject(dib.dc, dib.previous);
+            let _ = DeleteObject(dib.bitmap);
+            let _ = DeleteDC(dib.dc);
         }
     }
     ctx.rt = None;
-}
-
-/// Recompute layout, resize, repaint. Called on every state change.
-fn apply_state(hwnd: HWND) {
-    unsafe {
-        let Some(ctx) = ctx_of(hwnd) else { return };
-        ctx.layout = layout::compute(&ctx.state);
-        let scale = dpi_scale(hwnd);
-        let w = (ctx.layout.window.w * scale).ceil() as i32;
-        let h = (ctx.layout.window.h * scale).ceil() as i32;
-        let (x, y) = if ctx.dragging {
-            (ctx.drag_offset.0, ctx.drag_offset.1)
-        } else {
-            origin_for(hwnd, &ctx.layout, ctx.state.anchor)
-        };
-        let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE);
-    }
-    repaint(hwnd);
-    update_animation_timer(hwnd);
 }
 
 /// Run the redraw timer only while something is actually moving. An idle pill
@@ -466,6 +555,22 @@ fn update_animation_timer(hwnd: HWND) {
     }
 }
 
+/// Arm or clear the notification's self-dismiss.
+fn arm_dismiss_timer(hwnd: HWND) {
+    unsafe {
+        let Some(ctx) = ctx_of(hwnd) else { return };
+        let _ = KillTimer(hwnd, DISMISS_TIMER);
+        if let Some(ms) = ctx
+            .state
+            .notification
+            .as_ref()
+            .and_then(|n| n.auto_dismiss_ms)
+        {
+            SetTimer(hwnd, DISMISS_TIMER, ms, None);
+        }
+    }
+}
+
 /// Client-area point in DIP for a mouse message.
 fn mouse_dip(hwnd: HWND, lparam: LPARAM) -> (f32, f32) {
     let x = (lparam.0 & 0xFFFF) as i16 as f32;
@@ -474,42 +579,95 @@ fn mouse_dip(hwnd: HWND, lparam: LPARAM) -> (f32, f32) {
     (x / scale, y / scale)
 }
 
+/// Drain the command channel. Returns whether anything changed.
+fn drain_commands(hwnd: HWND) -> (bool, bool) {
+    let Some(ctx) = (unsafe { ctx_of(hwnd) }) else {
+        return (false, false);
+    };
+    let mut dirty = false;
+    let mut quit = false;
+    let mut rearm_dismiss = false;
+
+    while let Ok(cmd) = ctx.rx.try_recv() {
+        match cmd {
+            Cmd::Update(s) => {
+                // Pointer state and the in-flight drag belong to the window, not
+                // the caller: a state push must never close the dock under the
+                // user's pointer or teleport a pill mid-drag.
+                let mut s = *s;
+                s.hovering = ctx.state.hovering;
+                s.hovered_control = ctx.state.hovered_control;
+                s.pressed_control = ctx.state.pressed_control;
+                s.dragging = ctx.state.dragging;
+                s.drag_target = ctx.state.drag_target;
+                if ctx.dragging {
+                    s.anchor = ctx.state.anchor;
+                }
+                // The caller does not own the notification either — it arrives
+                // through show_notification and leaves on its own schedule.
+                s.notification = ctx.state.notification.clone();
+                if s != ctx.state {
+                    ctx.state = s;
+                    dirty = true;
+                }
+            }
+            Cmd::Notify(n) => {
+                ctx.state.notification = Some(*n);
+                dirty = true;
+                rearm_dismiss = true;
+            }
+            Cmd::DismissNotification => {
+                if ctx.state.notification.take().is_some() {
+                    dirty = true;
+                    rearm_dismiss = true;
+                }
+            }
+            Cmd::Show => {
+                unsafe {
+                    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                }
+                ctx.visible.store(true, Ordering::SeqCst);
+                dirty = true;
+            }
+            Cmd::Hide => {
+                unsafe {
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                }
+                ctx.visible.store(false, Ordering::SeqCst);
+                // A hidden pill has no pointer on it, and a notification that
+                // outlived its window would reappear on the next show.
+                ctx.state.hovering = false;
+                ctx.state.hovered_control = None;
+                ctx.state.pressed_control = None;
+                ctx.state.notification = None;
+                rearm_dismiss = true;
+            }
+            Cmd::Quit => quit = true,
+        }
+    }
+
+    if rearm_dismiss {
+        arm_dismiss_timer(hwnd);
+    }
+    (dirty, quit)
+}
+
+/// Report an action, taking care not to hold a `&mut Ctx` across the callback —
+/// the app is free to call back into the overlay from inside it.
+fn fire(hwnd: HWND, action: Option<String>) {
+    let Some(action) = action else { return };
+    let callback =
+        unsafe { ctx_of(hwnd).map(|c| &c.on_action as *const Box<dyn Fn(String) + Send>) };
+    if let Some(cb) = callback {
+        unsafe { (**cb)(action) };
+    }
+}
+
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         match msg {
             WM_OVERLAY_CMD => {
-                let mut quit = false;
-                let mut dirty = false;
-                if let Some(ctx) = ctx_of(hwnd) {
-                    while let Ok(cmd) = ctx.rx.try_recv() {
-                        match cmd {
-                            Cmd::Update(s) => {
-                                // Hover and press are owned by the window, not the
-                                // caller: a state push must never make the dock
-                                // close under the user's pointer.
-                                let mut s = *s;
-                                s.hovering = ctx.state.hovering;
-                                s.hovered_control = ctx.state.hovered_control;
-                                s.pressed_control = ctx.state.pressed_control;
-                                s.dragging = ctx.state.dragging;
-                                if s != ctx.state {
-                                    ctx.state = s;
-                                    dirty = true;
-                                }
-                            }
-                            Cmd::Show => {
-                                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-                                ctx.visible.store(true, Ordering::SeqCst);
-                                dirty = true;
-                            }
-                            Cmd::Hide => {
-                                let _ = ShowWindow(hwnd, SW_HIDE);
-                                ctx.visible.store(false, Ordering::SeqCst);
-                            }
-                            Cmd::Quit => quit = true,
-                        }
-                    }
-                }
+                let (dirty, quit) = drain_commands(hwnd);
                 if dirty {
                     apply_state(hwnd);
                 }
@@ -517,6 +675,42 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                     let _ = DestroyWindow(hwnd);
                 }
                 LRESULT(0)
+            }
+
+            WM_OVERLAY_REPAINT => {
+                repaint(hwnd);
+                LRESULT(0)
+            }
+
+            // Something else asked to be topmost. Reassert on every position
+            // change rather than fighting it later: a pill that slips behind a
+            // full-screen window is the same as an absent pill.
+            WM_WINDOWPOSCHANGING => {
+                let pos = lparam.0 as *mut WINDOWPOS;
+                if !pos.is_null() {
+                    (*pos).hwndInsertAfter = HWND_TOPMOST;
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+
+            // Moved to a monitor with a different scale factor: every cached
+            // pixel size is wrong, including the DIB.
+            WM_DPICHANGED => {
+                if let Some(ctx) = ctx_of(hwnd) {
+                    release_dib(ctx);
+                    ctx.work_area = monitor_work_area_of_window(hwnd);
+                }
+                apply_state(hwnd);
+                LRESULT(0)
+            }
+
+            // Resolution change, monitor unplugged, taskbar moved or resized.
+            WM_DISPLAYCHANGE | WM_SETTINGCHANGE => {
+                if let Some(ctx) = ctx_of(hwnd) {
+                    ctx.work_area = monitor_work_area_of_window(hwnd);
+                }
+                apply_state(hwnd);
+                DefWindowProcW(hwnd, msg, wparam, lparam)
             }
 
             WM_MOUSEMOVE => {
@@ -547,11 +741,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                             0,
                             SWP_NOSIZE | SWP_NOACTIVATE,
                         );
-                        // Live target preview: show where the pill will land.
-                        let wa = work_area(ctx.state.anchor);
-                        let fx = (pt.x - wa.left) as f32 / (wa.right - wa.left).max(1) as f32;
-                        let fy = (pt.y - wa.top) as f32 / (wa.bottom - wa.top).max(1) as f32;
-                        let target = Anchor::nearest(fx, fy);
+                        // Dragging is the one time the cursor decides which
+                        // monitor the pill belongs to.
+                        ctx.work_area = monitor_work_area_at_cursor();
+                        let target = drop_target(ctx, pt);
                         if ctx.state.drag_target != Some(target) {
                             ctx.state.drag_target = Some(target);
                             repaint(hwnd);
@@ -564,7 +757,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 // transparent pixels, so anything that arrives here is a hover.
                 let hovered = ctx.layout.hit_test(x, y);
                 let inside = ctx.layout.is_opaque_at(x, y);
-                if !ctx.state.hovering || ctx.state.hovered_control != hovered {
+                if ctx.state.hovering != inside || ctx.state.hovered_control != hovered {
                     ctx.state.hovering = inside;
                     ctx.state.hovered_control = hovered;
                     apply_state(hwnd);
@@ -604,44 +797,79 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 
             WM_LBUTTONUP => {
                 let (x, y) = mouse_dip(hwnd, lparam);
-                let mut fire: Option<String> = None;
+                let mut action = None;
                 if let Some(ctx) = ctx_of(hwnd) {
                     let _ = ReleaseCapture();
                     if ctx.dragging {
                         let mut pt = POINT::default();
                         let _ = GetCursorPos(&mut pt);
-                        let wa = work_area(ctx.state.anchor);
-                        let fx = (pt.x - wa.left) as f32 / (wa.right - wa.left).max(1) as f32;
-                        let fy = (pt.y - wa.top) as f32 / (wa.bottom - wa.top).max(1) as f32;
-                        ctx.state.anchor = Anchor::nearest(fx, fy);
+                        ctx.work_area = monitor_work_area_at_cursor();
+                        ctx.state.anchor = drop_target(ctx, pt);
                         ctx.dragging = false;
                         ctx.state.dragging = false;
                         ctx.state.drag_target = None;
-                        fire = Some(format!("anchor:{:?}", ctx.state.anchor));
+                        action = Some(anchor_action(ctx.state.anchor));
                     } else if let Some(pressed) = ctx.state.pressed_control {
+                        // Only fire when the release lands on the same control
+                        // the press did — dragging off a button cancels it.
                         if ctx.layout.hit_test(x, y) == Some(pressed) {
-                            fire = Some(pressed.action().to_string());
+                            action = action_for(&ctx.state, pressed);
+                            // Any notification button closes the row; the app
+                            // decides what the action itself does.
+                            if matches!(
+                                pressed,
+                                Control::NotificationAction0
+                                    | Control::NotificationAction1
+                                    | Control::NotificationDismiss
+                            ) {
+                                ctx.state.notification = None;
+                            }
                         }
                     }
                     ctx.press_origin = None;
                     ctx.state.pressed_control = None;
-                    apply_state(hwnd);
-                    if let Some(action) = fire.take() {
-                        (ctx.on_action)(action);
-                    }
                 }
+                arm_dismiss_timer(hwnd);
+                apply_state(hwnd);
+                fire(hwnd, action);
                 LRESULT(0)
             }
 
             WM_TIMER => {
-                if let Some(ctx) = ctx_of(hwnd) {
-                    ctx.eq.tick(
-                        ANIM_MS as f32 / 1000.0,
-                        ctx.state.audio_active,
-                        ctx.state.speech_ratio,
-                    );
-                    repaint(hwnd);
-                    update_animation_timer(hwnd);
+                match wparam.0 {
+                    ANIM_TIMER => {
+                        if let Some(ctx) = ctx_of(hwnd) {
+                            ctx.eq.tick(
+                                ANIM_MS as f32 / 1000.0,
+                                ctx.state.audio_active,
+                                ctx.state.speech_ratio,
+                            );
+                            repaint(hwnd);
+                            update_animation_timer(hwnd);
+                        }
+                    }
+                    DISMISS_TIMER => {
+                        let _ = KillTimer(hwnd, DISMISS_TIMER);
+                        if let Some(ctx) = ctx_of(hwnd) {
+                            // Leave an alert the pointer is resting on: the user
+                            // is reading it, and its buttons are under the mouse.
+                            let engaged = ctx.state.hovering
+                                && matches!(
+                                    ctx.state.hovered_control,
+                                    Some(
+                                        Control::NotificationAction0
+                                            | Control::NotificationAction1
+                                            | Control::NotificationDismiss
+                                    )
+                                );
+                            if engaged {
+                                arm_dismiss_timer(hwnd);
+                            } else if ctx.state.notification.take().is_some() {
+                                apply_state(hwnd);
+                            }
+                        }
+                    }
+                    _ => {}
                 }
                 LRESULT(0)
             }
@@ -649,9 +877,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             WM_DESTROY => {
                 let p = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Ctx;
                 if !p.is_null() {
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                     let mut ctx = Box::from_raw(p);
                     release_dib(&mut ctx);
-                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 }
                 PostQuitMessage(0);
                 LRESULT(0)

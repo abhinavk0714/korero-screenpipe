@@ -349,9 +349,14 @@ pub fn notification_action_rects(state: &OverlayState, r: Rect, s: f32) -> Vec<(
     // Buttons are laid out right-to-left and the primary goes closest to the
     // right edge, where the pointer already is after reading the title — so the
     // primary is index 0, and `NotificationAction0` always means "the primary".
-    let mut ordered: Vec<&crate::state::NotificationAction> = n.actions.iter().collect();
-    ordered.sort_by_key(|a| !a.primary);
-    for (i, a) in ordered.iter().enumerate().take(2) {
+    let ordered = n.ordered_actions();
+    for (i, a) in ordered
+        .iter()
+        .enumerate()
+        .take(crate::notification::MAX_ACTIONS)
+    {
+        // Mono font, so a character count is an accurate width without asking
+        // DirectWrite to lay the string out on the layout pass.
         let w = (a.label.chars().count() as f32 * 5.6 + 16.0) * s;
         let control = if i == 0 {
             Control::NotificationAction0
@@ -380,7 +385,8 @@ fn notification_hits(state: &OverlayState, r: Rect, s: f32) -> Vec<(Control, Rec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{Notification, NotificationAction, OverlaySize, TranscriptItem};
+    use crate::notification::parse;
+    use crate::state::{OverlaySize, TranscriptItem};
 
     fn hovered() -> OverlayState {
         OverlayState {
@@ -434,10 +440,7 @@ mod tests {
     #[test]
     fn left_and_right_anchors_flush_the_stack_to_that_side() {
         let mut s = hovered();
-        s.notification = Some(Notification {
-            title: "meeting started".into(),
-            ..Default::default()
-        });
+        s.notification = parse(r#"{"id":"m","title":"meeting started"}"#).ok();
 
         s.anchor = Anchor::BottomLeft;
         let l = compute(&s);
@@ -479,22 +482,12 @@ mod tests {
     #[test]
     fn notification_buttons_do_not_overlap_the_dismiss_x() {
         let s = OverlayState {
-            notification: Some(Notification {
-                title: "meeting detected".into(),
-                body: "zoom — product sync".into(),
-                actions: vec![
-                    NotificationAction {
-                        id: "start".into(),
-                        label: "start".into(),
-                        primary: true,
-                    },
-                    NotificationAction {
-                        id: "ignore".into(),
-                        label: "ignore".into(),
-                        primary: false,
-                    },
-                ],
-            }),
+            notification: parse(
+                r#"{"id":"m","title":"meeting detected","body":"zoom — product sync","actions":[
+                    {"label":"open note","action":"deeplink","primary":true},
+                    {"label":"+ HD","action":"start_hd"}]}"#,
+            )
+            .ok(),
             ..Default::default()
         };
         let l = compute(&s);
@@ -547,6 +540,7 @@ mod tests {
             transcript: vec![TranscriptItem {
                 speaker: "louis".into(),
                 text: "shipping the native overlay".into(),
+                device_type: "input".into(),
             }],
             ..Default::default()
         };

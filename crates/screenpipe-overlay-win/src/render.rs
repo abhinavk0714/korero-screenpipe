@@ -44,6 +44,17 @@ use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use crate::anim::{Equalizer, BAR_COUNT};
 use crate::layout::{notification_action_rects, Layout, Rect, RESTING_OPACITY};
 use crate::state::{Control, Health, OverlayState};
+use crate::text::{disclosure_hint, display_speaker, ellipsize};
+
+/// Width of one mono glyph as a fraction of the font size, for the Cascadia /
+/// Consolas family. Used to decide how much user text fits before it is
+/// ellipsised, so a long meeting title is trimmed once here rather than laid
+/// out and clipped by DirectWrite on every frame.
+const MONO_ADVANCE: f32 = 0.60;
+
+fn fits(width: f32, font_size: f32) -> usize {
+    (width / (font_size * MONO_ADVANCE)).floor().max(0.0) as usize
+}
 
 /// App icon shown on the resting chip, same mark as the tray and the dock.
 const APP_ICON_PNG: &[u8] =
@@ -287,17 +298,27 @@ impl Renderer {
         unsafe { rt.FillEllipse(&e, &brush) };
     }
 
-    /// Cheap ambient shadow: a few nested rounded rects with falling alpha.
+    /// Ambient shadow, approximated by accumulating many rounded rects at a
+    /// *uniform* low alpha.
+    ///
+    /// The obvious version — few rings, alpha ramped up toward the surface —
+    /// stacks its darkest layers on top of each other and paints a hard dark
+    /// collar right at the edge, which reads as a box rather than a shadow.
+    /// With uniform alpha, a pixel's darkness is just how many rings reach it,
+    /// so opacity falls off with distance the way a blur does.
     fn shadow(&self, rt: &ID2D1RenderTarget, r: Rect, radius: f32, strength: f32) {
-        const RINGS: i32 = 6;
+        const RINGS: i32 = 10;
+        const STEP: f32 = 0.9;
+        let alpha = 0.030 * strength;
         for i in (1..=RINGS).rev() {
-            let spread = i as f32 * 1.4;
-            let a = strength * (1.0 - i as f32 / (RINGS as f32 + 1.0)).powi(3) * 0.55;
+            let spread = i as f32 * STEP;
             self.fill_round(
                 rt,
-                r.inset(-spread, -spread).offset(0.0, spread * 0.35),
+                // A single pixel of downward offset is enough to imply a light
+                // source; more turns the pill into a sticker.
+                r.inset(-spread, -spread).offset(0.0, 1.0),
                 radius + spread,
-                black(a),
+                black(alpha),
             );
         }
     }
@@ -653,9 +674,10 @@ impl Renderer {
         } else {
             Rect::new(text_x, r.y, text_w, r.h)
         };
+        // Meeting titles are user data and routinely longer than the row.
         self.mono_text(
             rt,
-            &n.title,
+            &ellipsize(&n.title, fits(text_w, 10.0 * s)),
             10.0 * s,
             DWRITE_FONT_WEIGHT_SEMI_BOLD,
             Align::Leading,
@@ -665,7 +687,7 @@ impl Renderer {
         if has_body {
             self.mono_text(
                 rt,
-                &n.body,
+                &ellipsize(&n.body, fits(text_w, 8.5 * s)),
                 8.5 * s,
                 DWRITE_FONT_WEIGHT_NORMAL,
                 Align::Leading,
@@ -676,8 +698,7 @@ impl Renderer {
 
         // Same order as `notification_action_rects`: primary first, drawn
         // rightmost. The two must not drift or labels land on the wrong button.
-        let mut ordered: Vec<&crate::state::NotificationAction> = n.actions.iter().collect();
-        ordered.sort_by_key(|a| !a.primary);
+        let ordered = n.ordered_actions();
         for ((control, rect), action) in actions.iter().zip(ordered.iter()) {
             let hovered = state.hovered_control == Some(*control);
             let (bg, fg) = if action.primary {
@@ -784,24 +805,30 @@ impl Renderer {
             .floor()
             .max(0.0) as usize;
         let start = state.transcript.len().saturating_sub(capacity);
+        let text_w = r.w - pad * 2.0;
         for (i, item) in state.transcript[start..].iter().enumerate() {
             let y = body_top + i as f32 * line_h;
             self.mono_text(
                 rt,
-                &item.speaker,
+                &ellipsize(
+                    &display_speaker(&item.speaker, &item.device_type),
+                    fits(text_w, 8.0 * s),
+                ),
                 8.0 * s,
                 DWRITE_FONT_WEIGHT_SEMI_BOLD,
                 Align::Leading,
-                Rect::new(r.x + pad, y, r.w - pad * 2.0, 11.0 * s),
+                Rect::new(r.x + pad, y, text_w, 11.0 * s),
                 white(0.5),
             );
+            // One line per utterance. Wrapping would reflow the whole card every
+            // time a word lands, which is unreadable during live transcription.
             self.mono_text(
                 rt,
-                &item.text,
+                &ellipsize(&item.text, fits(text_w, 9.0 * s)),
                 9.0 * s,
                 DWRITE_FONT_WEIGHT_NORMAL,
                 Align::Leading,
-                Rect::new(r.x + pad, y + 11.0 * s, r.w - pad * 2.0, 13.0 * s),
+                Rect::new(r.x + pad, y + 11.0 * s, text_w, 13.0 * s),
                 white(0.88),
             );
         }
@@ -868,153 +895,5 @@ pub fn premultiplied_bgra() -> D2D1_PIXEL_FORMAT {
     D2D1_PIXEL_FORMAT {
         format: DXGI_FORMAT_B8G8R8A8_UNORM,
         alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-    }
-}
-
-/// One stable, readable order for a shortcut string, mirroring the macOS
-/// `prettifyShortcut` but with windows modifier names.
-pub fn prettify_shortcut(raw: &str) -> String {
-    let mut mods: Vec<&str> = Vec::new();
-    let mut keys: Vec<String> = Vec::new();
-    for part in raw.split('+') {
-        let t = part.trim();
-        if t.is_empty() {
-            continue;
-        }
-        match t.to_ascii_lowercase().as_str() {
-            "super" | "cmd" | "command" | "meta" | "win" => {
-                if !mods.contains(&"win") {
-                    mods.push("win")
-                }
-            }
-            "ctrl" | "control" => {
-                if !mods.contains(&"ctrl") {
-                    mods.push("ctrl")
-                }
-            }
-            "alt" | "option" | "opt" => {
-                if !mods.contains(&"alt") {
-                    mods.push("alt")
-                }
-            }
-            "shift" => {
-                if !mods.contains(&"shift") {
-                    mods.push("shift")
-                }
-            }
-            _ => keys.push(t.to_ascii_uppercase()),
-        }
-    }
-    let order = ["ctrl", "alt", "shift", "win"];
-    let mut out: Vec<String> = order
-        .iter()
-        .filter(|m| mods.contains(m))
-        .map(|m| m.to_string())
-        .collect();
-    out.extend(keys);
-    out.join("+")
-}
-
-/// What the disclosure row says. Contextual: the row explains whatever the
-/// pointer is on, and falls back to how to dismiss the overlay. A static
-/// two-column shortcut list is what the webview overlay does, and it overflows
-/// as soon as a shortcut grows a modifier.
-pub fn disclosure_hint(state: &OverlayState) -> String {
-    match state.hovered_control {
-        Some(Control::Search) => labelled("search", &state.shortcut_search),
-        Some(Control::Chat) => labelled("chat", &state.shortcut_chat),
-        Some(Control::Timeline) => "open timeline".into(),
-        Some(Control::Settings) => "overlay settings".into(),
-        Some(Control::Audio) => {
-            if state.audio_active {
-                format!(
-                    "listening · {}%",
-                    (state.speech_ratio * 100.0).round() as i32
-                )
-            } else {
-                "mic idle".into()
-            }
-        }
-        _ => {
-            if state.shortcut_overlay.is_empty() {
-                "screenpipe".into()
-            } else {
-                labelled("hide", &state.shortcut_overlay)
-            }
-        }
-    }
-}
-
-fn labelled(label: &str, shortcut: &str) -> String {
-    let pretty = prettify_shortcut(shortcut);
-    if pretty.is_empty() {
-        label.to_string()
-    } else {
-        format!("{label} · {pretty}")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{disclosure_hint, prettify_shortcut};
-    use crate::state::{Control, OverlayState};
-
-    fn state() -> OverlayState {
-        OverlayState {
-            shortcut_overlay: "Super+Control+O".into(),
-            shortcut_search: "Super+Control+S".into(),
-            shortcut_chat: "Super+Control+C".into(),
-            hovering: true,
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn disclosure_explains_whatever_the_pointer_is_on() {
-        let mut s = state();
-        assert_eq!(disclosure_hint(&s), "hide · ctrl+win+O");
-        s.hovered_control = Some(Control::Search);
-        assert_eq!(disclosure_hint(&s), "search · ctrl+win+S");
-        s.hovered_control = Some(Control::Timeline);
-        assert_eq!(disclosure_hint(&s), "open timeline");
-    }
-
-    #[test]
-    fn audio_cell_reports_whether_anything_is_being_heard() {
-        let mut s = state();
-        s.hovered_control = Some(Control::Audio);
-        assert_eq!(disclosure_hint(&s), "mic idle");
-        s.audio_active = true;
-        s.speech_ratio = 0.62;
-        assert_eq!(disclosure_hint(&s), "listening · 62%");
-    }
-
-    #[test]
-    fn hints_stay_short_enough_for_the_160dip_row() {
-        // ~4.8 DIP per glyph at 8 DIP mono inside a 160 DIP row, minus padding.
-        let mut s = state();
-        for control in [
-            None,
-            Some(Control::Search),
-            Some(Control::Chat),
-            Some(Control::Timeline),
-            Some(Control::Settings),
-            Some(Control::Audio),
-        ] {
-            s.hovered_control = control;
-            let hint = disclosure_hint(&s);
-            assert!(
-                hint.chars().count() <= 30,
-                "hint {hint:?} will clip in the disclosure row"
-            );
-        }
-    }
-
-    #[test]
-    fn shortcut_order_is_stable_whatever_settings_stored() {
-        assert_eq!(prettify_shortcut("Super+Control+S"), "ctrl+win+S");
-        assert_eq!(prettify_shortcut("Control+Super+S"), "ctrl+win+S");
-        assert_eq!(prettify_shortcut("alt+shift+k"), "alt+shift+K");
-        assert_eq!(prettify_shortcut(""), "");
     }
 }

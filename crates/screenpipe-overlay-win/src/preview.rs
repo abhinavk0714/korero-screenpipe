@@ -13,23 +13,26 @@
 use std::time::Duration;
 
 use crate::anim::Equalizer;
+use crate::notification;
 use crate::render::Renderer;
 use crate::snapshot::{capture_desktop, write_bgra_png, write_png, Backdrop, DesktopShot};
-use crate::state::{
-    Anchor, Control, Health, Notification, NotificationAction, OverlaySize, OverlayState,
-    TranscriptItem,
-};
+use crate::state::{Anchor, Control, Health, OverlaySize, OverlayState, TranscriptItem};
 use crate::window::Overlay;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 
+/// Windows defaults from `use-settings.tsx`, plus a live mic: the overlay only
+/// exists while screenpipe is recording, so a silent meter is the exception.
 fn base() -> OverlayState {
     OverlayState {
-        shortcut_overlay: "Super+Control+O".into(),
-        shortcut_search: "Super+Control+S".into(),
-        shortcut_chat: "Super+Control+C".into(),
+        shortcut_timeline: "Alt+S".into(),
+        shortcut_search: "Alt+K".into(),
+        shortcut_chat: "Alt+L".into(),
+        shortcut_overlay: "Alt+O".into(),
+        audio_active: true,
+        speech_ratio: 0.55,
         ..Default::default()
     }
 }
@@ -39,14 +42,19 @@ fn meeting_lines() -> Vec<TranscriptItem> {
         TranscriptItem {
             speaker: "louis".into(),
             text: "the native pill is drawing through direct2d now".into(),
+            device_type: "input".into(),
         },
         TranscriptItem {
             speaker: "matt".into(),
             text: "does it still pass clicks through to the desktop?".into(),
+            device_type: "output".into(),
         },
+        // Unnamed: the card has to attribute this one from the device alone,
+        // which is the common case in the first seconds of a meeting.
         TranscriptItem {
-            speaker: "louis".into(),
+            speaker: String::new(),
             text: "yes — layered windows hit-test per pixel".into(),
+            device_type: "input".into(),
         },
     ]
 }
@@ -124,25 +132,43 @@ pub fn flows() -> Vec<(&'static str, OverlayState)> {
         },
     ));
 
+    // The exact payload `show_notification_panel` routes to the pill for a
+    // started meeting, parsed by the same code the app calls.
     out.push((
         "09-notification",
         OverlayState {
-            notification: Some(Notification {
-                title: "meeting detected".into(),
-                body: "zoom — product sync".into(),
-                actions: vec![
-                    NotificationAction {
-                        id: "start".into(),
-                        label: "start notes".into(),
-                        primary: true,
-                    },
-                    NotificationAction {
-                        id: "ignore".into(),
-                        label: "ignore".into(),
-                        primary: false,
-                    },
-                ],
-            }),
+            notification: notification::parse(
+                r#"{
+                    "id": "meeting-started-42",
+                    "title": "meeting started",
+                    "body": "zoom — product sync",
+                    "autoDismissMs": 12000,
+                    "actions": [
+                        {"label": "+ HD", "action": "start_hd", "meetingId": 42},
+                        {"label": "open note", "action": "deeplink",
+                         "url": "screenpipe://note/42", "primary": true}
+                    ]
+                }"#,
+            )
+            .ok(),
+            ..base()
+        },
+    ));
+
+    // A title longer than the row: it must be trimmed, not run under the
+    // buttons or off the edge.
+    out.push((
+        "09b-notification-long-title",
+        OverlayState {
+            notification: notification::parse(
+                r#"{
+                    "id": "meeting-started-43",
+                    "title": "weekly product and engineering synchronisation with the whole team",
+                    "body": "google meet — recurring, 14 participants, started 3 minutes ago",
+                    "actions": [{"label": "open note", "action": "deeplink", "primary": true}]
+                }"#,
+            )
+            .ok(),
             ..base()
         },
     ));
@@ -258,35 +284,67 @@ fn live_shots(dir: &str) -> windows::core::Result<()> {
     Ok(())
 }
 
+/// Anchor names accepted on the command line, matching the kebab-case the
+/// settings store and `overlay-anchor.ts` already use.
+fn parse_anchor(s: &str) -> Option<Anchor> {
+    Some(match s {
+        "top-left" => Anchor::TopLeft,
+        "top-center" | "top" => Anchor::TopCenter,
+        "top-right" => Anchor::TopRight,
+        "middle-left" | "left" => Anchor::MiddleLeft,
+        "middle-right" | "right" => Anchor::MiddleRight,
+        "bottom-left" => Anchor::BottomLeft,
+        "bottom-center" | "bottom" => Anchor::BottomCenter,
+        "bottom-right" => Anchor::BottomRight,
+        _ => return None,
+    })
+}
+
 /// Drive the real window through the flows so the interaction — not just the
-/// pixels — gets exercised.
-fn live() {
+/// pixels — gets exercised, then leave it up and interactive for a human.
+fn live(anchor: Anchor, cycle: bool) {
     let overlay = Overlay::spawn(|action| println!("action: {action}"));
     overlay.show();
 
-    let script: Vec<(u64, OverlayState)> = flows()
-        .into_iter()
-        // The live pass owns hover itself; forcing it here would fight the mouse.
-        .map(|(_, mut s)| {
-            s.hovering = false;
-            s.hovered_control = None;
-            if s.health == Health::Normal && s.transcript.is_empty() && s.notification.is_none() {
-                s.force_expanded = false;
-            }
-            (2500u64, s)
-        })
-        .collect();
+    let resting = OverlayState { anchor, ..base() };
 
-    println!("driving the live overlay through {} states", script.len());
-    for (ms, state) in script {
-        overlay.update(state);
-        std::thread::sleep(Duration::from_millis(ms));
+    if cycle {
+        let script: Vec<(u64, OverlayState)> = flows()
+            .into_iter()
+            // The live pass owns hover itself; forcing it here would fight the
+            // mouse, so states that need the dock open ask for it explicitly.
+            .map(|(name, mut s)| {
+                s.anchor = anchor;
+                s.force_expanded = s.hovering;
+                s.hovering = false;
+                s.hovered_control = None;
+                println!("  {name}");
+                (2500u64, s)
+            })
+            .collect();
+
+        println!("driving the live overlay through {} states", script.len());
+        for (ms, state) in script {
+            overlay.update(state);
+            std::thread::sleep(Duration::from_millis(ms));
+        }
     }
 
-    println!("live pass done — leaving the resting pill up, ctrl-c to quit");
-    overlay.update(base());
+    println!("resting pill is up at {anchor:?} — hover it, click it, drag it. ctrl-c to quit");
+    overlay.update(resting.clone());
+
+    // Feed a speech-shaped level the way the engine would. Real speech arrives
+    // in bursts with gaps; holding one number would tell us nothing about
+    // whether the meter tracks a changing signal.
+    let mut t = 0.0f32;
     loop {
-        std::thread::sleep(Duration::from_secs(60));
+        std::thread::sleep(Duration::from_millis(250));
+        t += 0.25;
+        let burst = ((t * 0.55).sin() * 0.5 + 0.5).powf(1.6);
+        overlay.update(OverlayState {
+            speech_ratio: 0.12 + 0.8 * burst,
+            ..resting.clone()
+        });
     }
 }
 
@@ -310,12 +368,17 @@ pub fn run() -> windows::core::Result<()> {
                 .unwrap_or("target/overlay-live"),
         ),
         Some("live") => {
-            live();
+            let anchor = args
+                .get(2)
+                .and_then(|a| parse_anchor(a))
+                .unwrap_or(Anchor::BottomCenter);
+            let cycle = !args.iter().any(|a| a == "--no-cycle");
+            live(anchor, cycle);
             Ok(())
         }
         _ => {
             eprintln!(
-                "usage: overlay-preview shots [dir] | overlay-preview live-shots [dir] | overlay-preview live"
+                "usage: overlay-preview shots [dir]\n       overlay-preview live-shots [dir]\n       overlay-preview live [anchor] [--no-cycle]\n\nanchors: top-left top-center top-right middle-left middle-right\n         bottom-left bottom-center bottom-right"
             );
             Ok(())
         }

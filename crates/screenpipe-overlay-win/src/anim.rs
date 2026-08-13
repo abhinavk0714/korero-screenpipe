@@ -17,6 +17,12 @@ pub fn lerp_factor(per_frame_at_60hz: f32, dt: f32) -> f32 {
 pub const BAR_COUNT: usize = 8;
 const BAR_OFFSETS: [f32; BAR_COUNT] = [0.6, 1.0, 0.75, 0.9, 0.65, 0.95, 0.8, 0.7];
 
+/// Per-bar oscillation, in radians per second. Mutually non-harmonic on purpose:
+/// shared factors make the bars re-align every few seconds and the meter reads
+/// as a pulsing block instead of audio.
+const BAR_FREQ: [f32; BAR_COUNT] = [5.1, 7.3, 6.2, 8.9, 5.7, 9.4, 6.8, 8.1];
+const BAR_PHASE: [f32; BAR_COUNT] = [0.0, 1.7, 3.1, 0.8, 4.4, 2.3, 5.2, 3.8];
+
 /// Audio meter bars. Heights are in "fraction of the meter box", 0..1.
 #[derive(Debug, Clone)]
 pub struct Equalizer {
@@ -45,30 +51,31 @@ impl Equalizer {
             0.0
         };
         let k = lerp_factor(0.12, dt);
-        for ((cur, tgt), offset) in self
+        for (i, (cur, tgt)) in self
             .current
             .iter_mut()
             .zip(self.target.iter_mut())
-            .zip(BAR_OFFSETS.iter())
+            .enumerate()
         {
-            *tgt = base * offset;
+            // The oscillation lives in the target, not on top of the output, so
+            // the lerp smooths it into motion the eye reads as a level meter.
+            // A speech ratio held constant still has to look like sound.
+            let osc = if active {
+                0.45 + 0.55 * (self.clock * BAR_FREQ[i] + BAR_PHASE[i]).sin().abs()
+            } else {
+                1.0
+            };
+            *tgt = base * BAR_OFFSETS[i] * osc;
             *cur += (*tgt - *cur) * k;
         }
     }
 
     /// Bar heights as a fraction of the meter height, floored so the meter
     /// always shows a baseline instead of vanishing.
-    pub fn heights(&self, active: bool, speech_ratio: f32) -> [f32; BAR_COUNT] {
+    pub fn heights(&self, _active: bool, _speech_ratio: f32) -> [f32; BAR_COUNT] {
         let mut out = [0.0f32; BAR_COUNT];
-        for (i, (slot, cur)) in out.iter_mut().zip(self.current.iter()).enumerate() {
-            // Per-bar phase offset: without it the bars breathe in lockstep and
-            // the meter reads as a single block rather than audio.
-            let jitter = if active && speech_ratio > 0.01 {
-                (self.clock * (2.0 + i as f32) * 3.0).sin() * speech_ratio * 0.12
-            } else {
-                0.0
-            };
-            *slot = (cur + jitter).clamp(0.06, 1.0);
+        for (slot, cur) in out.iter_mut().zip(self.current.iter()) {
+            *slot = cur.clamp(0.06, 1.0);
         }
         out
     }
@@ -142,6 +149,35 @@ mod tests {
                 "silent meter should rest at the baseline, got {h}"
             );
         }
+    }
+
+    #[test]
+    fn meter_keeps_moving_on_a_constant_speech_ratio() {
+        // The engine can hold a steady level for seconds. If the meter only
+        // follows the level it freezes, and a frozen meter reads as "audio is
+        // broken" — which is the opposite of what it is there to say.
+        let mut eq = Equalizer::default();
+        for _ in 0..24 {
+            eq.tick(1.0 / 12.0, true, 0.7);
+        }
+        let mut frames = Vec::new();
+        for _ in 0..12 {
+            eq.tick(1.0 / 12.0, true, 0.7);
+            frames.push(eq.heights(true, 0.7));
+        }
+        let travel: f32 = frames
+            .windows(2)
+            .map(|w| {
+                w[0].iter()
+                    .zip(w[1].iter())
+                    .map(|(a, b)| (a - b).abs())
+                    .sum::<f32>()
+            })
+            .sum();
+        assert!(
+            travel > 1.0,
+            "meter barely moved over a second of steady speech: {travel}"
+        );
     }
 
     #[test]
