@@ -115,7 +115,7 @@ pub fn force_process_exit(status: i32) -> ! {
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 fn relaunch_binary_from_bundle(current_binary: &Path) -> Option<PathBuf> {
     let macos_directory = current_binary.parent()?;
     if macos_directory.components().next_back()
@@ -138,6 +138,7 @@ fn relaunch_binary_from_bundle(current_binary: &Path) -> Option<PathBuf> {
     Some(macos_directory.join(executable))
 }
 
+// `test` leg: the plist parser has a cross-platform unit test below.
 #[cfg(any(target_os = "macos", test))]
 fn extract_cf_bundle_executable(info_plist: &str) -> Option<String> {
     let key_pos = info_plist.find("<key>CFBundleExecutable</key>")?;

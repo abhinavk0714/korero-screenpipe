@@ -94,6 +94,10 @@ impl NotificationHistoryEntry {
         })
     }
 
+    // The only production caller is the macOS native inbox (unread-count
+    // analytics in `show_notification_inbox`); other platforms render the
+    // webview inbox and never consult priority natively.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn is_high_priority(&self) -> bool {
         self.resolved_priority() == NotificationPriority::High
     }

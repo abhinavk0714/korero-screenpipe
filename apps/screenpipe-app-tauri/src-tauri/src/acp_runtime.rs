@@ -3878,20 +3878,18 @@ mod tests {
         assert_eq!(external_auth_command("codex-acp"), None);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn workspace_path_blocks_symlink_escape() {
         let root = tempfile::tempdir().expect("root");
         let outside = tempfile::tempdir().expect("outside");
         let outside_file = outside.path().join("secret.txt");
         std::fs::write(&outside_file, "secret").expect("write secret");
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(&outside_file, root.path().join("escape")).expect("symlink");
-            let error = workspace_path(root.path(), &root.path().join("escape"), false)
-                .await
-                .expect_err("escape must fail");
-            assert!(error.contains("outside workspace"));
-        }
+        std::os::unix::fs::symlink(&outside_file, root.path().join("escape")).expect("symlink");
+        let error = workspace_path(root.path(), &root.path().join("escape"), false)
+            .await
+            .expect_err("escape must fail");
+        assert!(error.contains("outside workspace"));
     }
 
     #[tokio::test]

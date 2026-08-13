@@ -1392,6 +1392,9 @@ async fn wait_for_response_or_terminated(
 mod tests {
     use super::*;
 
+    // Every test that drives a real queue turn is unix-gated; keep the helper
+    // on the same gate so Windows test builds don't carry it dead.
+    #[cfg(unix)]
     async fn wait_for_response_id(state: &PiQueueState) -> String {
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {

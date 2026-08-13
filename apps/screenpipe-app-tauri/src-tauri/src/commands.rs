@@ -596,8 +596,9 @@ struct RecoveredEnterpriseDeviceConfig {
 
 impl EnterpriseFileConfig {
     /// Assertion helper for the `enterprise.json` parser tests — production
-    /// code branches on the individual fields instead.
-    #[cfg(test)]
+    /// code branches on the individual fields instead. The tests module is
+    /// macOS-only, so match its gate.
+    #[cfg(all(test, target_os = "macos"))]
     pub fn is_empty(&self) -> bool {
         self.license_key.is_none() && self.ingest_url.is_none()
     }

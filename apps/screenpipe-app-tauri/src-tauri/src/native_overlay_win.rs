@@ -193,7 +193,10 @@ pub fn set_meeting_stop_result(succeeded: bool) {
     }
 }
 
-#[cfg_attr(not(feature = "e2e"), allow(dead_code))]
+// Completes the shared pill ffi surface (`native_shortcut_reminder` re-exports
+// this module on Windows); the only production caller of `get_frame` is the
+// macOS native inbox anchor, so on Windows it is dead in every configuration.
+#[allow(dead_code)]
 pub fn get_frame() -> Option<(f64, f64, f64, f64)> {
     let n = native()?;
     let (x, y, w, h) = n.overlay.window_rect()?;

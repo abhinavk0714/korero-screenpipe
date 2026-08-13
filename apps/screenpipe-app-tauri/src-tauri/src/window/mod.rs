@@ -78,7 +78,9 @@ fn publish_non_intrusive_env(activation_allowed: bool) {
 }
 
 /// Let a spec re-enable real activation for the assertions that need it.
-#[cfg(feature = "e2e")]
+/// The only caller (`e2e_set_activation_allowed`) is macOS-gated — activation
+/// suppression exists to protect the developer's fullscreen Space.
+#[cfg(all(feature = "e2e", target_os = "macos"))]
 pub fn set_window_activation_allowed(allowed: bool) {
     // Run the env seed first so it cannot clobber this later.
     let _ = window_activation_allowed();

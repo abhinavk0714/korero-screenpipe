@@ -25,7 +25,6 @@
   "ignoreDependencies": [
     "ts-node",
     "mocha",
-    "@wdio/cli",
     "@wdio/local-runner",
     "@wdio/globals"
   ],
