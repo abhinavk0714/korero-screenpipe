@@ -69,6 +69,41 @@ pub struct StartMeetingRequest {
     pub app: Option<String>,
     pub title: Option<String>,
     pub attendees: Option<String>,
+    /// Set when `title`/`attendees` come from a calendar event, e.g. starting
+    /// from a "Coming Up" entry. Claimed for this meeting so the same event
+    /// cannot also name the next one. See [`claim_calendar_event`].
+    pub calendar_event_id: Option<String>,
+}
+
+/// Whether calendar-sourced `title`/`attendees` may be written to this meeting.
+///
+/// One calendar event describes one meeting, so a caller passing an event id is
+/// claiming it: true means this meeting owns it (now or already), false means
+/// another meeting does and the calendar-derived fields must be dropped.
+/// Callers that aren't sourcing from a calendar pass `None` and are unaffected.
+async fn claim_calendar_event(
+    db: &DatabaseManager,
+    meeting_id: i64,
+    calendar_event_id: Option<&str>,
+) -> bool {
+    match calendar_event_id {
+        Some(event_id) if !event_id.is_empty() => {
+            match db.bind_calendar_event(meeting_id, event_id).await {
+                Ok(owned) => owned,
+                Err(e) => {
+                    // Fail closed: a wrong title with wrong attendees is worse
+                    // than none, which the summarizer fills in from content.
+                    tracing::warn!(
+                        "failed to claim calendar event for meeting {}: {}",
+                        meeting_id,
+                        e
+                    );
+                    false
+                }
+            }
+        }
+        _ => true,
+    }
 }
 
 #[derive(OaSchema, Deserialize, Debug)]
@@ -569,24 +604,12 @@ pub(crate) async fn update_meeting_handler(
     Path(id): Path<i64>,
     axum::Json(body): axum::Json<UpdateMeetingRequest>,
 ) -> Result<JsonResponse<MeetingRecord>, (StatusCode, JsonResponse<Value>)> {
-    // Calendar-derived title/attendees only stick once this meeting owns the
-    // event. Losing the claim means another meeting already carries that
-    // identity, so this one keeps whatever it had and gets named from content.
-    let (title, attendees) = match body.calendar_event_id.as_deref() {
-        Some(event_id) if !event_id.is_empty() => {
-            let owned = state
-                .db
-                .bind_calendar_event(id, event_id)
-                .await
-                .unwrap_or(false);
-            if owned {
-                (body.title.as_deref(), body.attendees.as_deref())
-            } else {
-                (None, None)
-            }
-        }
-        _ => (body.title.as_deref(), body.attendees.as_deref()),
-    };
+    let (title, attendees) =
+        if claim_calendar_event(&state.db, id, body.calendar_event_id.as_deref()).await {
+            (body.title.as_deref(), body.attendees.as_deref())
+        } else {
+            (None, None)
+        };
 
     state
         .db
@@ -820,7 +843,9 @@ pub(crate) async fn start_meeting_handler(
                         .as_deref()
                         .is_none_or(|s| s.trim().is_empty())
                 });
-            if title_update.is_some() || attendees_update.is_some() {
+            let may_enrich =
+                claim_calendar_event(&state.db, active_id, body.calendar_event_id.as_deref()).await;
+            if may_enrich && (title_update.is_some() || attendees_update.is_some()) {
                 if let Err(e) = state
                     .db
                     .update_meeting(
@@ -848,7 +873,9 @@ pub(crate) async fn start_meeting_handler(
             // body doesn't wipe out detector-stamped fields.
             let title_update = body.title.as_deref().filter(|t| !t.trim().is_empty());
             let attendees_update = body.attendees.as_deref().filter(|a| !a.trim().is_empty());
-            if title_update.is_some() || attendees_update.is_some() {
+            let may_enrich =
+                claim_calendar_event(&state.db, active_id, body.calendar_event_id.as_deref()).await;
+            if may_enrich && (title_update.is_some() || attendees_update.is_some()) {
                 if let Err(e) = state
                     .db
                     .update_meeting(
@@ -879,11 +906,12 @@ pub(crate) async fn start_meeting_handler(
     } else {
         state
             .db
-            .insert_meeting(
+            .insert_meeting_with_calendar(
                 app,
                 "manual",
                 body.title.as_deref(),
                 body.attendees.as_deref(),
+                body.calendar_event_id.as_deref().filter(|e| !e.is_empty()),
             )
             .await
             .map_err(|e| {

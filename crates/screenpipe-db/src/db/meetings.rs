@@ -112,9 +112,15 @@ impl DatabaseManager {
             .await
     }
 
-    /// Claim `calendar_event_id` for `meeting_id`. Atomic: succeeds only when
-    /// the event is unclaimed and this meeting has no calendar identity yet.
-    /// Returns true when this call performed the binding.
+    /// Claim `calendar_event_id` for `meeting_id`. Atomic, and idempotent for
+    /// the owner: returns true when this meeting owns the event afterwards,
+    /// whether this call did the claiming or a previous one did.
+    ///
+    /// Callers treat false as "another meeting owns this, drop the
+    /// calendar-derived fields", so re-claiming your own event must not read
+    /// as a refusal. Returns false only when the event belongs to someone
+    /// else, this meeting already owns a *different* event, or the meeting
+    /// does not exist.
     pub async fn bind_calendar_event(
         &self,
         meeting_id: i64,
@@ -124,7 +130,7 @@ impl DatabaseManager {
             return Ok(false);
         }
         let mut tx = self.begin_immediate_with_retry().await?;
-        let bound = sqlx::query(
+        sqlx::query(
             "UPDATE meetings SET calendar_event_id = ?2 \
              WHERE id = ?1 \
                AND (calendar_event_id IS NULL OR calendar_event_id = '') \
@@ -136,11 +142,19 @@ impl DatabaseManager {
         .bind(meeting_id)
         .bind(calendar_event_id)
         .execute(&mut **tx.conn())
+        .await?;
+        // Ownership, not "did this statement write a row" — the owner
+        // re-claiming its own event updates nothing and still owns it.
+        let owns = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM meetings WHERE id = ?1 AND calendar_event_id = ?2",
+        )
+        .bind(meeting_id)
+        .bind(calendar_event_id)
+        .fetch_one(&mut **tx.conn())
         .await?
-        .rows_affected()
             > 0;
         tx.commit().await?;
-        Ok(bound)
+        Ok(owns)
     }
 
     /// End a meeting and persist the reason it ended. `end_reason` should be

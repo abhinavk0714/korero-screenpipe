@@ -46,6 +46,7 @@ interface MeetingNotesSectionProps {
     title?: string;
     attendees?: string;
     resumeMeetingId?: number;
+    calendarEventId?: string;
   }) => Promise<MeetingRecord | void> | MeetingRecord | void;
   captureDevices?: LiveCaptureDevice[];
   onCaptureDevicesRefresh?: () => void | Promise<void>;
@@ -448,7 +449,11 @@ export function MeetingNotesSection({
   }, [meetings, meetingState.activeMeetingId]);
 
   const handleStart = useCallback(
-    async (seed?: { title?: string; attendees?: string }) => {
+    async (seed?: {
+      title?: string;
+      attendees?: string;
+      calendarEventId?: string;
+    }) => {
       if (meetingState.active) return;
       intendingToFocusRef.current = true;
       try {
@@ -499,6 +504,7 @@ export function MeetingNotesSection({
       await handleStart({
         title: event.title,
         attendees: attendeesToString(event.attendees),
+        calendarEventId: calendarBindingKey(event),
       });
     },
     [handleStart],

@@ -2385,3 +2385,73 @@ fn events_without_a_provider_id_still_get_a_stable_key() {
     assert_eq!(first.key, second.key, "the same event yields the same key");
     assert!(first.key.contains("Weekly review"));
 }
+
+/// Re-claiming an event you already own has to succeed. Callers read `false`
+/// as "someone else owns this, drop the calendar fields", so a non-idempotent
+/// bind silently discards a legitimate re-enrichment — and a meeting whose
+/// title write failed the first time could never be filled in again.
+#[tokio::test]
+async fn rebinding_the_same_event_to_its_owner_succeeds() {
+    let (_dir, db) = setup_db().await;
+    let id = db
+        .insert_meeting("Google Meet", "audio_process", None, None)
+        .await
+        .unwrap();
+
+    assert!(db.bind_calendar_event(id, "evt-1").await.unwrap());
+    assert!(
+        db.bind_calendar_event(id, "evt-1").await.unwrap(),
+        "the owner re-claiming its own event is a no-op that still means 'yes, it is yours'"
+    );
+    assert!(
+        !db.bind_calendar_event(id, "evt-other").await.unwrap(),
+        "but it still must not switch to a different event"
+    );
+}
+
+/// The manual "start from a Coming Up event" path writes the same calendar
+/// title and attendees, so it has to claim the event too. Otherwise the event
+/// stays unowned and the detector will happily stamp it onto the next meeting.
+#[tokio::test]
+async fn manually_started_meeting_claims_its_calendar_event() {
+    let (_dir, db) = setup_db().await;
+    let events = vec![calendar_event(
+        "cal-evt-manual",
+        "Design review",
+        chrono::Duration::minutes(-5),
+        chrono::Duration::minutes(30),
+        &["a@example.com", "b@example.com"],
+    )];
+
+    // What the manual path does: create the row, then stamp the event onto it.
+    let manual = db
+        .insert_meeting("manual", "manual", None, None)
+        .await
+        .unwrap();
+    let binding = find_overlapping_calendar_event(&events, Utc::now()).unwrap();
+    assert!(db.bind_calendar_event(manual, &binding.key).await.unwrap());
+    db.update_meeting(
+        manual,
+        None,
+        None,
+        Some(&binding.title),
+        binding.attendees.as_deref(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    end_meeting_ago(&db, manual, chrono::Duration::minutes(5)).await;
+
+    // A later, unrelated call inside the same window must not inherit it.
+    let auto = match start_meeting_with_calendar(&db, &events, "Google Meet").await {
+        AutoStartOutcome::Started(id) => id,
+        other => panic!("expected a separate meeting, got {other:?}"),
+    };
+    let row = db.get_meeting_by_id(auto).await.unwrap();
+    assert!(
+        row.title.as_deref().unwrap_or("").is_empty(),
+        "a manually claimed event must not also name the next meeting — got {:?}",
+        row.title
+    );
+}
