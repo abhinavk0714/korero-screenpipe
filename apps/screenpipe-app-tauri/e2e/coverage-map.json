@@ -2518,6 +2518,29 @@
       "notes": "AuthGuard re-verifies cloud entitlement on window focus so a freshly-subscribed user gets cloud transcription without restart (#4339)."
     },
     {
+      "spec": "zz-continuous-recording-basic-gate.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "settings",
+        "billing",
+        "entitlement"
+      ],
+      "features": [
+        "settings-recording",
+        "continuous-recording-gate",
+        "billing-gate"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "A saved continuous-audio preference is clamped to meetings-only for signed-out, verified Free, and conflicting-plan states. Dismissal makes no change, Free opens a token-pinned Basic upgrade with refresh support, conflicting evidence offers verification only, and verified Basic restores the saved mode without a modal."
+    },
+    {
       "spec": "zz-enterprise-license-prompt.spec.ts",
       "platforms": [
         "windows",

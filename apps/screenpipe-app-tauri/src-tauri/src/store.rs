@@ -1305,6 +1305,19 @@ pub(crate) enum LocalPlanPolicy {
     Unknown,
 }
 
+/// Continuous audio is a Basic-or-higher local capability. Debug builds keep
+/// anonymous development and the general E2E suite usable, but an explicitly
+/// verified Free account is still restricted so the paid gate can be tested.
+fn continuous_recording_allowed(
+    is_enterprise_build: bool,
+    dev_bypass: bool,
+    plan_policy: LocalPlanPolicy,
+) -> bool {
+    is_enterprise_build
+        || plan_policy == LocalPlanPolicy::VerifiedPaid
+        || (dev_bypass && plan_policy == LocalPlanPolicy::Unknown)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum AudioEngineFallbackReason {
@@ -1809,7 +1822,21 @@ impl SettingsStore {
         {
             config.port = p;
         }
-        match self.local_plan_policy() {
+        let plan_policy = self.local_plan_policy();
+        if config.audio_capture_mode == screenpipe_audio::audio_manager::AudioCaptureMode::Always
+            && !continuous_recording_allowed(
+                cfg!(feature = "enterprise-build"),
+                cfg!(debug_assertions),
+                plan_policy,
+            )
+        {
+            // Keep the saved preference intact. A later verified upgrade can
+            // resume it after the normal capture restart, while the effective
+            // native configuration stays fail-closed in the meantime.
+            config.audio_capture_mode =
+                screenpipe_audio::audio_manager::AudioCaptureMode::MeetingsOnly;
+        }
+        match plan_policy {
             LocalPlanPolicy::VerifiedFree => {
                 config.max_non_template_pipes = Some(2);
             }
@@ -2757,6 +2784,7 @@ mod tests {
     #[test]
     fn fresh_explicit_free_plan_applies_pipe_limit() {
         let mut store = SettingsStore::default();
+        store.recording.audio_capture_mode = "always".to_string();
         store.user.id = Some("user_free".to_string());
         store.user.subscription_plan = Some("none".to_string());
         store.user.entitlement = Some(json!({
@@ -2770,6 +2798,44 @@ mod tests {
         assert_eq!(store.local_plan_policy(), LocalPlanPolicy::VerifiedFree);
         let config = store.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
         assert_eq!(config.max_non_template_pipes, Some(2));
+        assert_eq!(
+            config.audio_capture_mode,
+            screenpipe_audio::audio_manager::AudioCaptureMode::MeetingsOnly
+        );
+    }
+
+    #[test]
+    fn continuous_recording_policy_covers_free_unknown_paid_dev_and_enterprise() {
+        assert!(!continuous_recording_allowed(
+            false,
+            false,
+            LocalPlanPolicy::VerifiedFree
+        ));
+        assert!(!continuous_recording_allowed(
+            false,
+            false,
+            LocalPlanPolicy::Unknown
+        ));
+        assert!(continuous_recording_allowed(
+            false,
+            false,
+            LocalPlanPolicy::VerifiedPaid
+        ));
+        assert!(!continuous_recording_allowed(
+            false,
+            true,
+            LocalPlanPolicy::VerifiedFree
+        ));
+        assert!(continuous_recording_allowed(
+            false,
+            true,
+            LocalPlanPolicy::Unknown
+        ));
+        assert!(continuous_recording_allowed(
+            true,
+            false,
+            LocalPlanPolicy::Unknown
+        ));
     }
 
     #[test]
@@ -2795,8 +2861,13 @@ mod tests {
             "features": { "app": true }
         }));
         assert_eq!(lifetime.local_plan_policy(), LocalPlanPolicy::VerifiedPaid);
+        lifetime.recording.audio_capture_mode = "always".to_string();
         let config = lifetime.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
         assert_eq!(config.max_non_template_pipes, None);
+        assert_eq!(
+            config.audio_capture_mode,
+            screenpipe_audio::audio_manager::AudioCaptureMode::Always
+        );
     }
 
     #[test]

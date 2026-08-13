@@ -129,6 +129,9 @@ export function AppEntitlementGate({
   const stoppedForGateRef = useRef(false);
   const recorderStoppedByGateRef = useRef(false);
   const prevGateRef = useRef<boolean | null>(null);
+  const prevContinuousRecordingPolicyRef = useRef<
+    ReturnType<typeof getLocalPlanPolicy> | null
+  >(null);
   const prevEnterpriseAuthenticatedRef = useRef<boolean | null>(null);
   const skipNextResumeForE2ESeedRef = useRef(false);
   const resumingRef = useRef(false);
@@ -555,8 +558,7 @@ export function AppEntitlementGate({
     shouldGateForEntitlement,
   ]);
 
-  // Resume capture when a mandatory login/app-routing gate clears. Consumer
-  // billing changes no longer affect local recording on the free plan.
+  // Resume capture when a mandatory login/app-routing gate clears.
   //
   // This must use the SAME recipe as the reliable settings restart
   // (display-section / recording-settings): one owner, guarded against
@@ -581,6 +583,35 @@ export function AppEntitlementGate({
       }
     })();
   }, []);
+
+  // The native config clamps a saved "always" preference to meetings-only on
+  // Free or unknown consumer policy. Rebuild capture when verified plan truth
+  // changes so downgrades stop continuous audio immediately and upgrades can
+  // restore the saved preference without an app relaunch. Mandatory gates own
+  // their own stop/resume path, so this only handles ungated Free <-> paid
+  // transitions.
+  useEffect(() => {
+    if (!isSettingsLoaded || !isManagedDeploymentResolved) return;
+    const previousPolicy = prevContinuousRecordingPolicyRef.current;
+    prevContinuousRecordingPolicyRef.current = localPlanPolicy;
+    if (isManagedDeployment || shouldGate) return;
+    if (previousPolicy === null || previousPolicy === localPlanPolicy) return;
+    if ((settings.audioCaptureMode ?? "always") !== "always") return;
+
+    posthog.capture("continuous_recording_policy_reconfigured", {
+      from: previousPolicy,
+      to: localPlanPolicy,
+    });
+    resumeRecordingAfterGate(false);
+  }, [
+    isManagedDeployment,
+    isManagedDeploymentResolved,
+    isSettingsLoaded,
+    localPlanPolicy,
+    resumeRecordingAfterGate,
+    settings.audioCaptureMode,
+    shouldGate,
+  ]);
 
   // A genuine enterprise gate (missing/invalid account or key) is allowed to
   // stop capture. If the user then authenticates successfully, resume even

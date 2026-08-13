@@ -29,7 +29,11 @@ const mocks = vi.hoisted(() => ({
   windowLabel: "home",
   loadUser: vi.fn().mockResolvedValue(undefined),
   updateSettings: vi.fn().mockResolvedValue(undefined),
-  state: { isSettingsLoaded: true, user: null as any },
+  state: {
+    isSettingsLoaded: true,
+    user: null as any,
+    audioCaptureMode: undefined as string | undefined,
+  },
   enterpriseResolutionError: false,
   enterprise: {
     isManagedDeployment: false,
@@ -44,7 +48,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/hooks/use-settings", () => ({
   useSettings: () => ({
-    settings: { user: mocks.state.user },
+    settings: {
+      user: mocks.state.user,
+      audioCaptureMode: mocks.state.audioCaptureMode,
+    },
     isSettingsLoaded: mocks.state.isSettingsLoaded,
     loadUser: mocks.loadUser,
     updateSettings: mocks.updateSettings,
@@ -127,7 +134,11 @@ describe("AppEntitlementGate", () => {
     // Production-like env so the dev billing bypass stays off and the gate runs.
     vi.stubEnv("TAURI_ENV_DEBUG", "false");
     vi.stubEnv("NEXT_PUBLIC_SCREENPIPE_DEV_BILLING_BYPASS", "false");
-    mocks.state = { isSettingsLoaded: true, user: null };
+    mocks.state = {
+      isSettingsLoaded: true,
+      user: null,
+      audioCaptureMode: undefined,
+    };
     mocks.enterpriseResolutionError = false;
     mocks.windowLabel = "home";
     mocks.enterprise = {
@@ -376,6 +387,82 @@ describe("AppEntitlementGate", () => {
 
     expect(screen.getByTestId("protected-app")).toBeInTheDocument();
     expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["upgrade", baseUser(), "standard"],
+    ["downgrade", baseUser({
+      app_entitled: true,
+      subscription_plan: "standard",
+      entitlement: {
+        active: true,
+        plan: "standard",
+        source: "subscription",
+        checked_at: minsAgo(1),
+        features: { app: true },
+      },
+    }), "none"],
+  ] as const)(
+    "restarts saved continuous recording after a live plan %s",
+    async (_direction, initialUser, nextPlan) => {
+      mocks.state.audioCaptureMode = "always";
+      mocks.state.user = initialUser;
+      const { rerender } = render(
+        <AppEntitlementGate>{protectedApp}</AppEntitlementGate>,
+      );
+
+      mocks.state.user =
+        nextPlan === "standard"
+          ? baseUser({
+              app_entitled: true,
+              subscription_plan: "standard",
+              entitlement: {
+                active: true,
+                plan: "standard",
+                source: "subscription",
+                checked_at: minsAgo(1),
+                features: { app: true },
+              },
+            })
+          : baseUser();
+      rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+      await waitFor(() => expect(mocks.stopScreenpipe).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(mocks.spawnScreenpipe).toHaveBeenCalledWith(null),
+      );
+      expect(mocks.capture).toHaveBeenCalledWith(
+        "continuous_recording_policy_reconfigured",
+        nextPlan === "standard"
+          ? { from: "verified-free", to: "verified-paid" }
+          : { from: "verified-paid", to: "verified-free" },
+      );
+    },
+  );
+
+  it("does not restart meetings-only recording after a live plan change", async () => {
+    mocks.state.audioCaptureMode = "meetings-only";
+    mocks.state.user = baseUser();
+    const { rerender } = render(
+      <AppEntitlementGate>{protectedApp}</AppEntitlementGate>,
+    );
+
+    mocks.state.user = baseUser({
+      app_entitled: true,
+      subscription_plan: "standard",
+      entitlement: {
+        active: true,
+        plan: "standard",
+        source: "subscription",
+        checked_at: minsAgo(1),
+        features: { app: true },
+      },
+    });
+    rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+    expect(mocks.spawnScreenpipe).not.toHaveBeenCalled();
   });
 
   it("gates a conflicting legacy shell until its plan can be verified", async () => {

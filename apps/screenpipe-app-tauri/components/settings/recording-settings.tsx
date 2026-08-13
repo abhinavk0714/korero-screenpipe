@@ -193,6 +193,12 @@ import { useOverlayData } from "@/app/shortcut-reminder/use-overlay-data";
 import { useOpenAIModels } from "./hooks/use-openai-models";
 import { useTranscriptionDiagnostics } from "./hooks/use-transcription-diagnostics";
 import { useVoiceTraining } from "./hooks/use-voice-training";
+import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
+import {
+  effectiveAudioCaptureMode,
+  getContinuousRecordingAccess,
+} from "@/lib/continuous-recording-access";
+import { ContinuousRecordingPlanDialog } from "./continuous-recording-plan-dialog";
 
 type PermissionsStatus = {
   screenRecording: string;
@@ -1759,6 +1765,24 @@ type RecordingSettingsSection = "audio" | "screen";
 
 export function RecordingSettings({ section }: { section: RecordingSettingsSection }) {
   const { settings, updateSettings, getDataDir, loadUser } = useSettings();
+  const { isManagedDeployment, isManagedDeploymentResolved } = useManagedPolicy();
+  const continuousRecordingAccess = getContinuousRecordingAccess(
+    settings.user,
+    { isManagedDeployment, isManagedDeploymentResolved },
+  );
+  const displayedAudioCaptureMode = effectiveAudioCaptureMode(
+    settings.audioCaptureMode,
+    continuousRecordingAccess,
+  );
+  const [continuousRecordingDialogOpen, setContinuousRecordingDialogOpen] =
+    useState(false);
+  const [continuousRecordingRequested, setContinuousRecordingRequested] =
+    useState(false);
+  const [isRefreshingContinuousAccess, setIsRefreshingContinuousAccess] =
+    useState(false);
+  const [continuousAccessError, setContinuousAccessError] = useState<
+    string | null
+  >(null);
   const [openLanguages, setOpenLanguages] = React.useState(false);
   // Dev-only: warn if searchIndex drifts from rendered headings. State-gated
   // fields are marked `conditional: true` in the index above, so no false
@@ -2079,6 +2103,69 @@ export function RecordingSettings({ section }: { section: RecordingSettingsSecti
       setHasUnsavedChanges(true);
     }
   }, [settings, updateSettings, debouncedValidateSettings]);
+
+  const handleAudioCaptureModeChange = useCallback(
+    (value: "always" | "meetings-only" | "disabled") => {
+      if (value === "always" && continuousRecordingAccess !== "allowed") {
+        setContinuousAccessError(null);
+        setContinuousRecordingRequested(true);
+        setContinuousRecordingDialogOpen(true);
+        posthog.capture("continuous_recording_plan_gate_shown", {
+          access: continuousRecordingAccess,
+          plan: settings.user?.subscription_plan ?? null,
+        });
+        return;
+      }
+
+      setContinuousRecordingRequested(false);
+      handleSettingsChange({ audioCaptureMode: value }, true);
+    },
+    [continuousRecordingAccess, handleSettingsChange, settings.user?.subscription_plan],
+  );
+
+  const refreshContinuousRecordingAccess = useCallback(async () => {
+    const token = settings.user?.token?.trim();
+    if (!token || isRefreshingContinuousAccess) return;
+    setIsRefreshingContinuousAccess(true);
+    setContinuousAccessError(null);
+    try {
+      await loadUser(token, true);
+      posthog.capture("continuous_recording_access_refreshed");
+    } catch (error) {
+      setContinuousAccessError(
+        error instanceof Error ? error.message : "account verification failed",
+      );
+    } finally {
+      setIsRefreshingContinuousAccess(false);
+    }
+  }, [isRefreshingContinuousAccess, loadUser, settings.user?.token]);
+
+  useEffect(() => {
+    if (
+      !continuousRecordingRequested ||
+      continuousRecordingAccess !== "allowed"
+    ) {
+      return;
+    }
+
+    handleSettingsChange({ audioCaptureMode: "always" }, true);
+    setContinuousRecordingRequested(false);
+    setContinuousRecordingDialogOpen(false);
+    setContinuousAccessError(null);
+    toast({
+      title: "Basic access verified",
+      description: "Apply and restart to begin continuous recording.",
+    });
+    posthog.capture("continuous_recording_plan_gate_cleared", {
+      plan: settings.user?.subscription_plan ?? null,
+    });
+  }, [
+    continuousRecordingAccess,
+    continuousRecordingRequested,
+    handleSettingsChange,
+    settings.user?.subscription_plan,
+    toast,
+  ]);
 
   const currentPlatform = isMacOS ? "macos" : isWindows ? "windows" : "linux";
   const aecMode = normalizeAecModeForPlatform(
@@ -2846,22 +2933,64 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </h3>
               </div>
               <Select
-                value={settings.audioCaptureMode ?? "always"}
-                onValueChange={(value) => handleSettingsChange({ audioCaptureMode: value as "always" | "meetings-only" | "disabled" }, true)}
+                value={displayedAudioCaptureMode}
+                onValueChange={(value) =>
+                  handleAudioCaptureModeChange(
+                    value as "always" | "meetings-only" | "disabled",
+                  )
+                }
               >
-                <SelectTrigger className="w-[200px] h-7 text-xs">
+                <SelectTrigger
+                  className="w-[200px] h-7 text-xs"
+                  data-testid="audio-capture-mode-trigger"
+                >
                   <SelectValue placeholder="Select mode" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="always">Always (continuous)</SelectItem>
-                  <SelectItem value="meetings-only">During meetings only</SelectItem>
+                  <SelectItem
+                    value="always"
+                    data-testid="audio-capture-mode-always"
+                  >
+                    Always (continuous) · Basic
+                  </SelectItem>
+                  <SelectItem
+                    value="meetings-only"
+                    data-testid="audio-capture-mode-meetings-only"
+                  >
+                    During meetings only
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <AudioCaptureModePreview mode={settings.audioCaptureMode ?? "always"} />
+            <AudioCaptureModePreview mode={displayedAudioCaptureMode} />
+            {continuousRecordingAccess !== "allowed" && (
+              <p
+                className="mt-1 text-[11px] text-muted-foreground"
+                data-testid="continuous-recording-plan-hint"
+                data-access={continuousRecordingAccess}
+              >
+                Continuous recording is available on Basic and above.
+              </p>
+            )}
           </CardContent>
         </Card>
         )}
+
+        <ContinuousRecordingPlanDialog
+          access={continuousRecordingAccess}
+          user={settings.user}
+          open={continuousRecordingDialogOpen}
+          onOpenChange={(open) => {
+            setContinuousRecordingDialogOpen(open);
+            if (!open) {
+              setContinuousRecordingRequested(false);
+              setContinuousAccessError(null);
+            }
+          }}
+          onRefresh={refreshContinuousRecordingAccess}
+          isRefreshing={isRefreshingContinuousAccess}
+          refreshError={continuousAccessError}
+        />
 
         {!settings.disableAudio && (
           <div className="flex items-center gap-2 px-1 pt-1.5">
