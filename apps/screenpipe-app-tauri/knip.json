@@ -26,7 +26,9 @@
     "ts-node",
     "mocha",
     "@wdio/local-runner",
-    "@wdio/globals"
+    "@wdio/globals",
+    "undici",
+    "ws"
   ],
   "next": true,
   "tailwind": true,
