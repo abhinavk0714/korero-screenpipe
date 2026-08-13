@@ -217,10 +217,11 @@ fn shots(dir: &str) -> windows::core::Result<()> {
         eprintln!("warning: desktop capture failed, falling back to a solid backdrop");
     }
 
-    // A warmed-up meter so the audio bars read as live rather than flat.
+    // A warmed-up meter so the audio bars read as live rather than flat. The
+    // meter box is 22x14 DIP with a 1px inset, so its usable height is 12.
     let mut eq = Equalizer::default();
     for _ in 0..40 {
-        eq.tick(1.0 / 12.0, true, 0.7);
+        eq.tick(1.0 / 12.0, true, 0.7, 12.0);
     }
 
     for (name, state) in flows() {

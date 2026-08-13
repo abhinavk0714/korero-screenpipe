@@ -11132,7 +11132,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.6.14"
+version = "2.6.15"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11198,6 +11198,7 @@ dependencies = [
  "screenpipe-db",
  "screenpipe-engine",
  "screenpipe-events",
+ "screenpipe-overlay-win",
  "screenpipe-redact",
  "screenpipe-screen",
  "screenpipe-secrets",
@@ -11572,6 +11573,17 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+]
+
+[[package]]
+name = "screenpipe-overlay-win"
+version = "0.4.37"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tracing",
+ "windows 0.58.0",
+ "windows-core 0.58.0",
 ]
 
 [[package]]

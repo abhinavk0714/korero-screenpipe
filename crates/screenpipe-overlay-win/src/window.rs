@@ -814,6 +814,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                         // the press did — dragging off a button cancels it.
                         if ctx.layout.hit_test(x, y) == Some(pressed) {
                             action = action_for(&ctx.state, pressed);
+                            // Pinning is the overlay's own state, so it is applied
+                            // here rather than reported and echoed back.
+                            if pressed == Control::TranscriptPin {
+                                ctx.state.transcript_pinned = !ctx.state.transcript_pinned;
+                            }
                             // Any notification button closes the row; the app
                             // decides what the action itself does.
                             if matches!(
@@ -839,10 +844,14 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 match wparam.0 {
                     ANIM_TIMER => {
                         if let Some(ctx) = ctx_of(hwnd) {
+                            // The meter box is 22x14 DIP with a 1px inset top
+                            // and bottom, so its usable height is 14s - 2.
+                            let max_h = 14.0 * ctx.layout.scale - 2.0;
                             ctx.eq.tick(
                                 ANIM_MS as f32 / 1000.0,
                                 ctx.state.audio_active,
                                 ctx.state.speech_ratio,
+                                max_h,
                             );
                             repaint(hwnd);
                             update_animation_timer(hwnd);

@@ -39,6 +39,7 @@ pub mod layout;
 pub mod notification;
 pub mod state;
 pub mod text;
+pub mod transcript;
 
 #[cfg(target_os = "windows")]
 pub mod preview;

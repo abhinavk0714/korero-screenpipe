@@ -14,10 +14,12 @@ use crate::state::{Anchor, Control, OverlayState};
 /// Prefix understood by `dispatch_notification_action` on the rust side. The
 /// remainder is the action's original JSON, untouched.
 pub const NOTIFICATION_ACTION_PREFIX: &str = "notification_action:";
-pub const ANCHOR_PREFIX: &str = "anchor:";
+pub const ANCHOR_PREFIX: &str = "set_overlay_anchor:";
+pub const MEETING_NOTE_PREFIX: &str = "open_meeting_note:";
 
 /// The action string for a control, or `None` when the control has nothing to
-/// report in this state (a notification button with no notification behind it).
+/// report — either because it is a status cell rather than a button, or because
+/// the overlay handles it itself and the app has no business hearing about it.
 pub fn action_for(state: &OverlayState, control: Control) -> Option<String> {
     let fixed = match control {
         // Clicking the resting chip opens the timeline: the dock owns the other
@@ -25,13 +27,20 @@ pub fn action_for(state: &OverlayState, control: Control) -> Option<String> {
         Control::Pill | Control::Timeline => "open_timeline",
         Control::Search => "open_search",
         Control::Chat => "open_chat",
-        Control::Audio => "open_audio",
         Control::Settings => "open_overlay_settings",
         Control::RestartRecording => "restart_recording",
         Control::DismissIncident => "dismiss_incident",
-        Control::NotificationDismiss => "notification_dismiss",
-        Control::TranscriptPin => "toggle_meeting_pin",
-        Control::TranscriptOpenNote => "open_meeting_note",
+        // The audio meter is a status cell, not a button — same as the mac
+        // panel, where it is a `DockStatusCell` and not a `Button`.
+        Control::Audio => return None,
+        // Pinning and dismissing are the overlay's own business. Reporting them
+        // would invent vocabulary the app does not implement.
+        Control::TranscriptPin | Control::NotificationDismiss => return None,
+        Control::TranscriptOpenNote => {
+            // The app routes by meeting id; without one there is no note to open.
+            let id = state.meeting_id?;
+            return Some(format!("{MEETING_NOTE_PREFIX}{id}"));
+        }
         Control::NotificationAction0 | Control::NotificationAction1 => {
             let index = if control == Control::NotificationAction0 {
                 0
@@ -139,9 +148,36 @@ mod tests {
     }
 
     #[test]
+    fn status_cells_and_self_handled_controls_report_nothing() {
+        // Reporting these would invent action names the app does not implement,
+        // which land in the dispatcher's fallthrough and look like a live wire.
+        let s = OverlayState::default();
+        assert_eq!(action_for(&s, Control::Audio), None);
+        assert_eq!(action_for(&s, Control::TranscriptPin), None);
+        assert_eq!(action_for(&s, Control::NotificationDismiss), None);
+    }
+
+    #[test]
+    fn opening_a_note_needs_the_meeting_it_belongs_to() {
+        let mut s = OverlayState::default();
+        assert_eq!(action_for(&s, Control::TranscriptOpenNote), None);
+        s.meeting_id = Some(42);
+        assert_eq!(
+            action_for(&s, Control::TranscriptOpenNote).unwrap(),
+            "open_meeting_note:42"
+        );
+    }
+
+    #[test]
     fn anchor_reports_kebab_case_for_the_settings_store() {
-        assert_eq!(anchor_action(Anchor::BottomRight), "anchor:bottom-right");
-        assert_eq!(anchor_action(Anchor::MiddleLeft), "anchor:middle-left");
+        assert_eq!(
+            anchor_action(Anchor::BottomRight),
+            "set_overlay_anchor:bottom-right"
+        );
+        assert_eq!(
+            anchor_action(Anchor::MiddleLeft),
+            "set_overlay_anchor:middle-left"
+        );
         // Must match the json the anchor itself serialises to, or a pin made on
         // windows would not restore.
         for anchor in Anchor::ALL {

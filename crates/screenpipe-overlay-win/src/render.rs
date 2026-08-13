@@ -447,6 +447,10 @@ impl Renderer {
         unsafe { rt.DrawRectangle(&d2d_rect(r.inset(0.5, 0.5)), &brush, 1.0, None) };
     }
 
+    /// Ported from `AudioEqualizerView` in shortcut_reminder.swift, including
+    /// the fixed 2pt bar width and the constant 60% white: the meter is a level
+    /// readout, not a mood light, and brightening it with activity made the
+    /// idle state look broken by comparison.
     fn draw_equalizer(
         &self,
         rt: &ID2D1RenderTarget,
@@ -459,16 +463,14 @@ impl Renderer {
         let box_h = 14.0 * s;
         let bx = cell.x + (cell.w - box_w) / 2.0;
         let by = cell.y + (cell.h - box_h) / 2.0;
-        let bar_w = 2.0f32.max(s);
+        let max_h = box_h - 2.0;
+        let bar_w = 2.0;
         let spacing = box_w / BAR_COUNT as f32;
-        let heights = eq.heights(state.audio_active, state.speech_ratio);
-        // Live audio reads brighter than a resting meter without changing hue.
-        let alpha = if state.audio_active { 0.72 } else { 0.38 };
-        for (i, frac) in heights.iter().enumerate() {
-            let h = (box_h - 2.0) * frac;
+        let heights = eq.heights(state.audio_active, state.speech_ratio, max_h);
+        for (i, h) in heights.iter().enumerate() {
             let x = bx + spacing * i as f32 + (spacing - bar_w) / 2.0;
             let y = by + box_h - 1.0 - h;
-            self.fill(rt, Rect::new(x, y, bar_w, h), white(alpha));
+            self.fill(rt, Rect::new(x, y, bar_w, *h), white(0.6));
         }
     }
 

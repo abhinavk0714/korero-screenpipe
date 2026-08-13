@@ -15,17 +15,19 @@ pub fn lerp_factor(per_frame_at_60hz: f32, dt: f32) -> f32 {
 }
 
 pub const BAR_COUNT: usize = 8;
+/// Per-bar height multipliers. Verbatim from `AudioEqualizerView.barOffsets` in
+/// shortcut_reminder.swift — this is the shape people recognise as the meter.
 const BAR_OFFSETS: [f32; BAR_COUNT] = [0.6, 1.0, 0.75, 0.9, 0.65, 0.95, 0.8, 0.7];
 
-/// Per-bar oscillation, in radians per second. Mutually non-harmonic on purpose:
-/// shared factors make the bars re-align every few seconds and the meter reads
-/// as a pulsing block instead of audio.
-const BAR_FREQ: [f32; BAR_COUNT] = [5.1, 7.3, 6.2, 8.9, 5.7, 9.4, 6.8, 8.1];
-const BAR_PHASE: [f32; BAR_COUNT] = [0.0, 1.7, 3.1, 0.8, 4.4, 2.3, 5.2, 3.8];
-
-/// Audio meter bars. Heights are in "fraction of the meter box", 0..1.
+/// Audio meter bars, in **pixels**, ported line-for-line from the macOS panel.
+///
+/// Deliberately not "improved": the meter's motion comes from the speech level
+/// actually changing, plus a jitter of at most 1.5px. An earlier version here
+/// drove the bars from an oscillator so they moved even on a held level, which
+/// looks busy and dishonest — it animates when nothing is being said.
 #[derive(Debug, Clone)]
 pub struct Equalizer {
+    /// Current and target bar heights in pixels, `1.0..=max_h`.
     current: [f32; BAR_COUNT],
     target: [f32; BAR_COUNT],
     clock: f32,
@@ -34,48 +36,49 @@ pub struct Equalizer {
 impl Default for Equalizer {
     fn default() -> Self {
         Equalizer {
-            current: [0.0; BAR_COUNT],
-            target: [0.0; BAR_COUNT],
+            current: [1.0; BAR_COUNT],
+            target: [1.0; BAR_COUNT],
             clock: 0.0,
         }
     }
 }
 
 impl Equalizer {
-    /// Advance by `dt` seconds. `speech_ratio` is 0..1 from the capture loop.
-    pub fn tick(&mut self, dt: f32, active: bool, speech_ratio: f32) {
+    /// Advance by `dt` seconds. `max_h` is the meter box height less its 1px
+    /// top and bottom inset, matching `size.height - 2` in the Swift canvas.
+    pub fn tick(&mut self, dt: f32, active: bool, speech_ratio: f32, max_h: f32) {
         self.clock += dt;
+        // Silence rests at a 1px baseline rather than vanishing: an empty box
+        // reads as "audio is off", which is a different thing entirely.
         let base = if active {
-            speech_ratio.clamp(0.0, 1.0)
+            speech_ratio.clamp(0.0, 1.0) * max_h
         } else {
-            0.0
+            1.0
         };
         let k = lerp_factor(0.12, dt);
-        for (i, (cur, tgt)) in self
+        for ((cur, tgt), offset) in self
             .current
             .iter_mut()
             .zip(self.target.iter_mut())
-            .enumerate()
+            .zip(BAR_OFFSETS.iter())
         {
-            // The oscillation lives in the target, not on top of the output, so
-            // the lerp smooths it into motion the eye reads as a level meter.
-            // A speech ratio held constant still has to look like sound.
-            let osc = if active {
-                0.45 + 0.55 * (self.clock * BAR_FREQ[i] + BAR_PHASE[i]).sin().abs()
-            } else {
-                1.0
-            };
-            *tgt = base * BAR_OFFSETS[i] * osc;
+            *tgt = (base * offset).max(1.0);
             *cur += (*tgt - *cur) * k;
         }
     }
 
-    /// Bar heights as a fraction of the meter height, floored so the meter
-    /// always shows a baseline instead of vanishing.
-    pub fn heights(&self, _active: bool, _speech_ratio: f32) -> [f32; BAR_COUNT] {
+    /// Bar heights in pixels, clamped into the box.
+    pub fn heights(&self, active: bool, speech_ratio: f32, max_h: f32) -> [f32; BAR_COUNT] {
         let mut out = [0.0f32; BAR_COUNT];
-        for (slot, cur) in out.iter_mut().zip(self.current.iter()) {
-            *slot = cur.clamp(0.06, 1.0);
+        for (i, (slot, cur)) in out.iter_mut().zip(self.current.iter()).enumerate() {
+            // Sub-pixel liveliness while someone is actually talking. Same
+            // per-bar frequency ladder as Swift, same 1.5px amplitude.
+            let jitter = if active && speech_ratio > 0.01 {
+                (self.clock * (2.0 + i as f32) * 3.0).sin() * speech_ratio * 1.5
+            } else {
+                0.0
+            };
+            *slot = (cur + jitter).clamp(1.0, max_h.max(1.0));
         }
         out
     }
@@ -86,7 +89,7 @@ impl Equalizer {
         self.current
             .iter()
             .zip(self.target.iter())
-            .any(|(c, t)| (c - t).abs() > 0.005)
+            .any(|(c, t)| (c - t).abs() > 0.05)
     }
 }
 
@@ -131,65 +134,74 @@ mod tests {
         assert!((a - b).abs() < 0.01, "{a} vs {b}");
     }
 
+    /// The meter box is 22x14 DIP, so `size.height - 2` is 12.
+    const MAX_H: f32 = 12.0;
+
     #[test]
-    fn silence_settles_the_meter_to_the_floor() {
+    fn silence_settles_the_meter_to_the_one_pixel_baseline() {
         let mut eq = Equalizer::default();
         for _ in 0..60 {
-            eq.tick(1.0 / 12.0, true, 0.9);
+            eq.tick(1.0 / 12.0, true, 0.9, MAX_H);
         }
-        assert!(eq.heights(true, 0.9).iter().any(|h| *h > 0.4));
+        assert!(eq.heights(true, 0.9, MAX_H).iter().any(|h| *h > 6.0));
 
         for _ in 0..60 {
-            eq.tick(1.0 / 12.0, false, 0.0);
+            eq.tick(1.0 / 12.0, false, 0.0, MAX_H);
         }
         assert!(!eq.is_settling(), "meter must stop asking for redraws");
-        for h in eq.heights(false, 0.0) {
+        for h in eq.heights(false, 0.0, MAX_H) {
             assert!(
-                h <= 0.07,
-                "silent meter should rest at the baseline, got {h}"
+                (h - 1.0).abs() < 0.1,
+                "a silent meter rests at the 1px baseline, got {h}"
             );
         }
     }
 
     #[test]
-    fn meter_keeps_moving_on_a_constant_speech_ratio() {
-        // The engine can hold a steady level for seconds. If the meter only
-        // follows the level it freezes, and a frozen meter reads as "audio is
-        // broken" — which is the opposite of what it is there to say.
+    fn a_held_level_holds_its_height() {
+        // The bars track the level; they are not an oscillator. Motion on a
+        // constant level is the ±1.5px jitter and nothing more — anything
+        // livelier is the meter animating while nobody is speaking.
         let mut eq = Equalizer::default();
-        for _ in 0..24 {
-            eq.tick(1.0 / 12.0, true, 0.7);
+        for _ in 0..48 {
+            eq.tick(1.0 / 12.0, true, 0.5, MAX_H);
         }
-        let mut frames = Vec::new();
+        let settled = eq.heights(true, 0.5, MAX_H);
         for _ in 0..12 {
-            eq.tick(1.0 / 12.0, true, 0.7);
-            frames.push(eq.heights(true, 0.7));
+            eq.tick(1.0 / 12.0, true, 0.5, MAX_H);
         }
-        let travel: f32 = frames
-            .windows(2)
-            .map(|w| {
-                w[0].iter()
-                    .zip(w[1].iter())
-                    .map(|(a, b)| (a - b).abs())
-                    .sum::<f32>()
-            })
-            .sum();
-        assert!(
-            travel > 1.0,
-            "meter barely moved over a second of steady speech: {travel}"
-        );
+        let later = eq.heights(true, 0.5, MAX_H);
+        for (a, b) in settled.iter().zip(later.iter()) {
+            assert!(
+                (a - b).abs() <= 1.5 * 0.5 * 2.0 + 0.1,
+                "bar moved {} px on a held level",
+                (a - b).abs()
+            );
+        }
     }
 
     #[test]
-    fn bars_have_different_heights_so_it_reads_as_a_meter() {
-        let mut eq = Equalizer::default();
-        for _ in 0..40 {
-            eq.tick(1.0 / 12.0, true, 1.0);
+    fn bars_follow_the_level_they_are_given() {
+        let mut quiet = Equalizer::default();
+        let mut loud = Equalizer::default();
+        for _ in 0..48 {
+            quiet.tick(1.0 / 12.0, true, 0.2, MAX_H);
+            loud.tick(1.0 / 12.0, true, 0.9, MAX_H);
         }
-        let h = eq.heights(true, 1.0);
-        let max = h.iter().cloned().fold(f32::MIN, f32::max);
-        let min = h.iter().cloned().fold(f32::MAX, f32::min);
-        assert!(max - min > 0.2, "bars are too uniform: {h:?}");
+        let q: f32 = quiet.heights(true, 0.2, MAX_H).iter().sum();
+        let l: f32 = loud.heights(true, 0.9, MAX_H).iter().sum();
+        assert!(l > q * 2.0, "loud {l} should tower over quiet {q}");
+    }
+
+    #[test]
+    fn nothing_escapes_the_box() {
+        let mut eq = Equalizer::default();
+        for _ in 0..60 {
+            eq.tick(1.0 / 12.0, true, 1.0, MAX_H);
+        }
+        for h in eq.heights(true, 1.0, MAX_H) {
+            assert!((1.0..=MAX_H).contains(&h), "bar height {h} escaped the box");
+        }
     }
 
     #[test]

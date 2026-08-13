@@ -164,6 +164,9 @@ pub struct OverlayState {
     pub notification: Option<Notification>,
     pub transcript: Vec<TranscriptItem>,
     pub transcript_pinned: bool,
+    /// The live meeting, if any. The note button routes by id, so without one
+    /// there is nothing to open.
+    pub meeting_id: Option<i64>,
 
     /// Set while the pill is being dragged; the drag stage paints anchor targets.
     pub dragging: bool,
