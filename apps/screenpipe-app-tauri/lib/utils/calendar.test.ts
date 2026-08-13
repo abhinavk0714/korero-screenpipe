@@ -374,3 +374,44 @@ describe("fetchUpcomingCalendarSnapshot", () => {
     expect(snapshot.events).toEqual([]);
   });
 });
+
+describe("calendarBindingKey", () => {
+  it("uses the provider id when the feed supplies one", async () => {
+    const { calendarBindingKey } = await import("./calendar");
+    expect(
+      calendarBindingKey({
+        id: "abc123",
+        title: "Standup",
+        start: "2026-08-13T18:30:00Z",
+        end: "2026-08-13T19:00:00Z",
+      }),
+    ).toBe("abc123");
+  });
+
+  it("falls back to the event's natural identity, matching the Rust detector", async () => {
+    const { calendarBindingKey } = await import("./calendar");
+    const event = {
+      title: "Weekly review",
+      start: "2026-08-13T18:30:00Z",
+      end: "2026-08-13T19:00:00Z",
+    };
+    // Same shape the detector builds: `title|start|end`.
+    expect(calendarBindingKey(event)).toBe(
+      "Weekly review|2026-08-13T18:30:00Z|2026-08-13T19:00:00Z",
+    );
+    expect(calendarBindingKey({ ...event, id: "" })).toBe(
+      calendarBindingKey(event),
+    );
+  });
+
+  it("gives two genuinely different events different keys", async () => {
+    const { calendarBindingKey } = await import("./calendar");
+    const a = {
+      title: "Sync",
+      start: "2026-08-13T18:30:00Z",
+      end: "2026-08-13T19:00:00Z",
+    };
+    const b = { ...a, start: "2026-08-13T19:30:00Z" };
+    expect(calendarBindingKey(a)).not.toBe(calendarBindingKey(b));
+  });
+});

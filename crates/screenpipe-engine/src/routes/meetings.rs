@@ -33,6 +33,11 @@ pub struct UpdateMeetingRequest {
     pub attendees: Option<String>,
     pub note: Option<String>,
     pub meeting_app: Option<String>,
+    /// Set when `title`/`attendees` come from a calendar event. The event is
+    /// claimed for this meeting first; if another meeting already owns it, the
+    /// calendar-derived fields are dropped and the rest of the update applies.
+    /// One calendar event describes one meeting.
+    pub calendar_event_id: Option<String>,
 }
 
 #[derive(OaSchema, Deserialize, Debug)]
@@ -564,14 +569,33 @@ pub(crate) async fn update_meeting_handler(
     Path(id): Path<i64>,
     axum::Json(body): axum::Json<UpdateMeetingRequest>,
 ) -> Result<JsonResponse<MeetingRecord>, (StatusCode, JsonResponse<Value>)> {
+    // Calendar-derived title/attendees only stick once this meeting owns the
+    // event. Losing the claim means another meeting already carries that
+    // identity, so this one keeps whatever it had and gets named from content.
+    let (title, attendees) = match body.calendar_event_id.as_deref() {
+        Some(event_id) if !event_id.is_empty() => {
+            let owned = state
+                .db
+                .bind_calendar_event(id, event_id)
+                .await
+                .unwrap_or(false);
+            if owned {
+                (body.title.as_deref(), body.attendees.as_deref())
+            } else {
+                (None, None)
+            }
+        }
+        _ => (body.title.as_deref(), body.attendees.as_deref()),
+    };
+
     state
         .db
         .update_meeting(
             id,
             body.meeting_start.as_deref(),
             body.meeting_end.as_deref(),
-            body.title.as_deref(),
-            body.attendees.as_deref(),
+            title,
+            attendees,
             body.note.as_deref(),
             body.meeting_app.as_deref(),
         )
