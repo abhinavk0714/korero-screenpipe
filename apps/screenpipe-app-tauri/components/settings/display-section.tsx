@@ -556,17 +556,42 @@ export function DisplaySection() {
             opens the timeline — hide the whole section when the timeline is off. */}
         {!(settings?.disableTimeline ?? false) && (
         <>
+        {/* The overlay ships unhideable because it carries recording health,
+            live meeting state and meeting alerts. `overlay-hiding-control`
+            hands the switch back remotely if that proves too strict. */}
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
-            <div className="flex items-center space-x-2.5">
-              <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div>
-                <h3 className="text-sm font-medium text-foreground">Shortcut Reminder</h3>
-                <p className="text-xs text-muted-foreground">
-                  Always on screen. It carries recording health, live meeting state and meeting
-                  alerts. Drag it to pin it to any corner or edge.
-                </p>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">Shortcut Reminder</h3>
+                  {/* Only the "always on screen" claim depends on the flag.
+                      The drag hint is true either way and is the only place
+                      pinning is discoverable, so it stays in both. */}
+                  <p className="text-xs text-muted-foreground">
+                    {settings?.allowHidingShortcutOverlay
+                      ? "Carries recording health, live meeting state and meeting alerts. Drag it to pin it to any corner or edge."
+                      : "Always on screen. It carries recording health, live meeting state and meeting alerts. Drag it to pin it to any corner or edge."}
+                  </p>
+                </div>
               </div>
+              {settings?.allowHidingShortcutOverlay && (
+                <Switch
+                  id="shortcut-overlay"
+                  checked={settings?.showShortcutOverlay ?? true}
+                  onCheckedChange={async (checked) => {
+                    handleSettingsChange({ showShortcutOverlay: checked });
+                    try {
+                      if (checked) {
+                        await commands.showShortcutReminder(settings.showScreenpipeShortcut);
+                      } else {
+                        await commands.hideShortcutReminder();
+                      }
+                    } catch (e) {}
+                  }}
+                />
+              )}
             </div>
           </CardContent>
         </Card>

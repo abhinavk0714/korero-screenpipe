@@ -52,8 +52,20 @@ mod tests {
         merge_enterprise_file_configs, persist_enterprise_device_config,
         persist_recovered_enterprise_device_config, read_enterprise_config_from_path,
         notification_belongs_to_overlay, recovery_anchor_license_key, save_enterprise_team_config,
-        scan_chat_entries_by_mtime, EnterpriseFileConfig, RecoveredEnterpriseDeviceConfig,
+        scan_chat_entries_by_mtime, shortcut_overlay_hidden_by_choice, EnterpriseFileConfig,
+        RecoveredEnterpriseDeviceConfig,
     };
+
+    /// The overlay ships unhideable. A stored `showShortcutOverlay: false` —
+    /// whether left over from before this shipped or set while the remote
+    /// capability was on — must stay inert until the flag grants it back.
+    #[test]
+    fn a_stored_hide_choice_only_counts_once_remote_policy_allows_it() {
+        assert!(!shortcut_overlay_hidden_by_choice(false, false));
+        assert!(!shortcut_overlay_hidden_by_choice(false, true));
+        assert!(shortcut_overlay_hidden_by_choice(true, false));
+        assert!(!shortcut_overlay_hidden_by_choice(true, true));
+    }
 
     #[test]
     fn only_meeting_alerts_are_routed_through_the_overlay() {
@@ -2826,13 +2838,33 @@ fn shortcut_reminder_payload(
     map
 }
 
-/// The overlay is the app's only always-on surface: it carries recording
-/// health, the live-meeting state and now meeting notifications, so it always
-/// comes up. Suppression is a system decision (timeline off, headless), never
+/// Whether a stored "keep the overlay hidden" choice may be honored at all.
+/// The overlay is the app's only always-on surface — it carries recording
+/// health, live meeting state and meeting notifications — so it ships
+/// unhideable and a stale stored `false` stays inert. `overlay-hiding-control`
+/// (see `lib/desktop-remote-control.ts`) can grant the capability back
+/// remotely, at which point the user's own choice starts counting again.
+pub(crate) fn shortcut_overlay_hidden_by_choice(
+    allow_hiding: bool,
+    show_overlay: bool,
+) -> bool {
+    allow_hiding && !show_overlay
+}
+
+/// Suppression is otherwise a system decision (timeline off, headless), never
 /// a stored dismissal.
 pub(crate) async fn maybe_show_shortcut_reminder_on_startup(
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
+    let store = crate::store::SettingsStore::get(&app_handle)?.unwrap_or_default();
+    if shortcut_overlay_hidden_by_choice(
+        store.allow_hiding_shortcut_overlay,
+        store.show_shortcut_overlay,
+    ) {
+        info!("shortcut overlay stays hidden: remote policy allows it and the user turned it off");
+        return Ok(());
+    }
+
     show_shortcut_reminder_impl(app_handle, true, true).await
 }
 

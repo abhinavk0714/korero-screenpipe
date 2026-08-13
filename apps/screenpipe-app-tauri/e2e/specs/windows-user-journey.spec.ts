@@ -661,7 +661,9 @@ describe("Windows user journey", function () {
     await displayNav.click();
 
     // The overlay carries recording health, live meeting state and meeting
-    // alerts, so Display no longer offers a way to turn it off — only a size.
+    // alerts, so it ships unhideable and Display offers only a size. The
+    // `overlay-hiding-control` remote flag can restore the switch, but it is
+    // off by default and E2E never initializes PostHog.
     await waitForBodyText(
       (bodyText) =>
         bodyText.includes("theme, windows, and overlay appearance") &&

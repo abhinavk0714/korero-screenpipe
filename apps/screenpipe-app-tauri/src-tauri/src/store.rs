@@ -954,6 +954,15 @@ pub struct SettingsStore {
     /// Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
     #[serde(rename = "shortcutOverlaySize", default = "default_overlay_size")]
     pub shortcut_overlay_size: String,
+    /// The user's choice, honored only while `allow_hiding_shortcut_overlay`
+    /// is on. The overlay ships unhideable, so this is inert by default.
+    #[serde(rename = "showShortcutOverlay", default = "default_true")]
+    pub show_shortcut_overlay: bool,
+    /// Remote-controlled capability (`overlay-hiding-control`), written by the
+    /// desktop remote-control registry. False ships; flipping the flag on gives
+    /// the Display toggle back without a release.
+    #[serde(rename = "allowHidingShortcutOverlay", default)]
+    pub allow_hiding_shortcut_overlay: bool,
     /// Where the user dragged the overlay: one of top/bottom x left/center/right.
     #[serde(rename = "shortcutOverlayAnchor", default = "default_overlay_anchor")]
     pub shortcut_overlay_anchor: String,
@@ -1550,6 +1559,8 @@ Rules:
             lock_vault_shortcut: "Super+Shift+L".to_string(),
             shortcut_overlay_size: "small".to_string(),
             shortcut_overlay_anchor: default_overlay_anchor(),
+            show_shortcut_overlay: true,
+            allow_hiding_shortcut_overlay: false,
             device_id: uuid::Uuid::new_v4().to_string(),
             auto_update: true,
             auto_update_pipes: true,

@@ -3700,6 +3700,17 @@ listenOnLan?: boolean }) &
  */
 shortcutOverlaySize?: string;
 /**
+ * The user's choice, honored only while `allow_hiding_shortcut_overlay`
+ * is on. The overlay ships unhideable, so this is inert by default.
+ */
+showShortcutOverlay?: boolean;
+/**
+ * Remote-controlled capability (`overlay-hiding-control`), written by the
+ * desktop remote-control registry. False ships; flipping the flag on gives
+ * the Display toggle back without a release.
+ */
+allowHidingShortcutOverlay?: boolean;
+/**
  * Where the user dragged the overlay: one of top/bottom x left/center/right.
  */
 shortcutOverlayAnchor?: string;

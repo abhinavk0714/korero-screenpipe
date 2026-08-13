@@ -200,8 +200,8 @@ describe("recording health hover detail", () => {
     fireEvent.mouseEnter(await screen.findByTestId("shortcut-reminder-root"));
     fireEvent.click(await screen.findByTitle("Overlay settings"));
 
-    // The overlay carries recording health, live meeting state and meeting
-    // alerts, so there is no longer any way for a user to dismiss it.
+    // The gear never hides the pill. Even when `overlay-hiding-control` grants
+    // the capability back, the switch lives in Display settings, not here.
     expect(screen.queryByTitle("Hide for today")).toBeNull();
     expect(screen.queryByTitle("Hide for a week")).toBeNull();
     expect(mocks.hideShortcutReminder).not.toHaveBeenCalled();
