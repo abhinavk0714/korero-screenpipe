@@ -1257,6 +1257,62 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    async fn claim_test_db() -> (tempfile::TempDir, DatabaseManager) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claim-calendar-event.db");
+        let db = DatabaseManager::new(&path.to_string_lossy(), Default::default())
+            .await
+            .unwrap();
+        let writer = db.coordinated_writer().lock().await.unwrap();
+        sqlx::migrate!("../screenpipe-db/src/migrations")
+            .run(writer.pool())
+            .await
+            .unwrap();
+        drop(writer);
+        (dir, db)
+    }
+
+    /// Both write paths (`PUT /meetings/{id}` and `POST /meetings/start`) gate
+    /// calendar-sourced fields on this one decision, so it carries the
+    /// one-event-one-meeting rule for the whole HTTP surface.
+    #[tokio::test]
+    async fn claim_calendar_event_enforces_single_ownership() {
+        let (_dir, db) = claim_test_db().await;
+        let first = db
+            .insert_meeting("Google Meet", "audio_process", None, None)
+            .await
+            .unwrap();
+
+        // Callers not sourcing from a calendar are never gated.
+        assert!(claim_calendar_event(&db, first, None).await);
+        assert!(claim_calendar_event(&db, first, Some("")).await);
+
+        // Claiming a free event succeeds and actually persists ownership.
+        assert!(claim_calendar_event(&db, first, Some("evt-1")).await);
+        assert_eq!(
+            db.meeting_id_for_calendar_event("evt-1").await.unwrap(),
+            Some(first)
+        );
+
+        // The owner re-claiming is idempotent, not a refusal.
+        assert!(claim_calendar_event(&db, first, Some("evt-1")).await);
+
+        // A second meeting cannot take it, so its calendar fields get dropped.
+        db.end_meeting(first, "2026-08-13T18:38:10.000Z", None)
+            .await
+            .unwrap();
+        let second = db
+            .insert_meeting("Google Meet", "audio_process", None, None)
+            .await
+            .unwrap();
+        assert!(!claim_calendar_event(&db, second, Some("evt-1")).await);
+        assert_eq!(
+            db.meeting_id_for_calendar_event("evt-1").await.unwrap(),
+            Some(first),
+            "a losing claim must not move the event"
+        );
+    }
+
     #[test]
     fn export_request_defaults_to_audio_but_allows_video_only() {
         let default: ExportRequest =
