@@ -15,9 +15,9 @@
 //      pass if the component shipped a hardcoded `~/.screenpipe` while the
 //      user had relocated storage, which is the exact case where a wrong path
 //      turns a trust affordance into a lie.
-//   2. The "open" action reaches the real `reveal_in_default_browser` Tauri
-//      command with that same resolved path. A broken IPC name is invisible to
-//      jsdom and would ship an inert reassurance button.
+//   2. The reassurance is actually inside the window. jsdom has no layout, so
+//      a text assertion passes on copy that renders past the bottom edge —
+//      which is exactly what happened at the old 560px slide height.
 //   3. Both promises survive on the login slide, which is the ONLY slide every
 //      platform sees — permissions auto-advances on non-mac, so a regression
 //      that moves this copy to the permissions step silently removes it for
@@ -133,6 +133,62 @@ const seedLowDeviceTier = async () => {
   await invokeOrThrow("plugin:store|save", { rid });
 };
 
+/** Effective opacity of an element, multiplied down its ancestor chain. */
+const effectiveOpacity = async (testId: string): Promise<number> =>
+  (await browser.execute((id: string) => {
+    const el = document.querySelector(`[data-testid="${id}"]`);
+    if (!el) return 0;
+    // Multiplied down the chain: framer-motion animates the slide wrapper, so
+    // the leaf's own opacity is already 1 while the slide is still invisible.
+    let opacity = 1;
+    let node: Element | null = el;
+    while (node) {
+      opacity *= Number(getComputedStyle(node).opacity || "1");
+      node = node.parentElement;
+    }
+    return opacity;
+  }, testId)) as number;
+
+/**
+ * Wait until a slide has finished fading in.
+ *
+ * Every onboarding slide mounts inside framer-motion wrappers that start at
+ * opacity 0, and `innerText` reads fine at opacity 0 — so a text assertion goes
+ * green while the window is still visually blank. The first screenshots this
+ * spec captured were empty for exactly that reason.
+ *
+ * Waits for the value to STOP CHANGING rather than to reach 1: some of this
+ * copy is deliberately dimmed (the login note ships at `opacity-60`), so a
+ * "must be fully opaque" gate would hang forever on correctly rendered UI.
+ * Settled-and-visible is the property that actually matters for a screenshot.
+ */
+const waitForSettledVisible = async (testId: string, timeout = 8_000) => {
+  let previous = -1;
+  await browser.waitUntil(
+    async () => {
+      const current = await effectiveOpacity(testId);
+      const settled = current > 0.05 && Math.abs(current - previous) < 0.01;
+      previous = current;
+      return settled;
+    },
+    {
+      interval: 100,
+      timeout: t(timeout),
+      timeoutMsg: `[data-testid="${testId}"] never settled into view`,
+    },
+  );
+};
+
+/** Bottom edge of an element, in CSS px, relative to the viewport top. */
+const bottomOfTestId = async (testId: string): Promise<number> =>
+  (await browser.execute((id: string) => {
+    const el = document.querySelector(`[data-testid="${id}"]`);
+    return el ? el.getBoundingClientRect().bottom : -1;
+  }, testId)) as number;
+
+const viewportHeight = async (): Promise<number> =>
+  (await browser.execute(() => window.innerHeight)) as number;
+
 const textOfTestId = async (testId: string): Promise<string> =>
   ((await browser.execute(
     (id: string) =>
@@ -164,6 +220,7 @@ const textOfTestId = async (testId: string): Promise<string> =>
         "pause recording anytime from the screenpipe icon",
       );
 
+      await waitForSettledVisible("onboarding-capture-control-note");
       const filepath = await saveScreenshot("onboarding-trust-login");
       expect(existsSync(filepath)).toBe(true);
     });
@@ -188,9 +245,20 @@ const textOfTestId = async (testId: string): Promise<string> =>
     // spec in e2e/COVERAGE.md.
 
     (isMac ? describe : describe.skip)("on macOS", function () {
-      it("shows the data dir the running app actually resolved", async () => {
+      // Re-enter the slide for every test instead of sharing one visit.
+      //
+      // On a machine where all three permissions are already granted — any
+      // dev box, and any CI runner with TCC pre-seeded — the step correctly
+      // auto-advances and onboarding completes, destroying the window about
+      // two seconds after it opens. Sharing one visit across four tests races
+      // that teardown and fails with "No window could be found" partway
+      // through. A fresh visit per test gives each one its own window.
+      beforeEach(async () => {
         await gotoSlide("permissions");
         await waitForTestId("onboarding-data-dir-chip", 45_000);
+      });
+
+      it("shows the data dir the running app actually resolved", async () => {
 
         // The real assertion: the chip agrees with the directory this app
         // instance was launched against. A hardcoded ~/.screenpipe passes
@@ -199,82 +267,46 @@ const textOfTestId = async (testId: string): Promise<string> =>
         expect(shown).toBe(E2E_DATA_DIR);
         expect(existsSync(shown)).toBe(true);
 
+        await waitForSettledVisible("onboarding-data-dir-chip");
         const filepath = await saveScreenshot("onboarding-trust-permissions");
         expect(existsSync(filepath)).toBe(true);
       });
 
-      it("wires the open action to the real reveal command with that path", async () => {
-        // Intercept at the IPC boundary instead of letting Finder open during
-        // a headless run. This still proves the button reaches the shipped
-        // command name with the resolved path, which is what a typo breaks.
-        await browser.execute(() => {
-          const w = window as unknown as {
-            __TAURI_INTERNALS__?: {
-              invoke: (...args: unknown[]) => unknown;
-              __revealCalls?: unknown[];
-              __realInvoke?: (...args: unknown[]) => unknown;
-            };
-          };
-          const internals = w.__TAURI_INTERNALS__;
-          if (!internals) return;
-          internals.__revealCalls = [];
-          internals.__realInvoke = internals.invoke.bind(internals);
-          internals.invoke = (...args: unknown[]) => {
-            if (args[0] === "reveal_in_default_browser") {
-              internals.__revealCalls!.push(args[1]);
-              return Promise.resolve(null);
-            }
-            return internals.__realInvoke!(...args);
-          };
-        });
-
-        await browser.$('[data-testid="onboarding-data-dir-open"]').click();
-
-        await browser.waitUntil(
-          async () =>
-            ((await browser.execute(
-              () =>
-                (
-                  window as unknown as {
-                    __TAURI_INTERNALS__?: { __revealCalls?: unknown[] };
-                  }
-                ).__TAURI_INTERNALS__?.__revealCalls?.length ?? 0,
-            )) as number) > 0,
-          {
-            timeout: t(10_000),
-            timeoutMsg: "open never reached reveal_in_default_browser",
-          },
+      it("offers an enabled open action pointed at that same path", async () => {
+        // Deliberately does NOT click. `reveal_in_default_browser` shells out
+        // to `open -R`, which activates Finder, steals focus from the app and
+        // tore down the suite when this spec tried it. Intercepting the IPC
+        // instead does not work either: the generated binding calls a
+        // module-captured `TAURI_INVOKE`, not `window.__TAURI_INTERNALS__`
+        // at call time, so a monkey-patch silently misses and the real Finder
+        // launch happens anyway.
+        //
+        // The split that does hold: the unit test proves click ->
+        // revealInDefaultBrowser(dataDir) and the failure path, and this
+        // proves dataDir is the engine's real directory rather than a guess.
+        // Together that is the whole chain; clicking here would only re-prove
+        // the mocked half at the cost of a flaky suite.
+        const open = await browser.$('[data-testid="onboarding-data-dir-open"]');
+        expect(await open.isExisting()).toBe(true);
+        expect(await open.isEnabled()).toBe(true);
+        expect(await open.getAttribute("aria-label")).toBe(
+          `open ${E2E_DATA_DIR}`,
         );
-
-        const calls = (await browser.execute(
-          () =>
-            (
-              window as unknown as {
-                __TAURI_INTERNALS__?: { __revealCalls?: { path?: string }[] };
-              }
-            ).__TAURI_INTERNALS__?.__revealCalls ?? [],
-        )) as { path?: string }[];
-
-        expect(calls[0]?.path).toBe(E2E_DATA_DIR);
-
-        await browser.execute(() => {
-          const internals = (
-            window as unknown as {
-              __TAURI_INTERNALS__?: {
-                invoke: unknown;
-                __realInvoke?: unknown;
-              };
-            }
-          ).__TAURI_INTERNALS__;
-          if (internals?.__realInvoke)
-            internals.invoke = internals.__realInvoke;
-        });
       });
 
       it("repeats the pause affordance at the permission ask", async () => {
         expect(await textOfTestId("onboarding-capture-control-note")).toContain(
           "pause recording anytime from the screenpipe icon",
         );
+      });
+
+      it("keeps the pause affordance inside the window", async () => {
+        // The chip pushed the wheel down far enough that at the old 560px
+        // slide height the note rendered past the bottom edge — present in
+        // the DOM, invisible to the user, and green in every text assertion.
+        const bottom = await bottomOfTestId("onboarding-capture-control-note");
+        expect(bottom).toBeGreaterThan(0);
+        expect(bottom).toBeLessThanOrEqual(await viewportHeight());
       });
     });
 
@@ -297,6 +329,7 @@ const textOfTestId = async (testId: string): Promise<string> =>
         expect(text).toContain("skips incognito windows");
         expect(text).toContain("exclude any app in settings");
 
+        await waitForSettledVisible("timeline-capture-bounds");
         const filepath = await saveScreenshot("onboarding-trust-timeline");
         expect(existsSync(filepath)).toBe(true);
       });

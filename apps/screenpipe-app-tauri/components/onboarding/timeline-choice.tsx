@@ -143,6 +143,7 @@ const COSTS = [
   {
     icon: EyeOff,
     text: "skips incognito windows. you can exclude any app in settings.",
+    testId: "timeline-capture-bounds",
   },
 ];
 
@@ -306,8 +307,8 @@ export default function TimelineChoice({
         animate={{ opacity: 1 }}
         transition={{ delay: 0.25 }}
       >
-        {COSTS.map(({ icon: Icon, text }, i) => (
-          <div key={i} className="flex items-start gap-2">
+        {COSTS.map(({ icon: Icon, text, testId }, i) => (
+          <div key={i} data-testid={testId} className="flex items-start gap-2">
             <Icon
               className="w-3 h-3 mt-0.5 shrink-0 text-muted-foreground/60"
               strokeWidth={1.5}
