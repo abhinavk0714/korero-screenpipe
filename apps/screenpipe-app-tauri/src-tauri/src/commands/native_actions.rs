@@ -31,9 +31,7 @@ pub(crate) fn parse_overlay_anchor(action: &str) -> Option<&str> {
 pub(crate) fn parse_overlay_display(action: &str) -> Option<&str> {
     let display = action.strip_prefix("set_overlay_display:")?;
     let looks_like_uuid = display.len() == 36
-        && display
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() || c == '-')
+        && display.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
         && display
             .char_indices()
             .filter(|(_, c)| *c == '-')
@@ -95,9 +93,7 @@ pub(crate) fn track_native_overlay_event(
     event: &'static str,
     mut props: serde_json::Value,
 ) {
-    if let Some(analytics) =
-        app.try_state::<std::sync::Arc<crate::analytics::AnalyticsManager>>()
-    {
+    if let Some(analytics) = app.try_state::<std::sync::Arc<crate::analytics::AnalyticsManager>>() {
         let analytics = std::sync::Arc::clone(&analytics);
         if let Some(obj) = props.as_object_mut() {
             obj.insert("surface".into(), serde_json::json!("native_overlay"));
@@ -468,10 +464,7 @@ pub(crate) fn dispatch_notification_action(json: String) {
             .and_then(|v| v.as_str())
             == Some("record-hd")
     {
-        let body = parsed
-            .as_ref()
-            .and_then(|v| v.get("body"))
-            .cloned();
+        let body = parsed.as_ref().and_then(|v| v.get("body")).cloned();
         let deeplink_url = parsed
             .as_ref()
             .and_then(|v| v.get("deeplinkUrl").or_else(|| v.get("deeplink_url")))

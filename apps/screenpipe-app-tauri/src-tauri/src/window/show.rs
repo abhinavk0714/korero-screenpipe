@@ -29,10 +29,10 @@ use super::panel::{show_panel_visible, MAIN_PANEL_SHOWN};
 use super::util::run_on_main_thread_safe;
 use super::util::screen_aware_size;
 
-use tauri::Emitter;
 #[cfg(target_os = "macos")]
 use super::GatedPanelPlacement;
 use super::GatedWindowPlacement;
+use tauri::Emitter;
 #[cfg(target_os = "macos")]
 use tauri_nspanel::ManagerExt;
 #[cfg(target_os = "macos")]
@@ -1632,8 +1632,7 @@ impl ShowRewindWindow {
                                 let settings = SettingsStore::get(window_clone.app_handle())
                                     .unwrap_or_default()
                                     .unwrap_or_default();
-                                let capturable =
-                                    crate::window::overlay_is_capturable(&settings);
+                                let capturable = crate::window::overlay_is_capturable(&settings);
                                 let sharing: u64 = if capturable { 1 } else { 0 };
                                 let _: () = unsafe { msg_send![&*panel, setSharingType: sharing] };
 

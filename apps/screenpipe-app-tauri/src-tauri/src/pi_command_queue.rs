@@ -37,8 +37,7 @@ use tracing::{debug, error, info, warn};
 /// timeout. The desktop keys its fresh-process recovery off the exact error
 /// below (see `await_prompt_start` in pi.rs).
 pub const PROMPT_START_TIMEOUT: Duration = Duration::from_secs(15);
-pub const PROMPT_START_TIMEOUT_ERROR: &str =
-    "AI agent did not start responding within 15 seconds";
+pub const PROMPT_START_TIMEOUT_ERROR: &str = "AI agent did not start responding within 15 seconds";
 
 fn is_already_processing_rejection(error: &str) -> bool {
     error.to_ascii_lowercase().contains("already processing")
@@ -667,7 +666,11 @@ impl PiQueueHandle {
     /// mode selectors could not take effect until the reply finished. Like
     /// abort/steer, these are delivered immediately and correlated by request
     /// id, so they never wait on the turn.
-    pub async fn send_immediate_awaited(&self, cmd_type_label: &str, mut payload: Value) -> Result<(), String> {
+    pub async fn send_immediate_awaited(
+        &self,
+        cmd_type_label: &str,
+        mut payload: Value,
+    ) -> Result<(), String> {
         let stdin = self
             .stdin
             .as_ref()
@@ -682,7 +685,10 @@ impl PiQueueHandle {
         let response_rx = self.state.register_response(&req_id);
         let write_result = {
             let mut stdin_guard = stdin.lock().await;
-            info!("pi_command_queue: writing immediate {} ({})", cmd_type_label, req_id);
+            info!(
+                "pi_command_queue: writing immediate {} ({})",
+                cmd_type_label, req_id
+            );
             writeln!(*stdin_guard, "{}", cmd_str)
                 .and_then(|_| stdin_guard.flush())
                 .map_err(|e| format!("{cmd_type_label} write failed: {e}"))
@@ -1207,7 +1213,10 @@ async fn wait_for_prompt_acceptance(
         // accepted, which would strand a user bubble with no assistant reply.
         if !state.is_prompt_pending() {
             state.mark_prompt_rejected();
-            return (Err(format!("{cmd_type} was cancelled before it started")), None);
+            return (
+                Err(format!("{cmd_type} was cancelled before it started")),
+                None,
+            );
         }
 
         tokio::select! {
@@ -2504,12 +2513,9 @@ mod tests {
             "the rejection proves a real turn still owns the process"
         );
         assert!(
-            tokio::time::timeout(
-                std::time::Duration::from_millis(200),
-                &mut followup_reply,
-            )
-            .await
-            .is_err(),
+            tokio::time::timeout(std::time::Duration::from_millis(200), &mut followup_reply,)
+                .await
+                .is_err(),
             "follow-up must remain parked until the real turn ends"
         );
 
@@ -2524,7 +2530,9 @@ mod tests {
         .expect("follow-up should be written after the real turn ends");
         state.mark_agent_active();
         assert_eq!(
-            followup_reply.await.expect("follow-up reply channel stays open"),
+            followup_reply
+                .await
+                .expect("follow-up reply channel stays open"),
             Ok(())
         );
 

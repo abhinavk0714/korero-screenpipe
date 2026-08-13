@@ -30,11 +30,7 @@ fn is_overlay_window(label: &str) -> bool {
 /// and screen sharing. The global privacy preference wins over the narrower
 /// overlay preference. E2E builds stay capturable so WebDriver screenshots and
 /// visual assertions remain possible; the E2E API reports that bypass plainly.
-pub(crate) fn should_protect_window(
-    settings: &SettingsStore,
-    label: &str,
-    e2e_mode: bool,
-) -> bool {
+pub(crate) fn should_protect_window(settings: &SettingsStore, label: &str, e2e_mode: bool) -> bool {
     if e2e_mode {
         return false;
     }
@@ -51,10 +47,7 @@ pub(crate) fn overlay_is_capturable(settings: &SettingsStore) -> bool {
 /// preference through `set_content_protected` in `apply_to_window_with_settings`.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn app_windows_are_capturable(app: &AppHandle) -> bool {
-    let settings = SettingsStore::get(app)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    let settings = SettingsStore::get(app).ok().flatten().unwrap_or_default();
     !settings.hide_app_in_screen_share || crate::config::is_e2e_mode()
 }
 
@@ -62,16 +55,15 @@ fn apply_to_window_with_settings(
     window: &WebviewWindow,
     settings: &SettingsStore,
 ) -> Result<(), String> {
-    let protected = should_protect_window(
-        settings,
-        window.label(),
-        crate::config::is_e2e_mode(),
-    );
+    let protected = should_protect_window(settings, window.label(), crate::config::is_e2e_mode());
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    window
-        .set_content_protected(protected)
-        .map_err(|error| format!("failed to update {} capture protection: {error}", window.label()))?;
+    window.set_content_protected(protected).map_err(|error| {
+        format!(
+            "failed to update {} capture protection: {error}",
+            window.label()
+        )
+    })?;
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = protected;
@@ -131,9 +123,7 @@ pub fn set_app_screen_capture_protection(
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_app_screen_capture_protection(
-    app_handle: AppHandle,
-) -> ScreenCaptureProtectionStatus {
+pub fn get_app_screen_capture_protection(app_handle: AppHandle) -> ScreenCaptureProtectionStatus {
     let requested_hidden = SettingsStore::get(&app_handle)
         .ok()
         .flatten()

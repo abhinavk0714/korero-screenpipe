@@ -9,15 +9,15 @@ mod native_actions;
 // Public so the generated command registry can name the handler by full path.
 pub(crate) mod overlay_anchor;
 
+#[cfg(target_os = "macos")]
+use crate::window::GatedPanelPlacement;
+use crate::window::GatedWindowPlacement;
 use crate::{
     native_notification, native_shortcut_reminder,
     store::{OnboardingStore, SettingsStore},
     updates::is_enterprise_build,
     window::{RewindWindowId, ShowRewindWindow},
 };
-#[cfg(target_os = "macos")]
-use crate::window::GatedPanelPlacement;
-use crate::window::GatedWindowPlacement;
 use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager};
 #[cfg(not(target_os = "macos"))]
@@ -53,9 +53,9 @@ fn log_webview_build_failure(label: &str, url_hint: &str, err: &(impl std::fmt::
 mod tests {
     use super::{
         enterprise_license_key_sha256, fallback_local_api_config, is_login_callback_scheme,
-        merge_enterprise_file_configs, persist_enterprise_device_config,
-        persist_recovered_enterprise_device_config, read_enterprise_config_from_path,
-        notification_belongs_to_overlay, recovery_anchor_license_key, save_enterprise_team_config,
+        merge_enterprise_file_configs, notification_belongs_to_overlay,
+        persist_enterprise_device_config, persist_recovered_enterprise_device_config,
+        read_enterprise_config_from_path, recovery_anchor_license_key, save_enterprise_team_config,
         scan_chat_entries_by_mtime, shortcut_overlay_hidden_by_choice, EnterpriseFileConfig,
         RecoveredEnterpriseDeviceConfig,
     };
@@ -225,8 +225,11 @@ mod tests {
 
         // URL-only file: valid "MDM points at the control plane, sign-in
         // supplies the license" deployment.
-        std::fs::write(&path, r#"{"ingest_url":"https://cp.acme.com/api/enterprise/ingest"}"#)
-            .unwrap();
+        std::fs::write(
+            &path,
+            r#"{"ingest_url":"https://cp.acme.com/api/enterprise/ingest"}"#,
+        )
+        .unwrap();
         let cfg = read_enterprise_config_from_path(&path).unwrap();
         assert!(cfg.license_key.is_none());
         assert_eq!(
@@ -361,8 +364,7 @@ pub struct LowDiskGuardConfig {
 pub fn get_low_disk_guard_config() -> LowDiskGuardConfig {
     LowDiskGuardConfig {
         threshold_bytes: screenpipe_events::LOW_DISK_THRESHOLD_BYTES,
-        check_interval_seconds:
-            screenpipe_engine::disk_pressure::LOW_DISK_CHECK_INTERVAL_SECS,
+        check_interval_seconds: screenpipe_engine::disk_pressure::LOW_DISK_CHECK_INTERVAL_SECS,
     }
 }
 
@@ -501,8 +503,8 @@ pub fn get_chats_dir() -> Result<String, String> {
     let chats = data_dir.join("chats");
     std::fs::create_dir_all(&chats).map_err(|e| e.to_string())?;
 
-    let is_isolated = std::env::var("SCREENPIPE_E2E_SEED").is_ok()
-        || crate::dev_isolation::is_active();
+    let is_isolated =
+        std::env::var("SCREENPIPE_E2E_SEED").is_ok() || crate::dev_isolation::is_active();
     if !is_isolated {
         if let Some(home) = dirs::home_dir() {
             let legacy = home.join(".screenpipe").join("chats");
@@ -2852,10 +2854,7 @@ fn shortcut_reminder_payload(
 /// unhideable and a stale stored `false` stays inert. `overlay-hiding-control`
 /// (see `lib/desktop-remote-control.ts`) can grant the capability back
 /// remotely, at which point the user's own choice starts counting again.
-pub(crate) fn shortcut_overlay_hidden_by_choice(
-    allow_hiding: bool,
-    show_overlay: bool,
-) -> bool {
+pub(crate) fn shortcut_overlay_hidden_by_choice(allow_hiding: bool, show_overlay: bool) -> bool {
     allow_hiding && !show_overlay
 }
 
