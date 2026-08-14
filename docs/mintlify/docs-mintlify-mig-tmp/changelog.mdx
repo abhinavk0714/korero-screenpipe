@@ -22,6 +22,7 @@ icon: "newspaper"
 
 ### bug fixes
 
+- **Overlay recording pill names which subsystem failed** — the capture-health pill in the overlay used to read "recording needs help" no matter what actually broke, so a stalled microphone and a wedged screen backend looked identical. It now reads "audio needs help" when only the mic is affected and "screen capture needs help" when only capture is affected. The generic "recording needs help" only appears when both subsystems (or an unknown one) are involved. Click-to-restart, the urgent-state styling, and pause behavior are unchanged. See [troubleshooting](/troubleshooting).
 - **Live meeting dot no longer shifts on hover** — the red meeting dot on the collapsed overlay pill now stays anchored in place when you move the cursor over it. Previously, expanding the pill relocated the dot enough that the cursor could land on a shortcut cell and the transcript card would flicker instead of opening. Hovering the pill now reliably opens the transcript card it points to. See [meeting intelligence](/meeting-intelligence).
 
 ## week of august 9, 2026
