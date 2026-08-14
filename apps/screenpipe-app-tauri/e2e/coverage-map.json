@@ -1513,7 +1513,7 @@
       "criticality": "medium",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Emits the same native-magnify payload the macOS magnification gesture recognizer sends, and asserts an ordinary pinch stays controllable instead of slamming into a zoom limit, holds the world point under the fingers, ignores a duplicate synthesized ctrl+wheel for the same gesture, and persists the settled viewport once. The payload is injected, so the gesture recognizer binding itself is out of scope and the spec runs wherever the full suite runs."
+      "notes": "Drives the Live View canvas with the same native-magnify payload the macOS magnification gesture recognizer emits. Asserts the recognizer takes ownership so WebKit's duplicate ctrl+wheel stops zooming while plain scroll still pans, that an app-wide pinch is ignored by an unfocused canvas, and that canvas zoom stays anchored, clamped at 25%, and persisted through load_brain_view_canvas. The focused per-frame zoom arithmetic is asserted in the component tests because WKWebView under WebDriver does not reliably receive OS-level focus."
     },
     {
       "spec": "macos-ui-performance.spec.ts",
