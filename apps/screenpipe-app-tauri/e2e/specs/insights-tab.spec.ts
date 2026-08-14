@@ -50,8 +50,9 @@ describe("Insights tab", function () {
     // Same request the bundled pipe makes; the tab reads its response verbatim.
     const res = await authedGet(
       "/activity-summary?start_time=7d%20ago&end_time=now&include_apps=true" +
-        "&include_recording=true&include_windows=false&include_key_texts=false" +
-        "&include_memories=false&include_snippets=false&include_guidance=false",
+        "&include_windows=true&max_windows=300&include_recording=true" +
+        "&include_key_texts=false&include_memories=false" +
+        "&include_snippets=false&include_guidance=false",
     );
     expect(res.status).toBe(200);
     const body = res.body as Record<string, any>;
@@ -59,8 +60,22 @@ describe("Insights tab", function () {
     expect(Number.isFinite(body.total_active_minutes)).toBe(true);
     expect(Number.isFinite(body.total_frames)).toBe(true);
     expect(Array.isArray(body.apps)).toBe(true);
+    // Browser time is only legible per domain, so the tab needs windows with
+    // their browser_url, well past the 30-row default.
+    expect(Array.isArray(body.windows)).toBe(true);
     expect(typeof body.data_status).toBe("string");
     expect(body.time_range).toBeTruthy();
+  });
+
+  it("clamps an absurd window limit rather than trusting it", async () => {
+    const res = await authedGet(
+      "/activity-summary?start_time=1h%20ago&end_time=now&include_windows=true" +
+        "&max_windows=100000&include_apps=false&include_key_texts=false" +
+        "&include_memories=false&include_snippets=false&include_guidance=false",
+    );
+    expect(res.status).toBe(200);
+    const body = res.body as Record<string, any>;
+    expect((body.windows ?? []).length).toBeLessThanOrEqual(300);
   });
 
   it("is reachable from the sidebar and renders a recognisable state", async () => {

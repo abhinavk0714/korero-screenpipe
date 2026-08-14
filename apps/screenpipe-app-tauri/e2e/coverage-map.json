@@ -1444,12 +1444,13 @@
       ],
       "features": [
         "insights",
-        "feature-flag-rollout"
+        "feature-flag-rollout",
+        "activity-summary"
       ],
       "criticality": "medium",
       "confidence": "partial",
       "ux": "mixed",
-      "notes": "Flag-gated Insights tab: the /activity-summary shape the tab parses, plus sidebar navigation and a non-blank terminal state. Runs on the no-recording seed so the empty-rollup path is what is asserted; the hourly bundled pipe run and a populated rollup are not covered."
+      "notes": "Flag-gated Insights tab: the /activity-summary shape the tab parses including per-domain windows, max_windows clamping, sidebar navigation and a non-blank terminal state. Runs on the no-recording seed so the empty-rollup path is what is asserted; the hourly pipe run and model labelling are not covered."
     },
     {
       "spec": "live-view-item-actions.spec.ts",

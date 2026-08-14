@@ -8,11 +8,12 @@ import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { localFetch } from "@/lib/api";
+import { categoryLabel } from "@/lib/insights/categories";
 import {
 	INSIGHTS_ARTIFACT_FILE,
 	INSIGHTS_PIPE_ID,
 	type InsightsRollup,
-	categorizeAppMinutes,
+	categorizeSurfaces,
 	describeActiveTime,
 	formatDuration,
 	parseInsightsRollup,
@@ -112,7 +113,7 @@ export function InsightsSection() {
 		return () => clearInterval(timer);
 	}, [enablePipe, load]);
 
-	const categories = rollup ? categorizeAppMinutes(rollup.apps) : [];
+	const categories = rollup ? categorizeSurfaces(rollup.surfaces, rollup.labels) : [];
 	const comparison = rollup ? describeActiveTime(rollup.activeMinutes) : null;
 
 	return (
@@ -156,7 +157,7 @@ export function InsightsSection() {
 					{/* capture receipt — the trust statement, above everything else */}
 					<section className="grid grid-cols-2 border border-foreground/80 md:grid-cols-4">
 						<Cell label="recorded" value={formatDuration(rollup.activeMinutes)} />
-						<Cell label="apps" value={String(rollup.apps.length)} />
+						<Cell label="apps" value={String(rollup.appCount)} />
 						<Cell label="indexed" value={rollup.frameCount.toLocaleString()} unit="frames" />
 						<Cell
 							label="last frame"
@@ -193,7 +194,14 @@ export function InsightsSection() {
 									key={category.key}
 									className="flex items-center gap-4 border-b border-foreground/10 px-4 py-2 last:border-b-0"
 								>
-									<span className="w-28 shrink-0 text-[13px] lowercase">{category.key}</span>
+									<span className="w-40 shrink-0 text-[13px] lowercase">
+										{categoryLabel(category.key)}
+										{category.top.length > 0 && (
+											<span className="block truncate font-mono text-[10px] text-muted-foreground">
+												{category.top.join(" · ")}
+											</span>
+										)}
+									</span>
 									<div className="h-3.5 flex-1 bg-foreground/[0.07]">
 										<div
 											className="h-full bg-foreground"

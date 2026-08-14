@@ -89,6 +89,13 @@ pub struct ActivitySummaryQuery {
     #[serde(default = "default_true")]
     pub include_guidance: bool,
 
+    /// Cap on distinct windows/tabs returned. Default 30, max 300.
+    ///
+    /// The default is a readable list for an agent; Insights raises it because
+    /// browser time is only legible per domain, and a 30-row cap attributes
+    /// under half of it on a browser-heavy week.
+    #[serde(default = "default_max_windows")]
+    pub max_windows: u32,
     /// Cap on combined screen+audio snippets returned. Default 8, max 12.
     #[serde(default = "default_max_snippets")]
     pub max_snippets: u32,
@@ -102,6 +109,9 @@ pub struct ActivitySummaryQuery {
 
 fn default_true() -> bool {
     true
+}
+fn default_max_windows() -> u32 {
+    30
 }
 fn default_max_snippets() -> u32 {
     8
@@ -460,6 +470,9 @@ async fn collect_summary_core(
          LIMIT 20"
     );
 
+    // Clamped here rather than trusting the caller: an unbounded window list
+    // is a slow query and a large payload.
+    let window_limit = query.max_windows.clamp(1, 300);
     let windows_query = format!(
         "WITH raw AS ( \
            SELECT app_name, \
@@ -508,7 +521,7 @@ async fn collect_summary_core(
           AND allocated.window_name = raw.window_name \
          GROUP BY raw.app_name, raw.window_name \
          ORDER BY minutes DESC, raw.frame_count DESC, raw.app_name ASC, raw.window_name ASC \
-         LIMIT 30"
+         LIMIT {window_limit}"
     );
 
     // One representative text per app+window context. Prefer user input
@@ -1251,6 +1264,19 @@ mod tests {
         }
     }
 
+    // ---- max_windows ----
+
+    #[test]
+    fn window_limit_defaults_to_thirty_and_clamps() {
+        // Default keeps the agent-facing payload small.
+        assert_eq!(default_max_windows(), 30);
+        // Insights asks for far more so browser time can be split per domain,
+        // but an unbounded list is a slow query and a large payload.
+        assert_eq!(300u32.clamp(1, 300), 300);
+        assert_eq!(100_000u32.clamp(1, 300), 300);
+        assert_eq!(0u32.clamp(1, 300), 1);
+    }
+
     // ---- truncate_text ----
 
     #[test]
@@ -1470,6 +1496,7 @@ mod tests {
             include_memories: true,
             include_snippets: true,
             include_guidance: true,
+            max_windows: 30,
             max_snippets: 8,
             max_snippet_chars: 500,
             max_memories: 5,
@@ -1642,6 +1669,7 @@ mod db_tests {
             include_memories: false,
             include_snippets: false,
             include_guidance: false,
+            max_windows: 30,
             max_snippets: 8,
             max_snippet_chars: 500,
             max_memories: 5,
