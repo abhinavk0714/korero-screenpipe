@@ -725,7 +725,9 @@ fn paint_stage(
             stage.dib = Some(dib);
             stage.rt = None;
         }
-        let Some(dib) = stage.dib.as_ref() else { return };
+        let Some(dib) = stage.dib.as_ref() else {
+            return;
+        };
         let mem = dib.dc;
 
         if stage.rt.is_none() {
@@ -785,7 +787,11 @@ fn paint_stage(
                 radiusY: radius,
             };
             let (fill_white, fill_a, border_a) = if t.active {
-                (1.0, drag_stage::TARGET_FILL_ACTIVE, drag_stage::TARGET_BORDER_ACTIVE)
+                (
+                    1.0,
+                    drag_stage::TARGET_FILL_ACTIVE,
+                    drag_stage::TARGET_BORDER_ACTIVE,
+                )
             } else {
                 (0.0, drag_stage::TARGET_FILL, drag_stage::TARGET_BORDER)
             };

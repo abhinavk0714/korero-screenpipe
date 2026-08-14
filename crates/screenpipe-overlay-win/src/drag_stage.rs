@@ -195,8 +195,14 @@ mod tests {
         // The work area of a monitor to the right of the primary starts at a
         // large x. Clamping to 0 would park every target on the wrong screen.
         let right = Rect::new(1920.0, 40.0, 1000.0, 560.0);
-        assert_eq!(target_rect(Anchor::LeftCenter, right, PILL, MARGIN, 1.0).x, 1920.0);
-        assert_eq!(target_rect(Anchor::TopCenter, right, PILL, MARGIN, 1.0).y, 40.0);
+        assert_eq!(
+            target_rect(Anchor::LeftCenter, right, PILL, MARGIN, 1.0).x,
+            1920.0
+        );
+        assert_eq!(
+            target_rect(Anchor::TopCenter, right, PILL, MARGIN, 1.0).y,
+            40.0
+        );
     }
 
     #[test]
