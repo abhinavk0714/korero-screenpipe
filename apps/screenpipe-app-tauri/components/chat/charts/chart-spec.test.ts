@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   CHART_LIMITS,
   formatChartValue,
+  formatClock,
   parseChartSpec,
 } from "./chart-spec";
 
@@ -221,6 +222,140 @@ describe("parseChartSpec — heatmap", () => {
         JSON.stringify({ ...valid, values: [[1, "2"], [3, 4]] }),
       ),
     ).toBeNull();
+  });
+});
+
+describe("parseChartSpec — stat", () => {
+  it("parses tiles and falls back to the chart-level unit", () => {
+    const spec = parseChartSpec(
+      JSON.stringify({
+        type: "stat",
+        unit: "h",
+        items: [
+          { label: "screen time", value: 5.7 },
+          { label: "focus", value: 62, unit: "%", note: "vs 48% last week" },
+        ],
+      }),
+    );
+    expect(spec?.type).toBe("stat");
+    expect(spec && "items" in spec && spec.items[0]).toEqual({
+      label: "screen time",
+      value: 5.7,
+      unit: "h",
+      note: "",
+    });
+    expect(spec && "items" in spec && spec.items[1].unit).toBe("%");
+  });
+
+  it("caps the number of tiles", () => {
+    const spec = parseChartSpec(
+      JSON.stringify({
+        type: "stat",
+        items: Array.from({ length: 9 }, (_, i) => ({ label: `m${i}`, value: i })),
+      }),
+    );
+    expect(spec && "items" in spec && spec.items).toHaveLength(
+      CHART_LIMITS.statItems,
+    );
+    expect(spec?.truncatedNote).toContain("tiles");
+  });
+});
+
+describe("parseChartSpec — proportion", () => {
+  it("parses shares of a whole", () => {
+    const spec = parseChartSpec(
+      '{"type":"proportion","items":[{"label":"work","value":6},{"label":"rest","value":4}]}',
+    );
+    expect(spec?.type).toBe("proportion");
+  });
+
+  it("rejects a negative share, which has no meaning in a part-to-whole", () => {
+    expect(
+      parseChartSpec(
+        '{"type":"proportion","items":[{"label":"a","value":-1},{"label":"b","value":4}]}',
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects an all-zero total instead of drawing an empty bar with labels", () => {
+    expect(
+      parseChartSpec(
+        '{"type":"proportion","items":[{"label":"a","value":0},{"label":"b","value":0}]}',
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("parseChartSpec — timeline", () => {
+  it("parses blocks on a clock", () => {
+    const spec = parseChartSpec(
+      '{"type":"timeline","items":[{"label":"standup","start":9.5,"end":10}]}',
+    );
+    expect(spec && "items" in spec && spec.items[0]).toEqual({
+      label: "standup",
+      start: 9.5,
+      end: 10,
+    });
+  });
+
+  it("rejects a block that ends before it starts", () => {
+    expect(
+      parseChartSpec(
+        '{"type":"timeline","items":[{"label":"a","start":10,"end":9}]}',
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects a zero-length block", () => {
+    expect(
+      parseChartSpec(
+        '{"type":"timeline","items":[{"label":"a","start":9,"end":9}]}',
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects hours outside a day", () => {
+    expect(
+      parseChartSpec(
+        '{"type":"timeline","items":[{"label":"a","start":-1,"end":2}]}',
+      ),
+    ).toBeNull();
+    expect(
+      parseChartSpec(
+        '{"type":"timeline","items":[{"label":"a","start":23,"end":26}]}',
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("parseChartSpec — grouped_bar", () => {
+  it("shares validation with stacked_bar", () => {
+    const spec = parseChartSpec(
+      JSON.stringify({
+        type: "grouped_bar",
+        categories: ["mon", "tue"],
+        series: [
+          { name: "this week", values: [1, 2] },
+          { name: "last week", values: [3, 4] },
+        ],
+      }),
+    );
+    expect(spec?.type).toBe("grouped_bar");
+
+    expect(
+      parseChartSpec(
+        '{"type":"grouped_bar","categories":["mon","tue"],"series":[{"name":"a","values":[1]}]}',
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("formatClock", () => {
+  it("renders hours since midnight as a clock time", () => {
+    expect(formatClock(9)).toBe("9:00");
+    expect(formatClock(9.5)).toBe("9:30");
+    expect(formatClock(12.25)).toBe("12:15");
+    expect(formatClock(0)).toBe("0:00");
   });
 });
 

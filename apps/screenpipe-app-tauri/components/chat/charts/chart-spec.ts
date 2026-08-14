@@ -32,16 +32,20 @@ export const CHART_FENCE_LANGUAGE = "chart";
 
 /** Collection caps. Mirrored in the system prompt so the model knows them. */
 export const CHART_LIMITS = {
+  statItems: 4,
   barItems: 20,
   lineItems: 60,
   stackedCategories: 12,
-  /** 6 series keeps us inside the palette's safe adjacent-pair ordering. */
-  stackedSeries: 6,
+  /** 5 series is the length of the monochrome lightness ramp. */
+  stackedSeries: 5,
+  proportionItems: 5,
   heatmapColumns: 24,
   heatmapRows: 14,
+  timelineItems: 24,
   titleChars: 120,
   labelChars: 48,
   unitChars: 12,
+  noteChars: 48,
 } as const;
 
 export type ChartPoint = {
@@ -65,9 +69,48 @@ type ChartSpecBase = {
   truncatedNote: string | null;
 };
 
+/** A headline number. Not a chart — the anti-pattern it replaces is a one-bar bar chart. */
+export type StatTile = {
+  label: string;
+  value: number;
+  /** Per-tile unit, so a row can mix "h" and "%". */
+  unit: string;
+  /** Short qualifier, e.g. "vs last week". Plain text. */
+  note: string;
+};
+
+export type StatChartSpec = ChartSpecBase & {
+  type: "stat";
+  items: StatTile[];
+};
+
 export type BarChartSpec = ChartSpecBase & {
   type: "bar";
   items: ChartPoint[];
+};
+
+export type GroupedBarChartSpec = ChartSpecBase & {
+  type: "grouped_bar";
+  categories: string[];
+  series: ChartSeries[];
+};
+
+/** Part-to-whole as one full-width bar. Shares of a single total. */
+export type ProportionChartSpec = ChartSpecBase & {
+  type: "proportion";
+  items: ChartPoint[];
+};
+
+/** Blocks on a shared clock. `start`/`end` are hours since local midnight. */
+export type TimelineBlock = {
+  label: string;
+  start: number;
+  end: number;
+};
+
+export type TimelineChartSpec = ChartSpecBase & {
+  type: "timeline";
+  items: TimelineBlock[];
 };
 
 export type LineChartSpec = ChartSpecBase & {
@@ -89,18 +132,26 @@ export type HeatmapChartSpec = ChartSpecBase & {
 };
 
 export type ChartSpec =
+  | StatChartSpec
   | BarChartSpec
   | LineChartSpec
+  | GroupedBarChartSpec
   | StackedBarChartSpec
-  | HeatmapChartSpec;
+  | ProportionChartSpec
+  | HeatmapChartSpec
+  | TimelineChartSpec;
 
 export type ChartType = ChartSpec["type"];
 
 export const CHART_TYPES: readonly ChartType[] = [
+  "stat",
   "bar",
   "line",
+  "grouped_bar",
   "stacked_bar",
+  "proportion",
   "heatmap",
+  "timeline",
 ] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -174,10 +225,82 @@ function parseBarOrLine(
   };
 }
 
-function parseStackedBar(
+function parseStat(
   raw: Record<string, unknown>,
   base: ChartSpecBase,
-): StackedBarChartSpec | null {
+): StatChartSpec | null {
+  if (!Array.isArray(raw.items) || raw.items.length === 0) return null;
+  const out: StatTile[] = [];
+  for (const entry of raw.items.slice(0, CHART_LIMITS.statItems)) {
+    if (!isRecord(entry)) return null;
+    const label = readString(entry.label, CHART_LIMITS.labelChars);
+    const value = readNumber(entry.value);
+    if (label === null || value === null) return null;
+    out.push({
+      label,
+      value,
+      // Falls back to the chart-level unit so a row of same-unit tiles can
+      // declare it once.
+      unit: readOptionalString(entry.unit, CHART_LIMITS.unitChars) || base.unit,
+      note: readOptionalString(entry.note, CHART_LIMITS.noteChars),
+    });
+  }
+  return {
+    ...base,
+    type: "stat",
+    items: out,
+    truncatedNote: truncationNote(raw.items.length, out.length, "tiles"),
+  };
+}
+
+function parseProportion(
+  raw: Record<string, unknown>,
+  base: ChartSpecBase,
+): ProportionChartSpec | null {
+  const items = readPoints(raw.items, CHART_LIMITS.proportionItems);
+  if (items === null) return null;
+  // Shares of a whole: a negative slice has no meaning, and an all-zero total
+  // would render as an empty bar with confident-looking labels.
+  if (items.some((item) => item.value < 0)) return null;
+  if (items.reduce((sum, item) => sum + item.value, 0) <= 0) return null;
+  const received = Array.isArray(raw.items) ? raw.items.length : items.length;
+  return {
+    ...base,
+    type: "proportion",
+    items,
+    truncatedNote: truncationNote(received, items.length, "slices"),
+  };
+}
+
+function parseTimeline(
+  raw: Record<string, unknown>,
+  base: ChartSpecBase,
+): TimelineChartSpec | null {
+  if (!Array.isArray(raw.items) || raw.items.length === 0) return null;
+  const out: TimelineBlock[] = [];
+  for (const entry of raw.items.slice(0, CHART_LIMITS.timelineItems)) {
+    if (!isRecord(entry)) return null;
+    const label = readString(entry.label, CHART_LIMITS.labelChars);
+    const start = readNumber(entry.start);
+    const end = readNumber(entry.end);
+    if (label === null || start === null || end === null) return null;
+    // Hours since local midnight, forward in time.
+    if (start < 0 || end > 24 || end <= start) return null;
+    out.push({ label, start, end });
+  }
+  return {
+    ...base,
+    type: "timeline",
+    items: out,
+    truncatedNote: truncationNote(raw.items.length, out.length, "blocks"),
+  };
+}
+
+function parseCategorySeries(
+  type: "stacked_bar" | "grouped_bar",
+  raw: Record<string, unknown>,
+  base: ChartSpecBase,
+): StackedBarChartSpec | GroupedBarChartSpec | null {
   if (!Array.isArray(raw.categories) || raw.categories.length === 0) return null;
   const categories: string[] = [];
   for (const entry of raw.categories.slice(0, CHART_LIMITS.stackedCategories)) {
@@ -214,7 +337,7 @@ function parseStackedBar(
 
   return {
     ...base,
-    type: "stacked_bar",
+    type,
     categories,
     series,
     truncatedNote: [trimmedCategories, trimmedSeries]
@@ -306,14 +429,22 @@ export function parseChartSpec(source: string): ChartSpec | null {
   };
 
   switch (type) {
+    case "stat":
+      return parseStat(raw, base);
     case "bar":
       return parseBarOrLine("bar", raw, base);
     case "line":
       return parseBarOrLine("line", raw, base);
+    case "grouped_bar":
+      return parseCategorySeries("grouped_bar", raw, base);
     case "stacked_bar":
-      return parseStackedBar(raw, base);
+      return parseCategorySeries("stacked_bar", raw, base);
+    case "proportion":
+      return parseProportion(raw, base);
     case "heatmap":
       return parseHeatmap(raw, base);
+    case "timeline":
+      return parseTimeline(raw, base);
     default:
       return null;
   }
@@ -325,4 +456,12 @@ export function formatChartValue(value: number, unit: string): string {
     Math.abs(value) >= 100 ? Math.round(value) : Math.round(value * 100) / 100;
   const text = rounded.toLocaleString(undefined, { maximumFractionDigits: 2 });
   return unit ? `${text} ${unit}` : text;
+}
+
+/** Format hours-since-midnight as a clock time, for timeline axes and labels. */
+export function formatClock(hours: number): string {
+  const total = Math.round(hours * 60);
+  const h = Math.floor(total / 60) % 24;
+  const m = total % 60;
+  return `${h}:${String(m).padStart(2, "0")}`;
 }

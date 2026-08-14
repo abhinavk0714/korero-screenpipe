@@ -203,7 +203,131 @@ describe("ChatChart — model output is data, never markup", () => {
     const markup = container.innerHTML;
     expect(markup).not.toContain("javascript");
     expect(markup).not.toContain("#ff0000");
-    // The fill came from the validated palette instead.
-    expect(markup).toContain("rgb(42, 120, 214)");
+    // The fill came from the palette instead — trace grey, the single-series ink.
+    expect(markup).toContain("rgb(120, 120, 111)");
+  });
+});
+
+// DESIGN.md: "All corners are sharp. No rounded corners anywhere."
+describe("ChatChart — brand geometry", () => {
+  it("uses no rounded corners on any chart type", () => {
+    const specs = [
+      { type: "stat", items: [{ label: "screen", value: 5.7, unit: "h" }] },
+      { type: "bar", items: [{ label: "a", value: 1 }, { label: "b", value: 2 }] },
+      {
+        type: "line",
+        items: [{ label: "mon", value: 1 }, { label: "tue", value: 3 }],
+      },
+      {
+        type: "grouped_bar",
+        categories: ["mon", "tue"],
+        series: [{ name: "work", values: [1, 2] }, { name: "rest", values: [2, 1] }],
+      },
+      {
+        type: "stacked_bar",
+        categories: ["mon", "tue"],
+        series: [{ name: "work", values: [1, 2] }, { name: "rest", values: [2, 1] }],
+      },
+      {
+        type: "proportion",
+        items: [{ label: "work", value: 4 }, { label: "rest", value: 1 }],
+      },
+      {
+        type: "heatmap",
+        x: ["mon", "tue"],
+        y: ["am", "pm"],
+        values: [[1, 2], [3, 4]],
+      },
+      {
+        type: "timeline",
+        items: [{ label: "standup", start: 9, end: 9.5 }],
+      },
+    ];
+
+    for (const payload of specs) {
+      const { container, unmount } = render(<ChatChart spec={specFrom(payload)} />);
+      expect(
+        container.querySelector('[class*="rounded"]'),
+        `${payload.type} must not use a rounded utility`,
+      ).toBeNull();
+      expect(container.innerHTML).not.toContain("border-radius");
+      unmount();
+    }
+  });
+});
+
+describe("ChatChart — new mark types", () => {
+  it("renders stat tiles with per-tile units and notes", () => {
+    render(
+      <ChatChart
+        spec={specFrom({
+          type: "stat",
+          items: [
+            { label: "screen time", value: 5.7, unit: "h", note: "vs 4.9 last week" },
+            { label: "meetings", value: 3, unit: "" },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getAllByText("5.7 h").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("vs 4.9 last week").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("meetings").length).toBeGreaterThan(0);
+  });
+
+  it("renders proportion shares that add to 100%", () => {
+    render(
+      <ChatChart
+        spec={specFrom({
+          type: "proportion",
+          unit: "h",
+          items: [
+            { label: "deep work", value: 6 },
+            { label: "meetings", value: 2 },
+            { label: "comms", value: 2 },
+          ],
+        })}
+      />,
+    );
+    // Each share appears twice: the visible legend row and the sr-only table.
+    expect(screen.getAllByText("60%").length).toBe(2);
+    expect(screen.getAllByText("20%").length).toBe(4);
+  });
+
+  it("renders timeline blocks as clock times", () => {
+    render(
+      <ChatChart
+        spec={specFrom({
+          type: "timeline",
+          items: [
+            { label: "standup", start: 9.5, end: 10 },
+            { label: "deep work", start: 10, end: 12.25 },
+          ],
+        })}
+      />,
+    );
+    // Axis endpoints plus the screen-reader table.
+    expect(screen.getAllByText("9:00").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("13:00").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("12:15").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("standup").length).toBeGreaterThan(0);
+  });
+
+  it("renders grouped bars with a legend per series", () => {
+    render(
+      <ChatChart
+        spec={specFrom({
+          type: "grouped_bar",
+          title: "this week vs last",
+          unit: "h",
+          categories: ["cursor", "chrome"],
+          series: [
+            { name: "this week", values: [8, 4] },
+            { name: "last week", values: [6, 5] },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getAllByText("this week").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("last week").length).toBeGreaterThan(0);
   });
 });
