@@ -16,6 +16,7 @@ export const COMMAND_PALETTE_ACTION_IDS = [
   "resume_recording",
   "go_chat",
   "go_brain",
+  "go_insights",
   "go_meetings",
   "go_scheduled",
   "go_timeline",

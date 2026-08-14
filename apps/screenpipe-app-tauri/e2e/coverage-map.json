@@ -1432,6 +1432,26 @@
       "notes": "Registers an HTML artifact, opens it in Brain, and asserts it renders inside a sandboxed allow-scripts iframe (CSP default-src 'none') whose global <style> never leaks into the host app DOM (regression: rehype-raw repainting the whole window)."
     },
     {
+      "spec": "insights-tab.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "ui",
+        "local-api"
+      ],
+      "features": [
+        "insights",
+        "feature-flag-rollout"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "mixed",
+      "notes": "Flag-gated Insights tab: the /activity-summary shape the tab parses, plus sidebar navigation and a non-blank terminal state. Runs on the no-recording seed so the empty-rollup path is what is asserted; the hourly bundled pipe run and a populated rollup are not covered."
+    },
+    {
       "spec": "live-view-item-actions.spec.ts",
       "platforms": [
         "windows",

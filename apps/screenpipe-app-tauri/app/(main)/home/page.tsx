@@ -8,6 +8,7 @@ import {
   Settings as SettingsIcon,
   TimerReset,
   Plus,
+  BarChart3,
   Brain,
   MonitorPlay,
   HelpCircle,
@@ -56,6 +57,8 @@ import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { FeedbackSection } from "@/components/settings/feedback-section";
 import { PipeStoreView } from "@/components/pipe-store";
 import { BrainSection } from "@/components/settings/brain-section";
+import { InsightsSection } from "@/components/insights/insights-section";
+import { useInsightsRolloutEnabled } from "@/lib/insights-rollout";
 import { ConnectionsSection } from "@/components/settings/connections-section";
 import { MeetingNotesSection } from "@/components/meeting-notes";
 import { StandaloneChat } from "@/components/standalone-chat";
@@ -103,7 +106,7 @@ import { PlanExpirationNotice } from "@/components/plan-expiration-notice";
 import type { AppUser } from "@/lib/app-entitlement";
 import { ONBOARDING_BRAIN_HANDOFF_EVENT } from "@/lib/live-views/onboarding-activation";
 
-type MainSection = "home" | "timeline" | "brain" | "pipes" | "connections" | "meetings" | "help";
+type MainSection = "home" | "timeline" | "brain" | "insights" | "pipes" | "connections" | "meetings" | "help";
 type ConnectionFocusRequest = {
   id: string | null;
   category: string | null;
@@ -113,7 +116,7 @@ type ConnectionFocusRequest = {
 
 // All valid URL sections for the home page
 const ALL_SECTIONS = [
-  "home", "timeline", "pipes", "help", "brain", "connections", "meetings", "history",
+  "home", "timeline", "pipes", "help", "brain", "insights", "connections", "meetings", "history",
   "feedback", // backwards compat → maps to "help"
   "memories", // backwards compat → maps to "brain"
   "artifacts", // backwards compat → maps to "brain"
@@ -225,6 +228,7 @@ function HomeContent() {
   }, [updateSettings]);
 
   const { isSectionHidden, isSettingLocked } = useManagedPolicy();
+  const insightsEnabled = useInsightsRolloutEnabled();
   const runningPipes = useRunningPipes();
   const runningPipeCount = runningPipes.length;
   const selectChatConversation = useCallback((id: string) => {
@@ -284,6 +288,15 @@ function HomeContent() {
       setActiveSection("home");
     }
   }, [settings.disableTimeline, activeSection, setActiveSection]);
+
+  // Insights is behind a rollout flag. If it turns off (or never resolves)
+  // while the user is sitting on ?section=insights, bounce out — otherwise the
+  // nav row disappears and the view stays stranded.
+  useEffect(() => {
+    if (!insightsEnabled && activeSection === "insights") {
+      setActiveSection("home");
+    }
+  }, [insightsEnabled, activeSection, setActiveSection]);
 
   // Mount the Pi event router once, app-wide. Listens for `pi_event` /
   // `pi_session_evicted` outside any chat-component lifecycle and mirrors
@@ -938,6 +951,11 @@ function HomeContent() {
         return <Timeline embedded />;
       case "brain":
         return <BrainSection />;
+      case "insights":
+        // Flag-gated; the redirect effect above also resets activeSection, this
+        // guard just avoids a frame of the section on reload.
+        if (!insightsEnabled) return null;
+        return <InsightsSection />;
       case "pipes":
         return <PipeStoreView />;
       case "connections":
@@ -992,6 +1010,7 @@ function HomeContent() {
     // felt like opening an old recent).
     home: { label: "Chat", icon: <Plus className="h-3.5 w-3.5" /> },
     brain: { label: "Brain", icon: <Brain className="h-3.5 w-3.5" /> },
+    insights: { label: "Insights", icon: <BarChart3 className="h-3.5 w-3.5" /> },
     meetings: { label: "Meetings", icon: <CalendarClock className="h-3.5 w-3.5" /> },
     pipes: { label: "Scheduled", icon: <TimerReset className="h-3.5 w-3.5" /> },
     timeline: { label: "Timeline", icon: <MonitorPlay className="h-3.5 w-3.5" /> },
@@ -1003,7 +1022,10 @@ function HomeContent() {
     .filter((id) => !isSectionHidden(id) && !(id === "brain" && isSectionHidden("memories")))
     // Timeline can be turned off in Display settings — when it is, drop it from
     // the sidebar entirely (the "Timeline Disabled" placeholder was poor UX).
-    .filter((id) => !(id === "timeline" && (settings.disableTimeline ?? false)));
+    .filter((id) => !(id === "timeline" && (settings.disableTimeline ?? false)))
+    // Insights is behind a rollout flag; fail closed so an unresolved flag
+    // never leaks the tab.
+    .filter((id) => !(id === "insights" && !insightsEnabled));
 
   const visibleSidebarIds = resolveVisibleSidebarNavIds(sidebarLayout, availableSidebarIds);
   const hiddenSidebarIds = resolveHiddenSidebarNavIds(sidebarLayout, availableSidebarIds);

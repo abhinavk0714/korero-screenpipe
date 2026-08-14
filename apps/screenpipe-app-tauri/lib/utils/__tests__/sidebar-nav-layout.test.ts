@@ -44,10 +44,14 @@ describe("normalizeSidebarNavLayout", () => {
     expect(layout.order.slice(0, 2)).toEqual(["timeline", "home"]);
     expect(layout.order).toContain("meetings");
     expect(layout.order).toContain("connections");
-    // meetings sits after brain (its canonical predecessor), not appended last.
-    expect(layout.order.indexOf("meetings")).toBe(
-      layout.order.indexOf("brain") + 1,
-    );
+    // A spliced id lands after the *last* canonical predecessor the stored
+    // order actually contains, not appended last. insights and meetings are
+    // both absent here, so they chain: brain -> insights -> meetings.
+    expect(layout.order.indexOf("insights")).toBe(layout.order.indexOf("brain") + 1);
+    expect(layout.order.indexOf("meetings")).toBe(layout.order.indexOf("insights") + 1);
+    // connections' nearest *present* predecessor is pipes (timeline was moved
+    // to the front by the user), so it follows pipes rather than timeline.
+    expect(layout.order.indexOf("connections")).toBe(layout.order.indexOf("pipes") + 1);
     expect(layout.order).toHaveLength(ALL.length);
   });
 
@@ -97,7 +101,8 @@ describe("reordering", () => {
   it("moves an item to an index among the visible rows", () => {
     const next = moveSidebarNavItem(DEFAULT_SIDEBAR_NAV_LAYOUT, ALL, "connections", 0);
     expect(resolveVisibleSidebarNavIds(next, ALL)).toEqual([
-      "connections", "home", "brain", "meetings", "pipes", "timeline",
+      "connections",
+      ...ALL.filter((id) => id !== "connections"),
     ]);
   });
 
@@ -146,8 +151,10 @@ describe("hide and show", () => {
     });
     const next = setSidebarNavItemHidden(meetingsHidden, ALL, "meetings", false);
     expect(resolveVisibleSidebarNavIds(next, ALL)).toContain("meetings");
-    // and it lands in its canonical neighbourhood, right after brain.
-    expect(resolveVisibleSidebarNavIds(next, ALL).indexOf("meetings")).toBe(2);
+    // and it lands back at its canonical index rather than at the end.
+    expect(resolveVisibleSidebarNavIds(next, ALL).indexOf("meetings")).toBe(
+      ALL.indexOf("meetings"),
+    );
   });
 
   it("hides a row", () => {

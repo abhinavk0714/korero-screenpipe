@@ -237,8 +237,9 @@ const CATEGORY_COLORS: Record<string, string> = {
 	other: '#cccccc',        // Lightest - unknown/other apps
 };
 
-// Get category for an app name
-function getAppCategory(appName: string): string {
+// Get category for an app name. Exported so Insights folds per-app minutes
+// with the same mapping the timeline colours by — one table, not two.
+export function getAppCategory(appName: string): string {
 	const lowerName = appName.toLowerCase();
 	for (const [category, apps] of Object.entries(APP_CATEGORIES)) {
 		if (apps.some(app => lowerName.includes(app) || app.includes(lowerName))) {

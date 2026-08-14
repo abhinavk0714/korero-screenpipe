@@ -57,6 +57,12 @@ const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
         "automate-my-work",
         include_str!("../../assets/pipes/automate-my-work/pipe.md"),
     ),
+    // Ships disabled: the Insights tab enables it the first time it is opened,
+    // so nobody pays for an hourly run they never look at.
+    (
+        "insights",
+        include_str!("../../assets/pipes/insights/pipe.md"),
+    ),
     (
         "missed-todos",
         include_str!("../../assets/pipes/missed-todos/pipe.md"),
@@ -8818,6 +8824,33 @@ mod tests {
         assert!(!body.contains("buildMeetingSummarizeInstructions"));
         assert!(body.contains("screenpipe API search is required"));
         assert!(body.contains("never run recursive `find` or `grep`"));
+    }
+
+    #[test]
+    fn bundled_insights_pipe_matches_the_contract_the_tab_depends_on() {
+        let bundled = BUNDLED_BUILTIN_PIPES
+            .iter()
+            .find_map(|(name, content)| (*name == "insights").then_some(*content))
+            .expect("insights is bundled");
+        let (config, body) = parse_frontmatter(bundled).expect("bundled prompt should parse");
+
+        // Ships disabled: the Insights tab enables it on first open, so a user
+        // who never opens the tab never pays for an hourly run.
+        assert!(!config.enabled);
+        // An explicit cadence keeps it out of the live-view "manual" cadence
+        // repair path in lib/live-views/source-cadence.ts.
+        assert_eq!(config.schedule, "every 1h");
+
+        // The declared artifact is what auto_register_pipe_artifacts picks up
+        // and what the hardcoded page reads back.
+        assert_eq!(config.artifacts.len(), 1);
+        assert_eq!(config.artifacts[0].path, "insights.json");
+
+        // The prompt must stay a copy job — every number is computed by the
+        // existing /activity-summary SQL, never by the model.
+        assert!(body.contains("/activity-summary"));
+        assert!(body.contains("byte for byte"));
+        assert!(!body.contains("memory.md"));
     }
 
     #[test]

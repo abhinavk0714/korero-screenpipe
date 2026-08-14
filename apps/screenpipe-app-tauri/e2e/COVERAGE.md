@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 112
-- Declared test blocks: 319
-- Weighted coverage points: 250.7
+- Mapped specs: 113
+- Declared test blocks: 321
+- Weighted coverage points: 251.6
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 86 | 277 | 227.3 | 15 | 90 | 92% |
-| macos | 108 | 282 | 221.5 | 17 | 93 | 90% |
-| linux | 75 | 234 | 195.9 | 14 | 85 | 88% |
+| windows | 87 | 279 | 228.3 | 16 | 92 | 92% |
+| macos | 109 | 284 | 222.4 | 18 | 95 | 90% |
+| linux | 76 | 236 | 196.9 | 15 | 87 | 88% |
 
 ## Runtime Results
 
@@ -39,7 +39,7 @@ pass/fail/skip counts.
 | capture-ocr | 2 specs / 16 tests / 6.4 pts | 8 specs / 12 tests / 4.8 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 25 specs / 51 tests / 37.6 pts | 36 specs / 72 tests / 51.2 pts | 24 specs / 50 tests / 37.1 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 24 specs / 113 tests / 94.0 pts | 31 specs / 100 tests / 83.5 pts | 19 specs / 81 tests / 72.2 pts |
+| local-api | 25 specs / 115 tests / 95.0 pts | 32 specs / 102 tests / 84.5 pts | 20 specs / 83 tests / 73.2 pts |
 | notifications | 4 specs / 25 tests / 16.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
 | onboarding | 8 specs / 33 tests / 30.0 pts | 10 specs / 35 tests / 31.4 pts | 8 specs / 33 tests / 30.0 pts |
 | os-integration | 7 specs / 30 tests / 25.5 pts | 14 specs / 27 tests / 16.0 pts | 2 specs / 13 tests / 9.4 pts |
@@ -49,6 +49,7 @@ pass/fail/skip counts.
 | settings | 14 specs / 38 tests / 35.0 pts | 16 specs / 33 tests / 28.7 pts | 13 specs / 30 tests / 27.0 pts |
 | storage-privacy | 9 specs / 40 tests / 31.3 pts | 9 specs / 26 tests / 25.1 pts | 6 specs / 19 tests / 18.1 pts |
 | tauri-command | 18 specs / 50 tests / 39.1 pts | 25 specs / 58 tests / 44.5 pts | 17 specs / 49 tests / 38.1 pts |
+| ui | 1 specs / 2 tests / 1.0 pts | 1 specs / 2 tests / 1.0 pts | 1 specs / 2 tests / 1.0 pts |
 | window-lifecycle | 18 specs / 63 tests / 53.0 pts | 18 specs / 44 tests / 31.4 pts | 13 specs / 39 tests / 29.9 pts |
 
 ## Critical Feature Matrix
@@ -155,6 +156,7 @@ pass/fail/skip counts.
 | help-discord-link.spec.ts | windows, macos, linux | real-ui-e2e | help | low | smoke | real-user-flow | 2 | Help section Discord invite link. |
 | home-window.spec.ts | windows, macos, linux | real-ui-e2e, window-lifecycle | app-launch, home-navigation, timeline, settings-recording, pipes | high | strong | real-user-flow | 1 | Clicks through Home, Pipes, Timeline, Help, and Settings. |
 | html-artifact-render.spec.ts | windows, macos, linux | real-ui-e2e | brain, artifacts, html-sandbox | high | strong | real-user-flow | 1 | Registers an HTML artifact, opens it in Brain, and asserts it renders inside a sandboxed allow-scripts iframe (CSP default-src 'none') whose global <style> never leaks into the host app DOM (regression: rehype-raw repainting the whole window). |
+| insights-tab.spec.ts | windows, macos, linux | ui, local-api | insights, feature-flag-rollout | medium | partial | mixed | 2 | Flag-gated Insights tab: the /activity-summary shape the tab parses, plus sidebar navigation and a non-blank terminal state. Runs on the no-recording seed so the empty-rollup path is what is asserted; the hourly bundled pipe run and a populated rollup are not covered. |
 | live-view-item-actions.spec.ts | windows, macos, linux | real-ui-e2e, local-api, pipes | brain-overview, live-view-item-actions, artifacts, pipes | high | strong | real-user-flow | 1 | Installs the generic Commitments and Accounting Live View kits, shows Done, Later, and Not right without hover, persists snooze, correction, resolve, dismiss, and reopen decisions through the local API, verifies receipts survive reload, and captures real product screenshots. |
 | macos-ui-performance.spec.ts | macos | performance, real-ui-e2e | timeline, audio-device-health | medium | conditional | performance | 2 | macOS-only timeline/audio UI performance guards. |
 | main-overlay-visibility.spec.ts | windows, macos, linux | window-lifecycle, tauri-command | window-lifecycle, main-overlay | medium | partial | command | 1 | Main overlay show/hide without duplicate handles. |

@@ -20,6 +20,7 @@
 export const SIDEBAR_NAV_ORDER = [
   "home",
   "brain",
+  "insights",
   "meetings",
   "pipes",
   "timeline",
