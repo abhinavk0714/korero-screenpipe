@@ -12,6 +12,7 @@ const {
   reloadFlagsMock,
   pushMock,
   openMock,
+  emitMock,
   flagPayload,
   optedOut,
   appName,
@@ -22,6 +23,7 @@ const {
   reloadFlagsMock: vi.fn(),
   pushMock: vi.fn(),
   openMock: vi.fn(() => Promise.resolve()),
+  emitMock: vi.fn(() => Promise.resolve()),
   // mutable holder so each test can set the active flag payload
   flagPayload: { current: null as unknown },
   optedOut: { current: false },
@@ -55,6 +57,7 @@ vi.mock("@tauri-apps/api/event", () => ({
       return () => set?.delete(handler);
     },
   ),
+  emit: emitMock,
 }));
 
 vi.mock("@tauri-apps/api/app", () => ({
@@ -90,6 +93,7 @@ describe("useAnnouncement", () => {
     reloadFlagsMock.mockClear();
     pushMock.mockClear();
     openMock.mockClear();
+    emitMock.mockClear();
     flagPayload.current = null;
     optedOut.current = false;
     appName.current = "screenpipe";
@@ -269,6 +273,53 @@ describe("useAnnouncement", () => {
 
     expect(openMock).toHaveBeenCalledWith("https://screenpi.pe/blog");
     expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it("activateCta opens the install dialog for a pipe cta instead of installing", async () => {
+    flagPayload.current = {
+      ...FLAG,
+      cta: { label: "install it", pipe: "daily-email-summary" },
+    };
+    const { result } = renderHook(() => useAnnouncement());
+    await flushAnnouncementEffects();
+
+    await act(async () => {
+      result.current.activateCta();
+    });
+
+    // the same event a `screenpipe://install-pipe` deep link emits, so the
+    // user still sees permissions and connections before anything is written.
+    expect(emitMock).toHaveBeenCalledWith("install-pipe", {
+      url: "registry:daily-email-summary",
+    });
+    expect(pushMock).not.toHaveBeenCalled();
+    expect(openMock).not.toHaveBeenCalled();
+    expect(captureMock).toHaveBeenCalledWith(
+      "announcement_cta_clicked",
+      expect.objectContaining({ cta_target: "pipe" }),
+    );
+  });
+
+  it("prefers the pipe destination over route and url on the same cta", async () => {
+    flagPayload.current = {
+      ...FLAG,
+      cta: {
+        label: "install it",
+        pipe: "daily-email-summary",
+        route: "/settings",
+        url: "https://screenpi.pe/blog",
+      },
+    };
+    const { result } = renderHook(() => useAnnouncement());
+    await flushAnnouncementEffects();
+
+    await act(async () => {
+      result.current.activateCta();
+    });
+
+    expect(emitMock).toHaveBeenCalledTimes(1);
+    expect(pushMock).not.toHaveBeenCalled();
+    expect(openMock).not.toHaveBeenCalled();
   });
 
   it("submits only configured survey option ids and dismisses", async () => {

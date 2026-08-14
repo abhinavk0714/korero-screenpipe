@@ -146,6 +146,30 @@ describe("parseAnnouncement", () => {
     expect(a!.cta).toBeUndefined();
   });
 
+  it("keeps a cta whose only destination is a pipe slug", () => {
+    const a = parseAnnouncement({ ...VALID, cta: { label: "install it", pipe: "daily-email-summary" } });
+    expect(a!.cta).toEqual({ label: "install it", pipe: "daily-email-summary" });
+  });
+
+  it("rejects pipe slugs that could escape the registry source", () => {
+    // the slug is interpolated into `registry:<slug>`, so anything that could
+    // change what gets installed has to be dropped rather than sanitized.
+    for (const pipe of [
+      "../../etc/passwd",
+      "slug/../other",
+      "https://evil.example/pipe",
+      "Daily-Email-Summary",
+      "slug with spaces",
+      "slug:extra",
+      "-leading-hyphen",
+      "",
+      "a".repeat(81),
+    ]) {
+      const a = parseAnnouncement({ ...VALID, cta: { label: "go", pipe } });
+      expect(a!.cta, `expected ${JSON.stringify(pipe)} to be rejected`).toBeUndefined();
+    }
+  });
+
   it("prefers route over url but keeps url when only url is set", () => {
     const both = parseAnnouncement({ ...VALID, cta: { label: "go", url: "https://screenpipe.com/blog", route: "/r" } });
     expect(both!.cta).toEqual({ label: "go", url: "https://screenpipe.com/blog", route: "/r" });

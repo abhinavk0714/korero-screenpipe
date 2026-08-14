@@ -76,6 +76,13 @@ export interface AnnouncementCta {
   /** internal app route (e.g. "/settings?section=account"). takes precedence
    *  over `url` when both are set. */
   route?: string;
+  /** Store slug. Opens the normal install dialog for that pipe — the same
+   *  consent surface as a `screenpipe://install-pipe` deep link, showing
+   *  permissions and required connections before anything is written. A
+   *  remote payload can name a Store slug and nothing else: it cannot supply
+   *  an install URL, cannot install silently, and cannot enable a pipe.
+   *  Takes precedence over `route` and `url` when several are set. */
+  pipe?: string;
 }
 
 export interface Announcement {
@@ -250,6 +257,16 @@ export function safeAnnouncementExternalUrl(raw: unknown): string | null {
   }
 }
 
+/** Store slugs are lowercase kebab identifiers. Narrower than `IDENTIFIER` on
+ *  purpose: the value is interpolated into a `registry:<slug>` source, so no
+ *  dots, colons, slashes or uppercase. */
+const PIPE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
+
+export function safeAnnouncementPipeSlug(raw: unknown): string | null {
+  const value = boundedString(raw, 80);
+  return value && PIPE_SLUG.test(value) ? value : null;
+}
+
 function normalizeCta(raw: unknown): AnnouncementCta | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const r = raw as Record<string, unknown>;
@@ -258,10 +275,12 @@ function normalizeCta(raw: unknown): AnnouncementCta | undefined {
   const cta: AnnouncementCta = { label };
   const url = safeAnnouncementExternalUrl(r.url);
   const route = safeInternalRoute(r.route);
+  const pipe = safeAnnouncementPipeSlug(r.pipe);
   if (url) cta.url = url;
   if (route) cta.route = route;
-  // a cta with neither destination is a dead button — drop it.
-  if (!cta.url && !cta.route) return undefined;
+  if (pipe) cta.pipe = pipe;
+  // a cta with no destination is a dead button — drop it.
+  if (!cta.url && !cta.route && !cta.pipe) return undefined;
   return cta;
 }
 
