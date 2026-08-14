@@ -4,7 +4,7 @@
 "use client";
 
 import React from "react";
-import { Check, ChevronDown, Copy, Loader2, Mail } from "lucide-react";
+import { Check, ChevronDown, Copy, Loader2, Mail, Send } from "lucide-react";
 
 import {
   DropdownMenu,
@@ -40,7 +40,9 @@ export type MeetingShareAction =
   /** transcript only */
   | "transcript"
   /** the everything dump: header, notes, transcript */
-  | "meeting";
+  | "meeting"
+  /** open the review-first dialog that sends to a connected app */
+  | "send";
 
 // Matches the tab buttons on the same rule: same height, same rhythm, same
 // separator. The control has to read as part of the rule, not as a chip
@@ -52,6 +54,7 @@ const ACTION_LABEL: Record<MeetingShareAction, string> = {
   email: "email summary",
   transcript: "copy transcript",
   meeting: "copy meeting + transcript",
+  send: "send to an app…",
 };
 
 const ACTION_ICON: Record<
@@ -62,25 +65,37 @@ const ACTION_ICON: Record<
   email: Mail,
   transcript: Copy,
   meeting: Copy,
+  send: Send,
 };
 
 export function MeetingShareMenu({
   canShareSummary,
+  canSend = false,
   busy = false,
   copiedAction = null,
   onShare,
 }: {
   /** A summary is saved and finished streaming — a partial one is never shareable. */
   canShareSummary: boolean;
+  /**
+   * There is something worth sending to a connected app. Sending stays a menu
+   * entry rather than a second button on the rule: this control exists because
+   * three competing share affordances used to sit within 40px of each other,
+   * and a destination picker is not more likely than copying.
+   */
+  canSend?: boolean;
   busy?: boolean;
   /** Which action last landed on the clipboard, for the transient check. */
   copiedAction?: MeetingShareAction | null;
   onShare: (action: MeetingShareAction) => void;
 }) {
   const primary: MeetingShareAction = canShareSummary ? "summary" : "meeting";
-  const secondary: MeetingShareAction[] = canShareSummary
-    ? ["email", "transcript", "meeting"]
-    : ["transcript"];
+  const secondary: MeetingShareAction[] = [
+    ...(canShareSummary
+      ? (["email", "transcript", "meeting"] as MeetingShareAction[])
+      : (["transcript"] as MeetingShareAction[])),
+    ...(canSend ? (["send"] as MeetingShareAction[]) : []),
+  ];
 
   const confirmed = copiedAction === primary;
   const PrimaryIcon = confirmed ? Check : ACTION_ICON[primary];
