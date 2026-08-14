@@ -1497,6 +1497,24 @@
       "notes": "Installs the generic Commitments and Accounting Live View kits, shows Done, Later, and Not right without hover, persists snooze, correction, resolve, dismiss, and reopen decisions through the local API, verifies receipts survive reload, and captures real product screenshots."
     },
     {
+      "spec": "live-view-pinch-zoom.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "brain-overview",
+        "live-view-canvas-pinch-zoom"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Emits the same native-magnify payload the macOS magnification gesture recognizer sends, and asserts an ordinary pinch stays controllable instead of slamming into a zoom limit, holds the world point under the fingers, ignores WebKit's duplicate synthesized ctrl+wheel for the same gesture, and persists the settled viewport once."
+    },
+    {
       "spec": "macos-ui-performance.spec.ts",
       "platforms": [
         "macos"

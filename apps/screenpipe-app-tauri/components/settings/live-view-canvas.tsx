@@ -61,6 +61,7 @@ import {
   canvasWorldPoint,
   clampCanvasZoom,
   createCanvasBlockLayout,
+  nativeMagnifyZoomFactor,
   snapCanvasValue,
   uniqueCanvasId,
 } from "@/lib/live-views/canvas-layout";
@@ -487,6 +488,7 @@ export function LiveViewCanvas({
   const canvasActiveRef = useRef(false);
   const pointerAnchorRef = useRef<BrainViewCanvasPoint | null>(null);
   const nativeZoomEndRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const nativeMagnifySeenRef = useRef(false);
   const focusAnimationFrameRef = useRef<number | null>(null);
   const focusAnimationTimeoutRef = useRef<number | null>(null);
   const [focusViewport, setFocusViewport] = useState<Viewport | null>(null);
@@ -1192,7 +1194,7 @@ export function LiveViewCanvas({
       const current = latestDocumentRef.current;
       const bounds = surfaceRef.current?.getBoundingClientRect();
       const zoom = clampCanvasZoom(current.viewport.zoom * factor);
-      if (!bounds || zoom === current.viewport.zoom) return;
+      if (!bounds || zoom === current.viewport.zoom) return false;
       const anchorX = anchor
         ? Math.min(bounds.width, Math.max(0, anchor.x - bounds.left))
         : bounds.width / 2;
@@ -1212,6 +1214,7 @@ export function LiveViewCanvas({
         },
         persist,
       );
+      return true;
     },
     [applyDocument],
   );
@@ -1219,28 +1222,59 @@ export function LiveViewCanvas({
   useTauriEvent<number>("native-magnify", (event) => {
     const magnification = event.payload;
     if (
-      !canvasActiveRef.current ||
-      !window.document.hasFocus() ||
       typeof magnification !== "number" ||
       !Number.isFinite(magnification) ||
       magnification === 0
     ) {
       return;
     }
+    // The gesture recognizer proves this platform delivers native pinch, so
+    // WebKit's synthesized ctrl+wheel for the same fingers must stop zooming
+    // too. Latch before the focus/hover guards below: a pinch that this canvas
+    // ignores still tells us the double-zoom path is live.
+    nativeMagnifySeenRef.current = true;
+    if (!canvasActiveRef.current || !window.document.hasFocus()) return;
     // A real pinch takes over from an in-flight AI focus animation, the same
     // way a trusted pan or wheel zoom does.
     cancelFocusAnimation();
-    zoomCanvas(
-      Math.exp(magnification * 5),
+    const zoomed = zoomCanvas(
+      nativeMagnifyZoomFactor(magnification),
       pointerAnchorRef.current,
       false,
     );
+    // Pinching further into a zoom limit changes nothing, so it must not
+    // schedule a write of an unchanged document.
+    if (!zoomed && !nativeZoomEndRef.current) return;
     if (nativeZoomEndRef.current) clearTimeout(nativeZoomEndRef.current);
     nativeZoomEndRef.current = setTimeout(() => {
       applyDocument(latestDocumentRef.current, true);
       nativeZoomEndRef.current = null;
     }, 160);
   });
+
+  // WKWebView reports one trackpad pinch twice: through the native gesture
+  // recognizer and as a synthesized ctrl+wheel. React Flow's `zoomOnPinch`
+  // has to keep handling the wheel on platforms without the recognizer, so
+  // swallow that wheel only once the recognizer has proven it is running.
+  // A real capture listener, not React's delegated one — d3-zoom binds
+  // straight to the pane and must never see the duplicate.
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    if (!surface) return;
+    const swallowDuplicatePinch = (event: WheelEvent) => {
+      if (!event.ctrlKey || !nativeMagnifySeenRef.current) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    surface.addEventListener("wheel", swallowDuplicatePinch, {
+      capture: true,
+      passive: false,
+    });
+    return () =>
+      surface.removeEventListener("wheel", swallowDuplicatePinch, {
+        capture: true,
+      });
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -1609,6 +1643,7 @@ export function LiveViewCanvas({
             </Button>
             <button
               type="button"
+              data-testid="canvas-zoom-reset"
               aria-label="reset zoom to 100%"
               title="reset zoom to 100%"
               className="h-8 w-11 shrink-0 text-center font-mono text-[10px] tabular-nums text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-1 focus-visible:outline-foreground"
