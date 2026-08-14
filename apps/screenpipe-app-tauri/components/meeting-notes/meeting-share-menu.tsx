@@ -10,7 +10,7 @@ import {
   Loader2,
   Mail,
   MoreHorizontal,
-  Send,
+  Share,
 } from "lucide-react";
 
 import {
@@ -41,16 +41,22 @@ import { MEETING_RULE_ACTION_CLASS } from "./meeting-workspace";
  *
  * So the rule now holds exactly three things:
  *
- *   [copy]  [send]  │  [⋯]
+ *   [copy]  [share]  │  [⋯]
  *
  * `copy` is the one-click default (the formatted summary once there is one).
- * `send` is named, because a review-first send to Slack or Notion is the action
- * people came here to do and it was previously invisible behind the caret —
- * Live View put it on the header while meetings hid it, for the same artifact.
+ * `share` is visible rather than buried behind the caret — Live View surfaced
+ * the same action while meetings hid it — but stays icon-only, because the
+ * equivalent Live View dialog was opened by 2 of the 2,566 people who opened a
+ * dashboard in 30 days. Visible is a discoverability fix; labelled would be a
+ * bet on demand nothing has measured yet.
  * `⋯` is the *only* menu, so "it is in the menu" is a complete instruction.
  * Its contents are grouped and labelled, which is what lets one menu absorb
  * both the leftover destinations and the meeting lifecycle actions without
  * turning into a flat list of nine.
+ *
+ * Every action here emits a content-free event. This control shipped with no
+ * telemetry at all, so the question it exists to answer — does anyone share a
+ * meeting, and from where — was unanswerable.
  */
 
 export type MeetingShareAction =
@@ -86,7 +92,7 @@ const ACTION_ICON: Record<
   email: Mail,
   transcript: Copy,
   meeting: Copy,
-  send: Send,
+  send: Share,
 };
 
 /** One entry in the single overflow menu. */
@@ -119,6 +125,7 @@ export function MeetingShareMenu({
   busy = false,
   copiedAction = null,
   moreGroups = [],
+  onMenuOpenChange,
   onShare,
 }: {
   /** A summary is saved and finished streaming — a partial one is never shareable. */
@@ -142,6 +149,8 @@ export function MeetingShareMenu({
    * immediately to the right of this one's caret.
    */
   moreGroups?: MeetingMenuGroup[];
+  /** Fires when the overflow opens, so "went looking" is measurable. */
+  onMenuOpenChange?: (open: boolean) => void;
   onShare: (action: MeetingShareAction) => void;
 }) {
   const primary: MeetingShareAction = canShareSummary ? "summary" : "meeting";
@@ -188,16 +197,19 @@ export function MeetingShareMenu({
         ) : (
           <PrimaryIcon className="h-3.5 w-3.5" />
         )}
-        {/* Icon only at rest. Fewer than 1 in 10 people who open a meeting use
-            any share action, so a text label here competed with the tabs for
-            attention it had not earned. The word comes back to confirm the
-            copy, which is the moment it actually carries information. */}
+        {/* Icon only at rest, so it does not compete with the tabs beside it.
+            The word comes back to confirm the copy, which is the moment it
+            carries information the icon does not. */}
         {confirmed && <span className="hidden sm:inline">copied</span>}
       </button>
 
-      {/* Named, unlike `copy`. Sending is the action with a consequence outside
-          this app, so it is the one that has to say what it does before you
-          click it — and the Live View header already names its equivalent. */}
+      {/* Visible, but icon-only like copy beside it.
+          Sharing was invisible behind the caret, which is worth fixing — but on
+          the equivalent Live View surface only 2 of 2,566 people who opened a
+          dashboard in 30 days ever opened the send dialog, so a labelled button
+          would spend the rule's scarcest slot on unproven demand. The glyph is
+          the macOS share sheet rather than a paper plane: this opens a
+          destination chooser, it does not submit a message. */}
       {canSend && (
         <button
           type="button"
@@ -208,12 +220,11 @@ export function MeetingShareMenu({
           title="review this meeting, then send it to a connected app"
           className={cn(RULE_ACTION_CLASS, "px-4")}
         >
-          <Send className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">send</span>
+          <Share className="h-3.5 w-3.5" />
         </button>
       )}
 
-      <DropdownMenu>
+      <DropdownMenu onOpenChange={onMenuOpenChange}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"

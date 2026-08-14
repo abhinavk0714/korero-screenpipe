@@ -114,14 +114,35 @@ describe("meeting share control", () => {
   // Sending has a consequence outside the app, so unlike `copy` it says what
   // it does before you click it. It was previously invisible behind a caret
   // while Live View put the same action in its header.
-  it("puts send on the rule as a named control", () => {
+  it("puts share on the rule, visible but icon-only", () => {
     const onShare = vi.fn();
     render(<MeetingShareMenu canShareSummary canSend onShare={onShare} />);
 
     const send = screen.getByTestId("meeting-send-button");
-    expect(send).toHaveTextContent("send");
+    // Visible fixes the discoverability bug; unlabelled keeps the rule's
+    // scarcest slot off an action measured at 2 users in 30 days.
+    expect(send).toHaveTextContent("");
+    expect(send).toHaveAccessibleName("send to an app…");
     fireEvent.click(send);
     expect(onShare).toHaveBeenCalledWith("send");
+  });
+
+  // The control shipped with no telemetry, so nobody could answer whether
+  // meetings get shared at all. Opening the menu is tracked apart from acting
+  // on it: open-then-close is someone who went looking and did not find it.
+  it("reports menu opens so intent can be told apart from completion", async () => {
+    const onMenuOpenChange = vi.fn();
+    render(
+      <MeetingShareMenu
+        canShareSummary
+        onMenuOpenChange={onMenuOpenChange}
+        onShare={vi.fn()}
+      />,
+    );
+
+    openMenu();
+    await screen.findByRole("menuitem", { name: /copy transcript/ });
+    expect(onMenuOpenChange).toHaveBeenCalledWith(true);
   });
 
   // Recognising "send to Slack" beats reading "send" and then discovering

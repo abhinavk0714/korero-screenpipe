@@ -1764,7 +1764,25 @@ export function NoteView({
                 busy={copying}
                 copiedAction={copiedAction}
                 moreGroups={meetingMenuGroups}
+                // This control had no telemetry, so "does anyone share a
+                // meeting" was unanswerable — while the equivalent Live View
+                // dialog measured 2 users in 30 days. Menu opens are tracked
+                // separately from actions so intent and completion can be told
+                // apart: someone who opens the menu and closes it went looking
+                // and did not find what they wanted.
+                onMenuOpenChange={(open) => {
+                  if (!open) return;
+                  posthog.capture("meeting_share_menu_opened", {
+                    has_summary: canShareSummary,
+                    can_send: shareArtifact.sections.length > 0,
+                  });
+                }}
                 onShare={(action) => {
+                  posthog.capture("meeting_share_action", {
+                    action,
+                    from_rule: action === "summary" || action === "send",
+                    has_summary: canShareSummary,
+                  });
                   if (action === "summary") void handleCopySummary();
                   else if (action === "email") void handleEmailSummary();
                   else if (action === "transcript") void handleCopyTranscript();
