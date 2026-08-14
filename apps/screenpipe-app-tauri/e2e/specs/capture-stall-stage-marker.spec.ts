@@ -57,7 +57,14 @@ import { t, waitForAppReady } from "../helpers/test-utils.js";
 const dataDir = resolve(homedir(), ".screenpipe", ".e2e");
 const SILENT_MARKER = resolve(dataDir, "e2e-capture-loop-silent-fired");
 
-/** Every stage the loop can report. A frozen loop must name one of these. */
+/**
+ * Every stage the loop can report. A frozen loop must name one of these.
+ *
+ * Mirrors `CaptureLoopStage::as_str` in crates/screenpipe-screen/src/metrics.rs.
+ * A stage added there but missed here fails this spec only when a poll happens
+ * to land in that stage's window, so a short-lived stage shows up as a flake
+ * rather than an honest failure. Keep the two lists in step.
+ */
 const KNOWN_STAGES = [
   "heartbeat",
   "focus-gate",
@@ -69,6 +76,7 @@ const KNOWN_STAGES = [
   "exclusion-probe",
   "visual-probe",
   "trigger-wait",
+  "trigger-drain",
   "capture",
   "hot-cache-push",
 ];
