@@ -45,6 +45,9 @@ async fn main() -> anyhow::Result<()> {
         conf_threshold: 0.50,
         tiled_inference: true,
         extend_wrapped_secrets: extend,
+        // Off: this audit isolates the area added by continuation growth, and
+        // guided zoom would add secret boxes of its own to both arms.
+        guided_zoom_regions: 0,
     };
     let plain = RfdetrRedactor::load(cfg(false))?;
     let extended = RfdetrRedactor::load(cfg(true))?;

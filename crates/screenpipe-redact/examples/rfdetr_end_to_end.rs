@@ -41,6 +41,9 @@ async fn main() -> anyhow::Result<()> {
         conf_threshold: 0.50,
         tiled_inference: true,
         extend_wrapped_secrets: true,
+        // Matches the shipped default: this example exists to show what a user
+        // actually gets, so it must include guided zoom.
+        guided_zoom_regions: RfdetrConfig::default().guided_zoom_regions,
     })?;
 
     let regions = redactor.detect(&frame).await?;

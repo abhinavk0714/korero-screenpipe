@@ -37,6 +37,9 @@ async fn main() -> anyhow::Result<()> {
             conf_threshold: 0.50,
             tiled_inference: tiled,
             extend_wrapped_secrets: true,
+            // Off: this compares whole-frame against 2x2 tiling. Guided zoom is
+            // a third pass type and would contaminate that A/B.
+            guided_zoom_regions: 0,
         };
         let redactor = RfdetrRedactor::load(cfg)?;
         let mode = if tiled { "tiled 2x2" } else { "whole-frame" };
