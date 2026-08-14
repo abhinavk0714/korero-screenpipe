@@ -166,6 +166,11 @@ import {
   type MeetingWorkspaceTab,
 } from "./meeting-workspace";
 import { meetingRetranscribeSuccessCopy } from "./transcript-recovery-copy";
+import { useMeetingTranscriptSufficiency } from "./use-transcript-sufficiency";
+import {
+  isTranscriptUsable,
+  summarizeBlockedReason,
+} from "@/lib/utils/transcript-sufficiency";
 import { startMeetingSummaryRun } from "./meeting-summary-run";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
@@ -306,8 +311,20 @@ export function NoteView({
   const noteEditorRef = useRef<NoteEditorHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
+  // Summarizing an empty transcript produces a confident summary of nothing.
+  // The pipe prompt asks the model to notice and skip, but a prompt line is not
+  // a gate — check the transcript before offering the action at all.
+  const transcriptSufficiency = useMeetingTranscriptSufficiency(meeting, {
+    isLive,
+    refreshKey: transcriptRefreshKey,
+  });
+  const summarizeBlocked = summarizeBlockedReason(transcriptSufficiency);
   const canSummarizeMeeting =
-    !isLive && !stopping && !savingBeforeStop && Boolean(meeting.meeting_end);
+    !isLive &&
+    !stopping &&
+    !savingBeforeStop &&
+    Boolean(meeting.meeting_end) &&
+    isTranscriptUsable(transcriptSufficiency);
   const shareArtifact = useMemo(
     () =>
       createMeetingShareArtifact({
@@ -898,11 +915,18 @@ export function NoteView({
       pipe_slug: settings.meetingSummaryPipeSlug || "meeting-summary",
     });
     if (!canSummarizeMeeting) {
-      toast({
-        title: "stop the meeting first",
-        description:
-          "summaries run on the saved transcript after the meeting ends.",
-      });
+      toast(
+        summarizeBlocked
+          ? {
+              title: "not enough audio to summarize",
+              description: summarizeBlocked,
+            }
+          : {
+              title: "stop the meeting first",
+              description:
+                "summaries run on the saved transcript after the meeting ends.",
+            },
+      );
       return;
     }
 
@@ -1505,7 +1529,9 @@ export function NoteView({
       ? "refreshing summary after retranscription"
       : "summarizing meeting"
     : !canSummarizeMeeting
-      ? "summary unavailable"
+      ? summarizeBlocked
+        ? "not enough audio to summarize"
+        : "summary unavailable"
       : summaryLifecycle.kind === "completed" ||
           (transcriptRefreshRequested !== null &&
             (transcriptRefreshRequested === false ||
@@ -1863,6 +1889,8 @@ export function NoteView({
           isLive={isLive}
           refreshKey={transcriptRefreshKey}
           captureState={captureState}
+          onRetranscribe={() => setConfirmingAction("retranscribe")}
+          retranscribing={retranscribing}
           headerActions={
             <AudioHealthButton
               devices={audioStatusDevices}

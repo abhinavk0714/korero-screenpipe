@@ -32,6 +32,11 @@ import {
   type MeetingAudioChunk,
 } from "@/lib/utils/meeting-context";
 import type { MeetingRecord } from "@/lib/utils/meeting-format";
+import {
+  assessTranscriptSufficiency,
+  summarizeTranscriptCoverage,
+  transcriptGapCopy,
+} from "@/lib/utils/transcript-sufficiency";
 import { ListeningSticks } from "./listening-sticks";
 import { MEETING_SHELL_CLASS } from "./meeting-workspace";
 import { splitForHighlight } from "./transcript-highlight";
@@ -48,6 +53,13 @@ interface TranscriptPanelProps {
   refreshKey?: number;
   headerActions?: React.ReactNode;
   captureState?: LiveCaptureState;
+  /**
+   * Recovery for a meeting that ended with little or no transcript. Without
+   * this the thin-capture notice is a dead end — the only way back is a menu
+   * the user has no reason to open.
+   */
+  onRetranscribe?: () => void;
+  retranscribing?: boolean;
 }
 
 const AUTO_FOLLOW_THRESHOLD_PX = 48;
@@ -300,6 +312,8 @@ export function TranscriptPanel({
   refreshKey = 0,
   headerActions,
   captureState,
+  onRetranscribe,
+  retranscribing = false,
 }: TranscriptPanelProps) {
   const { isMac } = usePlatform();
   const [chunks, setChunks] = useState<MeetingAudioChunk[]>([]);
@@ -766,6 +780,47 @@ export function TranscriptPanel({
     scrollToLatest,
   ]);
 
+  // A finished meeting can produce rows and still have captured nothing —
+  // two segments reading "Nice." across a ten-minute call is the case this
+  // guards. Score words against duration instead of trusting a row count, and
+  // use the per-device split to say which side of the call went missing.
+  const meetingEnded = !isLive && Boolean(meeting.meeting_end);
+  const coverage = useMemo(
+    () => summarizeTranscriptCoverage(chunks, meeting),
+    [chunks, meeting],
+  );
+  const sufficiency = useMemo(
+    () => assessTranscriptSufficiency(coverage, { ended: meetingEnded }),
+    [coverage, meetingEnded],
+  );
+  const gapCopy = useMemo(
+    () => (loading && !loaded ? null : transcriptGapCopy(sufficiency, coverage)),
+    [sufficiency, coverage, loading, loaded],
+  );
+  // Rendered above the rows when some words survived; the empty state owns the
+  // no-rows case so the two never stack.
+  const sparseNotice = sufficiency.kind === "sparse" ? gapCopy : null;
+  const recoveryAction =
+    meetingEnded && onRetranscribe ? (
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="h-7 shrink-0 px-2 text-xs"
+        disabled={retranscribing}
+        onClick={onRetranscribe}
+      >
+        {retranscribing ? (
+          <>
+            <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+            retranscribing…
+          </>
+        ) : (
+          "retranscribe saved audio"
+        )}
+      </Button>
+    ) : null;
+
   // Empty state copy depends on *why* the list is empty — the difference
   // matters: "still recording" vs "no audio captured" vs "no matches".
   const emptyCopy = useMemo(() => {
@@ -774,7 +829,9 @@ export function TranscriptPanel({
       return `${liveErrorSummary(liveError)}. Background recording is still running.`;
     }
     if (chunks.length === 0 && visibleLiveBlocks.length === 0) {
-      if (!isLive) return "no transcript was captured for this meeting";
+      if (!isLive) {
+        return gapCopy ?? "no transcript was captured for this meeting";
+      }
       return (
         captureState?.transcriptEmptyCopy ??
         "no transcript yet — audio can take a minute to appear; keep the meeting open"
@@ -794,6 +851,7 @@ export function TranscriptPanel({
     isLive,
     liveError,
     captureState,
+    gapCopy,
   ]);
   const compactEmptyState =
     Boolean(emptyCopy) && !loading && !hasTranscriptContent;
@@ -1036,6 +1094,24 @@ export function TranscriptPanel({
                     />
                   )}
                 <span>{emptyCopy}</span>
+                {sufficiency.kind === "empty" && recoveryAction}
+              </div>
+            )}
+
+            {sparseNotice && (
+              <div
+                data-testid="transcript-sparse-notice"
+                className={cn(
+                  "flex items-center gap-3 py-2 text-xs text-muted-foreground",
+                  contentShellClass,
+                )}
+              >
+                <AlertTriangle
+                  className="h-3.5 w-3.5 shrink-0"
+                  aria-hidden="true"
+                />
+                <span className="min-w-0">{sparseNotice}</span>
+                {recoveryAction}
               </div>
             )}
 
