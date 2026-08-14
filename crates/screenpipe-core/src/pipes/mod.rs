@@ -6611,6 +6611,27 @@ pub fn parse_frontmatter(content: &str) -> Result<(PipeConfig, String)> {
     Ok((config, body))
 }
 
+/// Latency fix for already-installed `meeting-summary` copies.
+///
+/// The shipped prompt told the agent to "read the screenpipe skill first" and
+/// never named the endpoint response shapes, so a real run spent ~8 of its 18
+/// model turns reading skill files and probing JSON shapes (three consecutive
+/// turns just guessing whether `/connections` was an array, an object, or
+/// `.data`). Replacing that one line with the verified shapes plus a tool-call
+/// budget removes the discovery loop without touching the user's own edits.
+const MEETING_SUMMARY_FAST_PATH: &str = concat!(
+    "the user is staring at a spinner until you print step 3, so latency is part of the job. every tool call is a round trip: batch them, and never spend a turn discovering something this prompt already tells you. do not read any skill file — the endpoints and response shapes below are complete and verified. budget: reach step 3 in **6 tool calls or fewer** on a normal meeting.\n",
+    "\n",
+    "these are the exact response shapes. do not probe for them:\n",
+    "\n",
+    "- `GET /meetings/<id>` → a bare object: `{\"id\", \"title\", \"note\", \"meeting_start\", \"meeting_end\", \"meeting_app\", \"attendees\"}`\n",
+    "- `GET /search?...` → `{\"data\": [{\"type\": \"Audio\"|\"OCR\", \"content\": {…}}], \"pagination\": {…}}`\n",
+    "  - audio `content`: `transcription`, `speaker`, `timestamp` (`text` duplicates `transcription`)\n",
+    "  - ocr `content`: `text`, `frame_id`, `app_name`, `window_name`, `timestamp`\n",
+    "- `GET /speakers/unnamed?limit=20&offset=0` → a bare **array** of `{\"id\", \"name\", …}`. `offset` is required; omitting it is a 400.\n",
+    "- `GET /connections` → `{\"data\": [{\"id\", \"name\", \"connected\", \"description\", …}]}` — filter on `connected == true`",
+);
+
 /// Surgically repair known-broken fragments in an already-installed builtin
 /// `pipe.md` without clobbering the user's other edits. `install_builtin_pipes`
 /// only writes when the file is absent, so a stale local copy never picks up a
@@ -6681,6 +6702,21 @@ fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<String> {
             (
                 "the instructions below are complete. do not inspect app source or search outside this pipe folder. never run recursive `find` or `grep` over the user's home or `~/.screenpipe`; use only the named local files and bounded HTTP endpoints below.",
                 "the instructions below are complete. screenpipe API search is required: use the meeting id and exact meeting time window with the named local HTTP endpoints below. do not inspect app source or recursively search the filesystem; never run recursive `find` or `grep` over the user's home or `~/.screenpipe`.",
+            ),
+            // `/speakers/unnamed` rejects a request without `offset` (400
+            // "missing field `offset`"), so the shipped call failed on every
+            // run and cost a recovery round trip. Pin the working query.
+            (
+                "\"http://localhost:3030/speakers/unnamed?limit=20\"",
+                "\"http://localhost:3030/speakers/unnamed?limit=20&offset=0\"",
+            ),
+            // Latency: the pipe blocks a visible spinner, but shipped
+            // instructions made the agent read two skill files and discover
+            // endpoint shapes it was never told, costing ~8 of 18 turns on a
+            // 7-minute meeting. Tell it the shapes and give it a budget.
+            (
+                "read the screenpipe skill first so you know the meetings + search endpoints.",
+                MEETING_SUMMARY_FAST_PATH,
             ),
         ],
         _ => return None,
@@ -8818,6 +8854,105 @@ mod tests {
         assert!(!body.contains("buildMeetingSummarizeInstructions"));
         assert!(body.contains("screenpipe API search is required"));
         assert!(body.contains("never run recursive `find` or `grep`"));
+    }
+
+    /// `/speakers/unnamed` 400s without `offset`, so the shipped query failed on
+    /// every run and the agent burned a turn recovering from it.
+    #[test]
+    fn migrate_builtin_pipe_fixes_unnamed_speakers_offset() {
+        let stale = concat!(
+            "step 2d — name the speakers.\n",
+            "  curl -s -H \"Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY\" \\\n",
+            "    \"http://localhost:3030/speakers/unnamed?limit=20\"\n",
+            "only rename when the evidence is unambiguous.\n",
+        );
+
+        let fixed = migrate_builtin_pipe_text("meeting-summary", stale)
+            .expect("a query missing `offset` should migrate");
+        assert!(fixed.contains("/speakers/unnamed?limit=20&offset=0"));
+        assert!(!fixed.contains("/speakers/unnamed?limit=20\""));
+        // the user's surrounding prose is untouched.
+        assert!(fixed.ends_with("only rename when the evidence is unambiguous.\n"));
+        assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
+    }
+
+    /// Latency: the shipped prompt sent the agent to read skill files and left it
+    /// to probe endpoint shapes, which cost roughly eight of eighteen turns on a
+    /// real 7-minute meeting while the user watched a spinner.
+    #[test]
+    fn migrate_builtin_pipe_gives_meeting_summary_a_tool_call_budget() {
+        let stale = concat!(
+            "a meeting just ended.\n",
+            "\n",
+            "read the screenpipe skill first so you know the meetings + search endpoints.\n",
+            "\n",
+            "step 1 — find the meeting that just ended.\n",
+            "my own note: always cc me.\n",
+        );
+
+        let fixed = migrate_builtin_pipe_text("meeting-summary", stale)
+            .expect("skill-read instruction should migrate");
+
+        // the discovery loop is gone.
+        assert!(!fixed.contains("read the screenpipe skill first"));
+        assert!(fixed.contains("do not read any skill file"));
+        // and it is replaced by a budget plus the shapes it used to guess at.
+        assert!(fixed.contains("6 tool calls or fewer"));
+        assert!(fixed.contains("these are the exact response shapes"));
+        assert!(fixed.contains("`offset` is required"));
+        assert!(fixed.contains("filter on `connected == true`"));
+
+        // the user's own edits and the surrounding steps survive.
+        assert!(fixed.starts_with("a meeting just ended.\n"));
+        assert!(fixed.ends_with("my own note: always cc me.\n"));
+        assert!(fixed.contains("step 1 — find the meeting that just ended."));
+
+        assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
+    }
+
+    /// The migration text and the shipped prompt must stay one source of truth.
+    /// If they drift, installed copies get advice the bundled prompt contradicts.
+    #[test]
+    fn meeting_summary_fast_path_matches_bundled_prompt() {
+        let bundled = BUNDLED_BUILTIN_PIPES
+            .iter()
+            .find_map(|(name, content)| (*name == "meeting-summary").then_some(*content))
+            .expect("meeting-summary is bundled");
+        assert!(
+            bundled.contains(MEETING_SUMMARY_FAST_PATH),
+            "MEETING_SUMMARY_FAST_PATH drifted from the bundled prompt"
+        );
+    }
+
+    /// The shipped prompt must fetch in parallel rather than one endpoint per
+    /// turn, and must not reintroduce the round trips this pipe just removed.
+    #[test]
+    fn bundled_meeting_summary_batches_its_fetches() {
+        let bundled = BUNDLED_BUILTIN_PIPES
+            .iter()
+            .find_map(|(name, content)| (*name == "meeting-summary").then_some(*content))
+            .expect("meeting-summary is bundled");
+        let (_, body) = parse_frontmatter(bundled).expect("bundled prompt should parse");
+
+        // one batched fetch, backgrounded and joined.
+        assert!(body.contains("pull everything the summary needs in ONE command"));
+        assert!(body.contains("-o /tmp/audio.json &"));
+        assert!(body.contains("-o /tmp/ocr.json &"));
+        assert!(body.contains("\n  wait\n"));
+
+        // bounded up front, so there is no "too big, fetch again" round trip.
+        assert!(body.contains("do not fetch unbounded and then re-fetch smaller"));
+
+        // the endpoints reused from that batch are not re-fetched later.
+        assert!(body.contains("already fetched to /tmp/spk.json in step 1"));
+        assert!(body.contains("/tmp/conn.json"));
+
+        // and the discovery loop stays gone.
+        assert!(!body.contains("read the screenpipe skill first"));
+        assert!(body.contains("6 tool calls or fewer"));
+
+        // the streaming contract the UI depends on is preserved.
+        assert!(body.contains("## Summary"));
     }
 
     #[test]
