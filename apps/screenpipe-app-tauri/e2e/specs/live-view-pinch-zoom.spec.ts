@@ -186,9 +186,9 @@ describe("Live View canvas pinch zoom", function () {
     const zoomedIn = await zoomPercent();
     expect(zoomedIn).toBeGreaterThan(100);
     expect(zoomedIn).toBeLessThan(150);
-    expect(await paintedViewport()).toEqual(
-      expect.objectContaining({ zoom: expect.any(Number) }),
-    );
+    // The label the user reads and the transform React Flow painted have to
+    // agree, otherwise the canvas is lying about where the gesture landed.
+    expect(Math.round((await paintedViewport()).zoom * 100)).toBe(zoomedIn);
 
     const screenshot = await saveScreenshot("live-view-pinch-zoom-in");
     expect(existsSync(screenshot)).toBe(true);
