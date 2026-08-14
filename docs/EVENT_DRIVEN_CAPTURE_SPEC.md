@@ -1,5 +1,10 @@
 # Event-Driven Capture — Architecture Spec
 
+<!-- doc-covers: crates/screenpipe-engine/src/event_driven_capture.rs -->
+> **Historical.** Last edited 2026-02-20; `crates/screenpipe-engine/src/event_driven_capture.rs` has moved 105 commits since.
+> Read it for original intent only. The code is the source of truth, and anything
+> specific here (names, signatures, thresholds) is probably wrong. Verify before acting.
+
 > **Status**: Draft
 > **Date**: 2026-02-20
 

@@ -4,6 +4,9 @@
 
 # Living commitments: reusable interactive lists
 
+<!-- doc-covers: crates/screenpipe-core/src/pipes -->
+> **Current** as of 2026-07-29 (19 commits to `crates/screenpipe-core/src/pipes` since).
+
 ## Decision
 
 Do not add a `commitments` or `accounting` Block type. Both experiences are compositions of the existing Live View components. The reusable addition is optional item identity and actions on `list.v1`:

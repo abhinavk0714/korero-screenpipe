@@ -1,5 +1,8 @@
 # Timeline Video-Based Frame Loading — Architecture Spec
 
+<!-- doc-covers: crates/screenpipe-db/src/video_db.rs, crates/screenpipe-core/src/video.rs -->
+> **Current** as of 2026-06-19 (2 commits to `crates/screenpipe-db/src/video_db.rs`, `crates/screenpipe-core/src/video.rs` since).
+
 > **Status**: Draft  
 > **Issue**: #2165  
 > **Author**: screenpipe team  

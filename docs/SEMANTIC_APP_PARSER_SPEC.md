@@ -1,5 +1,8 @@
 # Semantic App Parser
 
+<!-- doc-covers: crates/screenpipe-semantic -->
+> **Current** as of 2026-08-12 (1 commit to `crates/screenpipe-semantic` since).
+
 > **Status**: Experimental end-to-end path, opt-in and off by default
 > **Date**: 2026-07-27
 

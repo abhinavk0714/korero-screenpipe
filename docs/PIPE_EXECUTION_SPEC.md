@@ -1,5 +1,9 @@
 # Pipe Execution Reliability Spec
 
+<!-- doc-covers: crates/screenpipe-core/src/pipes -->
+> **Drifting.** Last edited 2026-05-22; `crates/screenpipe-core/src/pipes` has moved 79 commits since.
+> Structure should still hold; check details against the code.
+
 ## Current Architecture
 
 All pipe state lives in-memory (`Arc<Mutex<HashMap>>`). Logs written as JSON files to `~/.screenpipe/pipes/{name}/logs/`. A global `Semaphore::new(1)` serializes all pipe execution. The Pi agent subprocess uses `wait_with_output()` with **no timeout**. PID is captured from `child.id()` at spawn (line 198 of pi.rs) but stored as `ExecutionHandle { pid: 0 }` in the running map (lines 371, 756 of mod.rs) — the real PID from spawn is never written back.

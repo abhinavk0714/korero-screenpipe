@@ -1,5 +1,10 @@
 # Vision Pipeline v2 — Architecture Spec
 
+<!-- doc-covers: crates/screenpipe-screen, crates/screenpipe-capture -->
+> **Historical.** Last edited 2026-02-13; `crates/screenpipe-screen`, `crates/screenpipe-capture` has moved 111 commits since.
+> Read it for original intent only. The code is the source of truth, and anything
+> specific here (names, signatures, thresholds) is probably wrong. Verify before acting.
+
 > **Status**: Draft
 > **Date**: 2026-02-12
 > **Context**: Sentry issues APP-38/62/4D, CLI-9Z/9Y (vision restart cascade), fresh install testing on Mac Mini revealing pipeline stalls, silent frame drops, and 30-60s delays before first data appears.

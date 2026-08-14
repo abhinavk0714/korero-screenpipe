@@ -1,5 +1,10 @@
 # Batch Audio Transcription (Idle Processing)
 
+<!-- doc-covers: crates/screenpipe-audio -->
+> **Historical.** Last edited 2026-02-14; `crates/screenpipe-audio` has moved 478 commits since.
+> Read it for original intent only. The code is the source of truth, and anything
+> specific here (names, signatures, thresholds) is probably wrong. Verify before acting.
+
 ## Problem
 
 Whisper inference on Metal (GPU) competes with video call apps (Zoom, Meet, Teams, FaceTime) for GPU resources. Users report lag during calls and have to quit screenpipe — defeating the purpose of recording everything.

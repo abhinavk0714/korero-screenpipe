@@ -1,5 +1,10 @@
 # Single-Click Summaries — Product Spec
 
+<!-- doc-covers: apps/screenpipe-app-tauri/components/chat -->
+> **Historical.** Last edited 2026-02-19; `apps/screenpipe-app-tauri/components/chat` has moved 188 commits since.
+> Read it for original intent only. The code is the source of truth, and anything
+> specific here (names, signatures, thresholds) is probably wrong. Verify before acting.
+
 **Author:** Louis / Menelaus (znitchi)
 **Date:** Feb 19, 2026
 **Status:** Draft

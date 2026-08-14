@@ -1,5 +1,8 @@
 # SQLite quarantine and recovery
 
+<!-- doc-covers: crates/screenpipe-sqlite-recovery, crates/screenpipe-sqlite-coordinator -->
+> **Current** as of 2026-08-03 (1 commit to `crates/screenpipe-sqlite-recovery`, `crates/screenpipe-sqlite-coordinator` since).
+
 Screenpipe treats `SQLITE_IOERR`, `SQLITE_CORRUPT`, `SQLITE_FULL`, and
 `SQLITE_NOTADB` as generation-ending faults. A new connection, pool, engine, or
 app process is not recovery: it would still open the same physical database and
