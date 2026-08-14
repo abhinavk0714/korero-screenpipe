@@ -1814,10 +1814,7 @@ pub(crate) async fn event_driven_capture_loop(
                 // Pre-capture DRM gate: check BEFORE any SCK call.
                 // Uses AX APIs only — prevents even a single leaked frame.
                 {
-                    let trigger_app = match &trigger {
-                        CaptureTrigger::AppSwitch { app_name, .. } => Some(app_name.as_str()),
-                        _ => None,
-                    };
+                    let trigger_app = drm_trigger_app_name(&trigger);
                     if crate::drm_detector::pre_capture_drm_check(pause_on_drm_content, trigger_app)
                     {
                         debug!(
@@ -2273,6 +2270,59 @@ pub(crate) fn should_query_lightweight_focus(trigger: &CaptureTrigger) -> bool {
         CaptureTrigger::AppSwitch { app_name, .. } => app_name.trim().is_empty(),
         _ => true,
     }
+}
+
+/// The app name handed to the pre-capture DRM gate, which runs before any
+/// screenshot call and exists to stop even one protected frame being grabbed.
+///
+/// `pre_capture_drm_check` treats `Some(name)` as authoritative: it takes a
+/// fast path that checks `is_drm_app` / `is_browser` and then returns "no DRM"
+/// without querying anything. Handing it the same `unwrap_or_default()` blank
+/// behind #6164 therefore matched neither test and reported no DRM, skipping
+/// the AX lookup that would have caught it — the gate silently did nothing.
+/// A nameless trigger has to look like the absence of a name so the check
+/// falls through and asks the platform.
+pub(crate) fn drm_trigger_app_name(trigger: &CaptureTrigger) -> Option<&str> {
+    match trigger {
+        CaptureTrigger::AppSwitch { app_name, .. } => {
+            Some(app_name.trim()).filter(|name| !name.is_empty())
+        }
+        _ => None,
+    }
+}
+
+/// The app name the pre-walk gates key on: the terminal OCR throttle, the
+/// per-app walk budget, and the app-only ignored-window safety net.
+///
+/// This has to make the same judgement as [`should_query_lightweight_focus`].
+/// Taking the trigger's name unconditionally meant an unnamed app switch keyed
+/// every gate on `""`: the walk budget pooled the cost of *every* unnamed
+/// switch — whatever app was really focused — into one bucket, so a single
+/// expensive Electron walk could promote `""` to a throttled tier and make the
+/// next capture of a light app get skipped outright. On Windows that bucket is
+/// hot, because transient shell windows produce unnamed switches on every
+/// click.
+///
+/// The lookup [`should_query_lightweight_focus`] just re-enabled has the real
+/// answer, so prefer the trigger's name only when it actually is one and fall
+/// back to the platform otherwise. Normalizing keeps the budget key equal to
+/// the name `record_walk` later reports from the tree walk.
+// Private to match `LightweightFocusedMetadata`'s own visibility — a
+// `pub(crate)` signature naming a private type trips `private_interfaces`.
+fn capture_gate_app_name(
+    trigger: &CaptureTrigger,
+    lightweight_metadata: Option<&LightweightFocusedMetadata>,
+) -> Option<String> {
+    match trigger {
+        CaptureTrigger::AppSwitch { app_name, .. } => {
+            normalize_metadata_value(Some(app_name.as_str()))
+        }
+        _ => None,
+    }
+    .or_else(|| {
+        lightweight_metadata
+            .and_then(|metadata| normalize_metadata_value(metadata.app_name.as_deref()))
+    })
 }
 
 fn resolve_capture_metadata(
@@ -2839,12 +2889,7 @@ async fn do_capture(
             None
         };
     let trigger_app = if monitor_hosts_focus {
-        match trigger {
-            CaptureTrigger::AppSwitch { app_name, .. } => Some(app_name.clone()),
-            _ => lightweight_focused_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.app_name.clone()),
-        }
+        capture_gate_app_name(trigger, lightweight_focused_metadata.as_ref())
     } else {
         None
     };
@@ -3795,6 +3840,153 @@ mod tests {
 
         assert_eq!(app_name.as_deref(), Some("Explorer"));
         assert_eq!(window_name.as_deref(), Some("Downloads"));
+    }
+
+    /// A named app switch keys the pre-walk gates on its own name, and does
+    /// not need the lookup to have run.
+    #[test]
+    fn capture_gates_key_on_a_named_app_switch() {
+        assert_eq!(
+            capture_gate_app_name(
+                &CaptureTrigger::AppSwitch {
+                    app_name: "  Arc  ".into(),
+                    target: None,
+                },
+                None,
+            )
+            .as_deref(),
+            // Trimmed, so the walk budget's key matches the name `record_walk`
+            // reports back from the tree walk.
+            Some("Arc"),
+        );
+    }
+
+    /// The counterpart to `should_query_lightweight_focus`: an unnamed app
+    /// switch must key the walk budget and the ignored-window safety net on
+    /// the app the lookup found, never on `""`.
+    #[test]
+    fn capture_gates_key_on_the_lookup_when_the_app_switch_is_unnamed() {
+        let metadata = LightweightFocusedMetadata {
+            app_name: Some("Explorer".into()),
+            window_name: None,
+        };
+        for blank in ["", " ", "\t", "\n  "] {
+            let trigger = CaptureTrigger::AppSwitch {
+                app_name: blank.into(),
+                target: None,
+            };
+            assert_eq!(
+                capture_gate_app_name(&trigger, Some(&metadata)).as_deref(),
+                Some("Explorer"),
+                "AppSwitch {blank:?} must not key the walk budget on the empty \
+                 string — that pools every unnamed switch into one cost bucket",
+            );
+        }
+    }
+
+    /// Whenever a gate has no app name to key on, the lookup must have been
+    /// the missing source rather than a name we threw away.
+    #[test]
+    fn capture_gates_only_lack_an_app_when_the_lookup_also_came_back_empty() {
+        for name in ["Arc", "", "   "] {
+            let trigger = CaptureTrigger::AppSwitch {
+                app_name: name.into(),
+                target: None,
+            };
+            assert_eq!(
+                capture_gate_app_name(&trigger, None).is_none(),
+                should_query_lightweight_focus(&trigger),
+                "AppSwitch {name:?}: a gate key is missing only when the trigger \
+                 carried no name and the platform lookup returned nothing",
+            );
+        }
+    }
+
+    /// A named app switch still takes the DRM check's fast path.
+    #[test]
+    fn the_drm_gate_uses_a_named_app_switch_directly() {
+        assert_eq!(
+            drm_trigger_app_name(&CaptureTrigger::AppSwitch {
+                app_name: "  Netflix  ".into(),
+                target: None,
+            }),
+            Some("Netflix"),
+        );
+    }
+
+    /// A nameless app switch must not look like a name to the DRM gate.
+    /// `Some("")` matches neither `is_drm_app` nor `is_browser`, so the fast
+    /// path returns "no DRM" without querying — the pre-screenshot gate is
+    /// then a no-op and a protected frame can be captured.
+    #[test]
+    fn the_drm_gate_falls_through_when_the_app_switch_is_unnamed() {
+        for blank in ["", " ", "\t", "\n  "] {
+            assert_eq!(
+                drm_trigger_app_name(&CaptureTrigger::AppSwitch {
+                    app_name: blank.into(),
+                    target: None,
+                }),
+                None,
+                "AppSwitch {blank:?} must fall through to the platform query \
+                 rather than silently reporting no DRM",
+            );
+        }
+    }
+
+    /// Every other trigger already fell through; that must not regress.
+    #[test]
+    fn the_drm_gate_falls_through_for_every_other_trigger() {
+        for trigger in [
+            CaptureTrigger::WindowFocus {
+                window_name: "Netflix".into(),
+                target: None,
+            },
+            CaptureTrigger::Click { x: 1, y: 2 },
+            CaptureTrigger::TypingPause,
+            CaptureTrigger::ScrollStop,
+            CaptureTrigger::KeyPress,
+            CaptureTrigger::Clipboard,
+            CaptureTrigger::VisualChange,
+            CaptureTrigger::Idle,
+            CaptureTrigger::Manual,
+        ] {
+            assert_eq!(
+                drm_trigger_app_name(&trigger),
+                None,
+                "{} must keep querying the focused app for DRM",
+                trigger.as_str(),
+            );
+        }
+    }
+
+    /// Every other trigger keeps keying the gates on the lookup, unchanged.
+    #[test]
+    fn capture_gates_still_key_other_triggers_on_the_lookup() {
+        let metadata = LightweightFocusedMetadata {
+            app_name: Some("wezterm".into()),
+            window_name: None,
+        };
+        for trigger in [
+            CaptureTrigger::WindowFocus {
+                window_name: "Inbox".into(),
+                target: None,
+            },
+            CaptureTrigger::Click { x: 1, y: 2 },
+            CaptureTrigger::TypingPause,
+            CaptureTrigger::ScrollStop,
+            CaptureTrigger::KeyPress,
+            CaptureTrigger::Clipboard,
+            CaptureTrigger::VisualChange,
+            CaptureTrigger::Idle,
+            CaptureTrigger::Manual,
+        ] {
+            assert_eq!(
+                capture_gate_app_name(&trigger, Some(&metadata)).as_deref(),
+                Some("wezterm"),
+                "{} must keep keying the gates on the lookup",
+                trigger.as_str(),
+            );
+        }
     }
 
     #[test]
