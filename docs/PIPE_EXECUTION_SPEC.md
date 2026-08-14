@@ -1,8 +1,9 @@
 # Pipe Execution Reliability Spec
 
 <!-- doc-covers: crates/screenpipe-core/src/pipes -->
-> **Drifting.** Last edited 2026-05-22; `crates/screenpipe-core/src/pipes` has moved 79 commits since.
-> Structure should still hold; check details against the code.
+<!-- doc-verified: 331915363 -->
+> **Drifting.** Last verified against 331915363 (2026-05-22). Structure should still hold;
+> check details against `crates/screenpipe-core/src/pipes`. Run `bun scripts/check-doc-freshness.ts` for current drift.
 
 ## Current Architecture
 

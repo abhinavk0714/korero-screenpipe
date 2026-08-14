@@ -1,9 +1,10 @@
 # Vision Pipeline v2 — Architecture Spec
 
 <!-- doc-covers: crates/screenpipe-screen, crates/screenpipe-capture -->
-> **Historical.** Last edited 2026-02-13; `crates/screenpipe-screen`, `crates/screenpipe-capture` has moved 111 commits since.
-> Read it for original intent only. The code is the source of truth, and anything
-> specific here (names, signatures, thresholds) is probably wrong. Verify before acting.
+<!-- doc-verified: a35930c27 -->
+> **Historical.** Last verified against a35930c27 (2026-02-13). `crates/screenpipe-screen`, `crates/screenpipe-capture` has moved a long way
+> since; read this for original intent only. Names, signatures, and thresholds are
+> probably wrong. The code wins. Run `bun scripts/check-doc-freshness.ts` for current drift.
 
 > **Status**: Draft
 > **Date**: 2026-02-12

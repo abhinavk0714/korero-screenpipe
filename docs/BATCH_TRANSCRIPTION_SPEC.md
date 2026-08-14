@@ -1,9 +1,10 @@
 # Batch Audio Transcription (Idle Processing)
 
 <!-- doc-covers: crates/screenpipe-audio -->
-> **Historical.** Last edited 2026-02-14; `crates/screenpipe-audio` has moved 478 commits since.
-> Read it for original intent only. The code is the source of truth, and anything
-> specific here (names, signatures, thresholds) is probably wrong. Verify before acting.
+<!-- doc-verified: a2681111e -->
+> **Historical.** Last verified against a2681111e (2026-02-14). `crates/screenpipe-audio` has moved a long way
+> since; read this for original intent only. Names, signatures, and thresholds are
+> probably wrong. The code wins. Run `bun scripts/check-doc-freshness.ts` for current drift.
 
 ## Problem
 

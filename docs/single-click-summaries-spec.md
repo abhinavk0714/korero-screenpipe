@@ -1,9 +1,10 @@
 # Single-Click Summaries — Product Spec
 
 <!-- doc-covers: apps/screenpipe-app-tauri/components/chat -->
-> **Historical.** Last edited 2026-02-19; `apps/screenpipe-app-tauri/components/chat` has moved 188 commits since.
-> Read it for original intent only. The code is the source of truth, and anything
-> specific here (names, signatures, thresholds) is probably wrong. Verify before acting.
+<!-- doc-verified: 3606788c6 -->
+> **Historical.** Last verified against 3606788c6 (2026-02-19). `apps/screenpipe-app-tauri/components/chat` has moved a long way
+> since; read this for original intent only. Names, signatures, and thresholds are
+> probably wrong. The code wins. Run `bun scripts/check-doc-freshness.ts` for current drift.
 
 **Author:** Louis / Menelaus (znitchi)
 **Date:** Feb 19, 2026

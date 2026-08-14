@@ -4,22 +4,29 @@
 
 // Measures how far each spec in docs/ has drifted from the code it describes.
 //
-// A spec declares what it covers, in the spec itself so the mapping cannot rot
-// in a separate registry:
+// A spec declares what it covers and the commit it was last checked against,
+// in the spec itself so the mapping cannot rot in a separate registry:
 //
 //   <!-- doc-covers: crates/screenpipe-audio, crates/screenpipe-engine/src/foo.rs -->
+//   <!-- doc-verified: a2681111e -->
 //
-// Drift = commits touching those paths since the spec's own last commit. A spec
-// nobody has touched while its subsystem moved 400 commits is not documentation,
-// it is a trap: an agent greps it, believes it, and writes confidently wrong code.
+// Drift = commits touching those paths since `doc-verified`. A spec nobody has
+// checked while its subsystem moved 400 commits is not documentation, it is a
+// trap: an agent greps it, believes it, and writes confidently wrong code.
+//
+// Drift deliberately does NOT key off the spec's own last commit. That would let
+// any edit launder staleness: fix a typo in a spec 478 commits behind its code
+// and the report flips to green while the content stays wrong. Only bumping
+// `doc-verified` resets the clock, and that is a claim made on purpose: "I read
+// this against the code at this commit."
 //
 //   bun scripts/check-doc-freshness.ts            report
 //   bun scripts/check-doc-freshness.ts --check    fail if a spec declares nothing
 //   bun scripts/check-doc-freshness.ts --fail-on-stale
 //
-// `--check` is the gate worth wiring into CI today: it only requires that every
-// spec says what it covers. Drift thresholds print loudly but stay advisory
-// until the existing backlog is cleared.
+// `--check` is the gate wired into CI today: it only requires that every spec
+// says what it covers and when it was checked. Drift thresholds print loudly but
+// stay advisory until the existing backlog is cleared.
 
 import { execFileSync } from 'node:child_process'
 import { readdirSync, readFileSync } from 'node:fs'
@@ -29,13 +36,14 @@ const DOCS_DIR = 'docs'
 const DRIFTING_AT = 25
 const STALE_AT = 100
 
+type Status = 'ok' | 'drifting' | 'stale' | 'undeclared' | 'process' | 'unknown-base'
+
 type Report = {
   doc: string
   covers: string[]
-  lastCommit: string
-  lastDate: string
+  verified: string | null
   drift: number
-  status: 'ok' | 'drifting' | 'stale' | 'undeclared' | 'process'
+  status: Status
 }
 
 function git(args: string[]): string {
@@ -58,58 +66,75 @@ function declaredPaths(body: string): string[] {
     .filter(Boolean)
 }
 
+function verifiedAt(body: string): string | null {
+  const match = body.match(/<!--\s*doc-verified:\s*([0-9a-f]{7,40})\s*-->/i)
+  return match ? match[1] : null
+}
+
 function analyze(doc: string): Report {
-  const covers = declaredPaths(readFileSync(doc, 'utf8'))
-  const lastCommit = git(['log', '-1', '--format=%h', '--', doc])
-  const lastDate = git(['log', '-1', '--format=%as', '--', doc])
+  const body = readFileSync(doc, 'utf8')
+  const covers = declaredPaths(body)
+  const verified = verifiedAt(body)
 
-  // Process docs (release rules, local setup) describe how we work, not what
-  // the code does, so there is nothing for them to drift against.
+  // Process docs (release rules, local setup) describe how we work, not what the
+  // code does, so there is nothing for them to drift against.
   if (covers.length === 1 && covers[0] === 'none') {
-    return { doc, covers: [], lastCommit, lastDate, drift: 0, status: 'process' }
+    return { doc, covers: [], verified, drift: 0, status: 'process' }
   }
 
-  if (covers.length === 0) {
-    return { doc, covers, lastCommit, lastDate, drift: 0, status: 'undeclared' }
+  if (covers.length === 0 || !verified) {
+    return { doc, covers, verified, drift: 0, status: 'undeclared' }
   }
 
-  // Commits that touched the covered paths after the spec was last edited.
-  const log = git(['log', '--oneline', `--since=${lastDate}`, '--', ...covers])
+  // A rewritten history (rebase, squash) can orphan the recorded commit. Say so
+  // rather than silently reporting zero drift, which would read as healthy.
+  try {
+    git(['cat-file', '-e', `${verified}^{commit}`])
+  } catch {
+    return { doc, covers, verified, drift: 0, status: 'unknown-base' }
+  }
+
+  const log = git(['log', '--oneline', `${verified}..HEAD`, '--', ...covers])
   const drift = log === '' ? 0 : log.split('\n').length
 
   const status = drift >= STALE_AT ? 'stale' : drift >= DRIFTING_AT ? 'drifting' : 'ok'
-  return { doc, covers, lastCommit, lastDate, drift, status }
+  return { doc, covers, verified, drift, status }
 }
 
 const args = new Set(process.argv.slice(2))
 const reports = specs().map(analyze)
 
-const icon = {
+const icon: Record<Status, string> = {
   ok: 'ok      ',
   drifting: 'drifting',
   stale: 'STALE   ',
   undeclared: 'no-decl ',
   process: 'process ',
-} as const
-for (const r of reports) {
-  const drift = r.status === 'undeclared' || r.status === 'process' ? '-' : `${r.drift}`
-  console.log(`${icon[r.status]} ${drift.padStart(5)} commits  ${r.lastDate}  ${r.doc}`)
+  'unknown-base': 'no-base ',
 }
 
-const undeclared = reports.filter((r) => r.status === 'undeclared')
+const unmeasured = new Set<Status>(['undeclared', 'process', 'unknown-base'])
+for (const r of reports) {
+  const drift = unmeasured.has(r.status) ? '-' : `${r.drift}`
+  console.log(
+    `${icon[r.status]} ${drift.padStart(5)} commits  ${(r.verified ?? '-').padEnd(9)}  ${r.doc}`
+  )
+}
+
+const count = (s: Status) => reports.filter((r) => r.status === s).length
+const undeclared = reports.filter((r) => r.status === 'undeclared' || r.status === 'unknown-base')
 const stale = reports.filter((r) => r.status === 'stale')
 
 console.log(
-  `\n${reports.length} specs: ${reports.filter((r) => r.status === 'ok').length} ok, ` +
-    `${reports.filter((r) => r.status === 'drifting').length} drifting, ` +
-    `${stale.length} stale, ${reports.filter((r) => r.status === 'process').length} process, ` +
-    `${undeclared.length} undeclared`
+  `\n${reports.length} specs: ${count('ok')} ok, ${count('drifting')} drifting, ` +
+    `${stale.length} stale, ${count('process')} process, ${undeclared.length} undeclared`
 )
 
 if (args.has('--check') && undeclared.length > 0) {
   console.error(
-    `\nfail: ${undeclared.length} spec(s) do not declare what they cover.\n` +
-      `add "<!-- doc-covers: path/one, path/two -->" near the top, or delete the spec:\n` +
+    `\nfail: ${undeclared.length} spec(s) do not declare what they cover and when they were checked.\n` +
+      `add "<!-- doc-covers: path/one, path/two -->" and "<!-- doc-verified: <sha> -->"\n` +
+      `near the top, or delete the spec:\n` +
       undeclared.map((r) => `  ${r.doc}`).join('\n')
   )
   process.exit(1)

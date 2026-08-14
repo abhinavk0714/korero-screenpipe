@@ -5,7 +5,8 @@
 # Living commitments: reusable interactive lists
 
 <!-- doc-covers: crates/screenpipe-core/src/pipes -->
-> **Current** as of 2026-07-29 (19 commits to `crates/screenpipe-core/src/pipes` since).
+<!-- doc-verified: 6961bfb55 -->
+> **Current.** Last verified against 6961bfb55 (2026-07-29).
 
 ## Decision
 

@@ -1,7 +1,8 @@
 # Telemetry Support Context
 
 <!-- doc-covers: crates/screenpipe-telemetry-wire -->
-> **Current** as of 2026-06-05 (3 commits to `crates/screenpipe-telemetry-wire` since).
+<!-- doc-verified: 86f43d4c8 -->
+> **Current.** Last verified against 86f43d4c8 (2026-06-05).
 
 Customers who embed the Screenpipe CLI can attach a stable, non-PII support
 identity to Screenpipe's existing telemetry pipeline. This lets Screenpipe support
