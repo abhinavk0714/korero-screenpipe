@@ -1228,10 +1228,10 @@ export function LiveViewCanvas({
     ) {
       return;
     }
-    // The gesture recognizer proves this platform delivers native pinch, so
-    // WebKit's synthesized ctrl+wheel for the same fingers must stop zooming
-    // too. Latch before the focus/hover guards below: a pinch that this canvas
-    // ignores still tells us the double-zoom path is live.
+    // The recognizer proves this platform delivers native pinch, so the
+    // canvas stops trusting ctrl+wheel to describe the same fingers. Latch
+    // before the focus/hover guards below: a pinch this canvas ignores still
+    // tells us the recognizer is running.
     nativeMagnifySeenRef.current = true;
     if (!canvasActiveRef.current || !window.document.hasFocus()) return;
     // A real pinch takes over from an in-flight AI focus animation, the same
@@ -1252,12 +1252,14 @@ export function LiveViewCanvas({
     }, 160);
   });
 
-  // WKWebView reports one trackpad pinch twice: through the native gesture
-  // recognizer and as a synthesized ctrl+wheel. React Flow's `zoomOnPinch`
-  // has to keep handling the wheel on platforms without the recognizer, so
-  // swallow that wheel only once the recognizer has proven it is running.
-  // A real capture listener, not React's delegated one — d3-zoom binds
-  // straight to the pane and must never see the duplicate.
+  // Two independent zoom paths can describe one pinch: this recognizer and
+  // React Flow's `zoomOnPinch` reading a ctrl+wheel. Nothing arbitrated
+  // between them, so wherever WebKit delivers both the canvas zoomed twice
+  // for one gesture. The timeline already guards the same native-vs-JS
+  // hazard (see use-scroll-zoom.ts); do it here by letting the recognizer
+  // win once it has proven it runs, and leaving the wheel alone on platforms
+  // that never emit one. A real capture listener, not React's delegated one
+  // — d3-zoom binds straight to the pane and must never see the duplicate.
   useEffect(() => {
     const surface = surfaceRef.current;
     if (!surface) return;
