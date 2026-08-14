@@ -44,7 +44,9 @@ export function MeetingWorkspaceTabs({
 }: {
   value: MeetingWorkspaceTab;
   onValueChange: (value: MeetingWorkspaceTab) => void;
-  summaryState?: "working" | "ready" | "attention" | null;
+  // Only states that want something from the reader get a dot. "finished
+  // normally" is not one of them.
+  summaryState?: "working" | "attention" | null;
   // Rendered on the same rule as the tabs but outside the tablist, so a
   // note-wide action stays reachable from every tab without becoming a
   // fourth pseudo-tab for arrow-key navigation.
@@ -111,8 +113,8 @@ export function MeetingWorkspaceTabs({
                 aria-label={`summary ${state}`}
                 className={cn(
                   "h-1.5 w-1.5 shrink-0",
-                  state === "working" && "animate-pulse bg-current",
-                  state === "ready" && "bg-current",
+                  state === "working" &&
+                    "animate-pulse bg-current motion-reduce:animate-none",
                   state === "attention" && "bg-amber-500",
                 )}
               />
@@ -125,8 +127,11 @@ export function MeetingWorkspaceTabs({
 
   if (!trailing) return tablist;
 
+  // No border here: this row is the last thing in the meeting header, which
+  // already draws a full-bleed rule underneath it. Both together read as a
+  // doubled line, one inset and one not.
   return (
-    <div className="flex min-w-0 items-stretch border-b border-border">
+    <div className="flex min-w-0 items-stretch">
       {tablist}
       <div className="ml-auto flex shrink-0 items-stretch">{trailing}</div>
     </div>

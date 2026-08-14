@@ -161,6 +161,8 @@ import { meetingRetranscribeSuccessCopy } from "./transcript-recovery-copy";
 import { startMeetingSummaryRun } from "./meeting-summary-run";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
+// How long a successful save stays on screen before the footer goes quiet.
+const SAVE_RECEIPT_DWELL_MS = 4000;
 
 interface NoteViewProps {
   meeting: MeetingRecord;
@@ -1267,6 +1269,19 @@ export function NoteView({
     meeting.meeting_start,
     meeting.meeting_end,
   );
+  // A save receipt is news for a moment and noise after that. There was no
+  // path back to "idle", so the first autosave pinned "saved · 07:46" to the
+  // footer for the rest of the session. Errors are excluded: those persist
+  // until the retry effect resolves them.
+  useEffect(() => {
+    if (saveState.kind !== "saved") return;
+    const timer = window.setTimeout(
+      () => setSaveState({ kind: "idle" }),
+      SAVE_RECEIPT_DWELL_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [saveState]);
+
   const hasSaveStatus = saveState.kind !== "idle";
   const joinSuggestion = useMemo(() => {
     if (!isLive) return null;
@@ -1442,6 +1457,15 @@ export function NoteView({
     summaryLifecycle.kind === "failed"
       ? meetingSummaryFailure(summaryLifecycle.execution).upgrade
       : null;
+  // Whether the footer has anything to report. A finished meeting that is not
+  // recording, summarizing or failing has no news, and the badge plus detail
+  // line collapse to a single quiet caption.
+  // summaryWorking already covers finalizing, queued and running.
+  const footerHasNews =
+    isLive ||
+    summaryWorking ||
+    hasSaveStatus ||
+    summaryLifecycle.kind === "failed";
   const transcriptActionLabel = transcriptOpen
     ? "hide transcript"
     : "show transcript";
@@ -1474,13 +1498,15 @@ export function NoteView({
   // a truncated one in someone's inbox.
   const canShareSummary =
     Boolean(extractMeetingSummary(note)) && !summaryWorking;
+  // A dot on a tab means "this needs you". A summary that finished normally
+  // does not, and leaving the dot lit forever on every summarized meeting is
+  // what teaches people to stop reading dots. Only in-flight work and failures
+  // earn one.
   const summaryTabState = summaryWorking
     ? "working"
-    : summaryLifecycle.kind === "completed"
-      ? "ready"
-      : summaryLifecycle.kind === "failed"
-        ? "attention"
-        : null;
+    : summaryLifecycle.kind === "failed"
+      ? "attention"
+      : null;
   const summarySurfaceState = summaryWorking
     ? "working"
     : summaryLifecycle.kind === "completed"
@@ -1530,34 +1556,40 @@ export function NoteView({
             />
           </div>
 
-          <div className="mt-3 flex min-w-0 items-center gap-2 overflow-x-auto pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <Pill icon={<Calendar className="h-3.5 w-3.5" />}>
-              {meetingDateLabel}
-            </Pill>
-            <Pill icon={<Clock className="h-3.5 w-3.5" />}>
-              <span className="text-foreground/80">{meetingStartClock}</span>
-              {isLive || !meetingEndClock ? (
-                <span className="inline-flex items-center gap-1 border border-foreground/15 bg-foreground/[0.03] px-1.5 py-0.5 text-[10px] font-medium leading-none text-foreground">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-foreground" />
-                  ongoing
-                </span>
-              ) : (
-                <>
-                  <span className="text-muted-foreground/35">-</span>
-                  <span className="text-foreground/80">{meetingEndClock}</span>
-                  <span className="text-muted-foreground/35">·</span>
-                  <span>{meetingDurationLabel}</span>
-                </>
-              )}
-            </Pill>
-            <AttendeesPill
-              value={attendees}
-              count={attendeeCount}
-              onChange={setAttendees}
-            />
-            {meeting.meeting_app && meeting.meeting_app !== "manual" && (
-              <Pill>{meeting.meeting_app.toLowerCase()}</Pill>
+          {/* Date, time and source are labels, not controls. As bordered pills
+              they read as four more things to act on; as one muted line they
+              read as what they are. Attendees keeps its box because it is the
+              only part of this row that opens something. */}
+          <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 pb-3 text-xs text-muted-foreground">
+            <span>{meetingDateLabel}</span>
+            <span aria-hidden>·</span>
+            <span>{meetingStartClock}</span>
+            {isLive || !meetingEndClock ? (
+              <span className="inline-flex items-center gap-1 font-medium text-foreground">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-foreground motion-reduce:animate-none" />
+                ongoing
+              </span>
+            ) : (
+              <>
+                <span aria-hidden>-</span>
+                <span>{meetingEndClock}</span>
+                <span aria-hidden>·</span>
+                <span>{meetingDurationLabel}</span>
+              </>
             )}
+            {meeting.meeting_app && meeting.meeting_app !== "manual" && (
+              <>
+                <span aria-hidden>·</span>
+                <span>{meeting.meeting_app.toLowerCase()}</span>
+              </>
+            )}
+            <span className="ml-1">
+              <AttendeesPill
+                value={attendees}
+                count={attendeeCount}
+                onChange={setAttendees}
+              />
+            </span>
           </div>
 
           <MeetingWorkspaceTabs
@@ -1715,8 +1747,17 @@ export function NoteView({
               onResumeInput={() => void handleResumeInputCapture()}
             />
           )}
-          <div className="flex min-h-14 min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div
+            className={cn(
+              "flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between",
+              footerHasNews ? "min-h-14" : "min-h-9",
+            )}
+          >
             <div className="flex min-w-0 items-center gap-3">
+              {/* At rest the badge was a permanent checkmark next to a line
+                  that already said "meeting saved". Only a state that is
+                  actually happening gets a 32px box. */}
+              {footerHasNews && (
               <span
                 className={cn(
                   "flex h-8 w-8 shrink-0 items-center justify-center border border-border",
@@ -1753,10 +1794,21 @@ export function NoteView({
                   <Check className="h-4 w-4" />
                 )}
               </span>
+              )}
               <div className="min-w-0">
-                <div className="flex items-center gap-2 text-sm font-medium">
+                <div
+                  className={cn(
+                    "flex items-center gap-2",
+                    footerHasNews
+                      ? "text-sm font-medium"
+                      : "text-[11px] text-muted-foreground",
+                  )}
+                >
                   <span>{summaryStatus.title}</span>
                 </div>
+                {/* The detail line explains what is happening. When nothing is
+                    happening it explained that nothing was happening. */}
+                {footerHasNews && (
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
                   <span>
                     <MeetingDuration
@@ -1792,38 +1844,30 @@ export function NoteView({
                     </>
                   )}
                 </div>
+                )}
               </div>
             </div>
 
+            {/* The transcript toggle that used to sit here was a third way to
+                do what the TRANSCRIPT tab does: `transcriptOpen` is literally
+                `activeTab === "transcript"`. The tab is the one that survives. */}
             <TooltipProvider delayDuration={200}>
               <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                <MeetingControlTooltip label={transcriptActionLabel}>
-                  <Button
-                    variant={transcriptOpen ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => setTranscriptOpen((v) => !v)}
-                    className="h-9 w-9 rounded-none p-0"
-                    aria-label={transcriptActionLabel}
-                  >
-                    <FileText className="h-3.5 w-3.5" />
-                  </Button>
-                </MeetingControlTooltip>
                 {!isLive && (
                   <MeetingControlTooltip label={summaryActionLabel}>
+                    {/* The summary tab owns the prominent generate/retry
+                        button next to the output it produces. This one is the
+                        shortcut from the other tabs, so it takes the same
+                        recessive treatment as the rest of the cluster. */}
                     <Button
-                      variant={
-                        summaryLifecycle.kind === "idle" ||
-                        summaryLifecycle.kind === "failed"
-                          ? "default"
-                          : "outline"
-                      }
+                      variant="ghost"
                       size="sm"
                       onClick={handleSummaryAction}
                       disabled={
                         summaryWorking || retranscribing || !canSummarizeMeeting
                       }
                       aria-label={summaryActionLabel}
-                      className="h-9 w-9 rounded-none p-0"
+                      className={cn(MEETING_QUIET_CONTROL_CLASS, "h-9 w-9 p-0")}
                     >
                       {summaryWorking ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
