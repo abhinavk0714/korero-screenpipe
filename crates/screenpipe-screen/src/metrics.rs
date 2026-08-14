@@ -931,47 +931,102 @@ mod tests {
         assert_eq!(s.frames_dropped, 3);
     }
 
+    /// The wire form (discriminant + name) every stage is expected to have.
+    ///
+    /// Deliberately no wildcard arm: adding a variant to [`CaptureLoopStage`]
+    /// stops compiling *here*, which forces whoever adds it to extend
+    /// `from_u8` and `ALL_STAGES` in the same edit. `from_u8` has a `_`
+    /// fallback, so without this guard a missing arm compiles fine and the
+    /// watchdog silently reports "unknown" for the new stage — the exact
+    /// failure the stage marker exists to prevent.
+    fn expected_wire_form(stage: CaptureLoopStage) -> (u8, &'static str) {
+        match stage {
+            CaptureLoopStage::Unknown => (0, "unknown"),
+            CaptureLoopStage::Heartbeat => (1, "heartbeat"),
+            CaptureLoopStage::FocusGate => (2, "focus-gate"),
+            CaptureLoopStage::WarmWait => (3, "warm-wait"),
+            CaptureLoopStage::ColdWait => (4, "cold-wait"),
+            CaptureLoopStage::PauseGate => (5, "pause-gate"),
+            CaptureLoopStage::ReleaseStream => (6, "release-stream"),
+            CaptureLoopStage::InvalidateStreams => (7, "invalidate-streams"),
+            CaptureLoopStage::ExclusionProbe => (8, "exclusion-probe"),
+            CaptureLoopStage::VisualProbe => (9, "visual-probe"),
+            CaptureLoopStage::TriggerWait => (10, "trigger-wait"),
+            CaptureLoopStage::Capture => (11, "capture"),
+            CaptureLoopStage::HotCachePush => (12, "hot-cache-push"),
+            CaptureLoopStage::TriggerDrain => (13, "trigger-drain"),
+        }
+    }
+
+    const ALL_STAGES: &[CaptureLoopStage] = &[
+        CaptureLoopStage::Unknown,
+        CaptureLoopStage::Heartbeat,
+        CaptureLoopStage::FocusGate,
+        CaptureLoopStage::WarmWait,
+        CaptureLoopStage::ColdWait,
+        CaptureLoopStage::PauseGate,
+        CaptureLoopStage::ReleaseStream,
+        CaptureLoopStage::InvalidateStreams,
+        CaptureLoopStage::ExclusionProbe,
+        CaptureLoopStage::VisualProbe,
+        CaptureLoopStage::TriggerWait,
+        CaptureLoopStage::Capture,
+        CaptureLoopStage::HotCachePush,
+        CaptureLoopStage::TriggerDrain,
+    ];
+
     /// Every stage must survive the `AtomicU8` round-trip the watchdog reads
-    /// back. A variant added without its `from_u8` arm still compiles (the
-    /// match has a `_` fallback) and would silently degrade the watchdog's
-    /// stall message to "unknown" — the opposite of why the stage exists.
+    /// back, and must keep the discriminant it was released with.
     #[test]
     fn every_loop_stage_round_trips_through_its_discriminant() {
-        const ALL: &[CaptureLoopStage] = &[
-            CaptureLoopStage::Unknown,
-            CaptureLoopStage::Heartbeat,
-            CaptureLoopStage::FocusGate,
-            CaptureLoopStage::WarmWait,
-            CaptureLoopStage::ColdWait,
-            CaptureLoopStage::PauseGate,
-            CaptureLoopStage::ReleaseStream,
-            CaptureLoopStage::InvalidateStreams,
-            CaptureLoopStage::ExclusionProbe,
-            CaptureLoopStage::VisualProbe,
-            CaptureLoopStage::TriggerWait,
-            CaptureLoopStage::Capture,
-            CaptureLoopStage::HotCachePush,
-            CaptureLoopStage::TriggerDrain,
-        ];
-
-        for stage in ALL {
+        for stage in ALL_STAGES {
+            let (discriminant, name) = expected_wire_form(*stage);
             assert_eq!(
-                CaptureLoopStage::from_u8(*stage as u8),
-                *stage,
-                "{} does not round-trip through discriminant {}",
-                stage.as_str(),
-                *stage as u8
+                *stage as u8, discriminant,
+                "{name} changed discriminant; stored values in flight would be misread"
             );
-            // `Unknown` is the one stage allowed to be called "unknown"; any
-            // other variant landing there means a missing `as_str` arm.
-            if !matches!(stage, CaptureLoopStage::Unknown) {
-                assert_ne!(
-                    stage.as_str(),
-                    "unknown",
-                    "discriminant {} has no distinct name",
-                    *stage as u8
-                );
-            }
+            assert_eq!(
+                CaptureLoopStage::from_u8(discriminant),
+                *stage,
+                "{name} does not round-trip through discriminant {discriminant}"
+            );
+            assert_eq!(stage.as_str(), name, "{name} reports the wrong name");
+        }
+    }
+
+    /// Catches the other half of the drift: a variant added to the enum and to
+    /// `from_u8`, but never added to `ALL_STAGES`, so the loop above silently
+    /// stops covering it.
+    #[test]
+    fn all_stages_covers_every_decodable_discriminant() {
+        let highest = ALL_STAGES
+            .iter()
+            .map(|stage| *stage as u8)
+            .max()
+            .expect("ALL_STAGES is never empty");
+
+        for discriminant in 0..=highest {
+            let claimants = ALL_STAGES
+                .iter()
+                .filter(|stage| **stage as u8 == discriminant)
+                .count();
+            assert_eq!(
+                claimants, 1,
+                "discriminant {discriminant} is claimed by {claimants} stages, expected exactly 1"
+            );
+        }
+
+        // Anything past the known range must stay Unknown. If it decodes to a
+        // real stage, a variant was added to the enum and `from_u8` but left
+        // out of `ALL_STAGES`.
+        for discriminant in (u16::from(highest) + 1)..=u16::from(u8::MAX) {
+            let decoded = CaptureLoopStage::from_u8(discriminant as u8);
+            assert_eq!(
+                decoded,
+                CaptureLoopStage::Unknown,
+                "discriminant {discriminant} decodes to {} but is missing from ALL_STAGES",
+                decoded.as_str()
+            );
         }
     }
 
