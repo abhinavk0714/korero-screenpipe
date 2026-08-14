@@ -87,12 +87,24 @@ pub enum CaptureLoopStage {
     ExclusionProbe = 8,
     /// Bounded visual-change probe screenshot.
     VisualProbe = 9,
-    /// Waiting for a capture trigger.
+    /// Parked on the bounded (250ms) wait for the first capture trigger.
     TriggerWait = 10,
     /// Running the capture itself (screenshot + a11y walk + persist).
     Capture = 11,
     /// Pushing the captured frame into the hot cache.
     HotCachePush = 12,
+    /// Trigger wait returned; draining coalesced triggers and running the
+    /// synchronous gates (reduce, checkpoint promotion, visual-check decision)
+    /// before the exclusion probe.
+    ///
+    /// Split out of [`CaptureLoopStage::TriggerWait`] because that marker
+    /// covered both the bounded await *and* every synchronous gate after it.
+    /// A 250ms-bounded await cannot itself explain the multi-minute
+    /// gone-silent freezes, so "frozen in trigger-wait" was ambiguous exactly
+    /// where the #3939 triage needed precision: `trigger-wait` now means the
+    /// task was never resumed from a bounded timer, while `trigger-drain`
+    /// means a synchronous gate blocked (a lock held by another thread).
+    TriggerDrain = 13,
 }
 
 impl CaptureLoopStage {
@@ -113,6 +125,7 @@ impl CaptureLoopStage {
             CaptureLoopStage::TriggerWait => "trigger-wait",
             CaptureLoopStage::Capture => "capture",
             CaptureLoopStage::HotCachePush => "hot-cache-push",
+            CaptureLoopStage::TriggerDrain => "trigger-drain",
         }
     }
 
@@ -133,6 +146,7 @@ impl CaptureLoopStage {
             10 => CaptureLoopStage::TriggerWait,
             11 => CaptureLoopStage::Capture,
             12 => CaptureLoopStage::HotCachePush,
+            13 => CaptureLoopStage::TriggerDrain,
             _ => CaptureLoopStage::Unknown,
         }
     }
@@ -915,5 +929,70 @@ mod tests {
         assert_eq!(s.frames_dropped_timeout, 2);
         assert_eq!(s.frames_dropped_error, 1);
         assert_eq!(s.frames_dropped, 3);
+    }
+
+    /// Every stage must survive the `AtomicU8` round-trip the watchdog reads
+    /// back. A variant added without its `from_u8` arm still compiles (the
+    /// match has a `_` fallback) and would silently degrade the watchdog's
+    /// stall message to "unknown" — the opposite of why the stage exists.
+    #[test]
+    fn every_loop_stage_round_trips_through_its_discriminant() {
+        const ALL: &[CaptureLoopStage] = &[
+            CaptureLoopStage::Unknown,
+            CaptureLoopStage::Heartbeat,
+            CaptureLoopStage::FocusGate,
+            CaptureLoopStage::WarmWait,
+            CaptureLoopStage::ColdWait,
+            CaptureLoopStage::PauseGate,
+            CaptureLoopStage::ReleaseStream,
+            CaptureLoopStage::InvalidateStreams,
+            CaptureLoopStage::ExclusionProbe,
+            CaptureLoopStage::VisualProbe,
+            CaptureLoopStage::TriggerWait,
+            CaptureLoopStage::Capture,
+            CaptureLoopStage::HotCachePush,
+            CaptureLoopStage::TriggerDrain,
+        ];
+
+        for stage in ALL {
+            assert_eq!(
+                CaptureLoopStage::from_u8(*stage as u8),
+                *stage,
+                "{} does not round-trip through discriminant {}",
+                stage.as_str(),
+                *stage as u8
+            );
+            // `Unknown` is the one stage allowed to be called "unknown"; any
+            // other variant landing there means a missing `as_str` arm.
+            if !matches!(stage, CaptureLoopStage::Unknown) {
+                assert_ne!(
+                    stage.as_str(),
+                    "unknown",
+                    "discriminant {} has no distinct name",
+                    *stage as u8
+                );
+            }
+        }
+    }
+
+    /// The trigger wait and the synchronous gates after it must be
+    /// distinguishable, otherwise a #3939 freeze cannot be attributed to
+    /// either the timer or a blocking lock.
+    #[test]
+    fn trigger_wait_and_trigger_drain_are_distinct_stages() {
+        assert_ne!(
+            CaptureLoopStage::TriggerWait as u8,
+            CaptureLoopStage::TriggerDrain as u8
+        );
+        assert_eq!(CaptureLoopStage::TriggerWait.as_str(), "trigger-wait");
+        assert_eq!(CaptureLoopStage::TriggerDrain.as_str(), "trigger-drain");
+
+        // The watchdog reads the stage out of the live metrics, so prove the
+        // transition is observable there and not just on the enum.
+        let m = PipelineMetrics::new();
+        m.record_loop_stage(CaptureLoopStage::TriggerWait);
+        assert_eq!(m.loop_stage().0, CaptureLoopStage::TriggerWait);
+        m.record_loop_stage(CaptureLoopStage::TriggerDrain);
+        assert_eq!(m.loop_stage().0, CaptureLoopStage::TriggerDrain);
     }
 }
