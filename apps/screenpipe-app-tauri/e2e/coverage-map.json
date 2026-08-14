@@ -1499,7 +1499,8 @@
     {
       "spec": "live-view-pinch-zoom.spec.ts",
       "platforms": [
-        "macos"
+        "macos",
+        "linux"
       ],
       "layers": [
         "real-ui-e2e",
@@ -1512,7 +1513,7 @@
       "criticality": "medium",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Emits the same native-magnify payload the macOS magnification gesture recognizer sends, and asserts an ordinary pinch stays controllable instead of slamming into a zoom limit, holds the world point under the fingers, ignores WebKit's duplicate synthesized ctrl+wheel for the same gesture, and persists the settled viewport once."
+      "notes": "Emits the same native-magnify payload the macOS magnification gesture recognizer sends, and asserts an ordinary pinch stays controllable instead of slamming into a zoom limit, holds the world point under the fingers, ignores a duplicate synthesized ctrl+wheel for the same gesture, and persists the settled viewport once. The payload is injected, so the gesture recognizer binding itself is out of scope and the spec runs wherever the full suite runs."
     },
     {
       "spec": "macos-ui-performance.spec.ts",

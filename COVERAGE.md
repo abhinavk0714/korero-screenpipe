@@ -24,9 +24,15 @@ results and `cargo llvm-cov` data on top when judging release confidence.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
+<<<<<<< HEAD
 | windows | 89 | 288 | 235.3 | 15 | 93 | 92% |
 | macos | 112 | 297 | 232.3 | 17 | 97 | 90% |
 | linux | 78 | 245 | 203.9 | 14 | 88 | 88% |
+=======
+| windows | 88 | 287 | 234.3 | 15 | 92 | 92% |
+| macos | 111 | 296 | 231.3 | 17 | 96 | 90% |
+| linux | 78 | 248 | 205.7 | 14 | 88 | 88% |
+>>>>>>> 64407ba2e (test(e2e): declare the platforms the pinch spec actually runs on)
 
 ### Core Engine
 
