@@ -27,6 +27,12 @@ export const MEETING_READING_COLUMN_CLASS = "w-full";
 export const MEETING_QUIET_CONTROL_CLASS =
   "rounded-none border-0 bg-transparent text-muted-foreground transition-colors hover:bg-transparent hover:text-foreground focus-visible:text-foreground";
 
+// Actions that sit on the tab rule share the tabs' own geometry so the row
+// reads as one band instead of a strip of floating boxes. Shared with the note
+// view now that the meeting actions live here rather than in a footer.
+export const MEETING_RULE_ACTION_CLASS =
+  "flex h-11 shrink-0 items-center gap-2 border-l border-border font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-foreground disabled:text-muted-foreground/50 disabled:hover:bg-transparent";
+
 const MEETING_TABS: ReadonlyArray<{
   value: MeetingWorkspaceTab;
   label: string;

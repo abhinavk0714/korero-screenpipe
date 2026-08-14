@@ -152,6 +152,7 @@ import {
   extractMeetingSummary,
   MEETING_QUIET_CONTROL_CLASS,
   MEETING_READING_COLUMN_CLASS,
+  MEETING_RULE_ACTION_CLASS,
   MEETING_SHELL_CLASS,
   MeetingSummarySurface,
   MeetingWorkspaceTabs,
@@ -1466,6 +1467,12 @@ export function NoteView({
     summaryWorking ||
     hasSaveStatus ||
     summaryLifecycle.kind === "failed";
+  // The footer exists to report something. A finished meeting that is not
+  // recording, summarizing, failing or saving has nothing to report, and its
+  // resting caption ("meeting saved") was pure reassurance, so the whole bar
+  // goes away rather than shrinking. The inactivity prompt is the one banner
+  // that can appear while not live, so it has to keep the bar alive.
+  const footerVisible = footerHasNews || (!isLive && Boolean(inactivityPrompt));
   const transcriptActionLabel = transcriptOpen
     ? "hide transcript"
     : "show transcript";
@@ -1514,6 +1521,160 @@ export function NoteView({
       : summaryLifecycle.kind === "failed"
         ? "attention"
         : "idle";
+
+  // Meeting actions sit on the tab rule beside share. They used to require a
+  // footer that stayed on screen for every finished meeting just to hold them.
+  const meetingActions = (
+    <TooltipProvider delayDuration={200}>
+                {!isLive && (
+                  <MeetingControlTooltip label={summaryActionLabel}>
+                    {/* The summary tab owns the prominent generate/retry
+                        button next to the output it produces. This one is the
+                        shortcut from the other tabs, so it takes the same
+                        recessive treatment as the rest of the cluster. */}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleSummaryAction}
+                      disabled={
+                        summaryWorking || retranscribing || !canSummarizeMeeting
+                      }
+                      aria-label={summaryActionLabel}
+                      className={cn(
+                        MEETING_RULE_ACTION_CLASS,
+                        // shadcn Button draws a full border; the rule only wants
+                        // the left separator the tabs and share button use.
+                        "border-y-0 border-r-0 px-3",
+                      )}
+                    >
+                      {summaryWorking ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : summaryLifecycle.kind === "completed" ? (
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      ) : summaryLifecycle.kind === "failed" ? (
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      ) : (
+                        <Sparkles className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  </MeetingControlTooltip>
+                )}
+                {/* Everything past summarize is occasional or destructive, so
+                    it lives one level down instead of adding more identical
+                    squares next to the primary action. */}
+                {!isLive && (
+                  <AlertDialog
+                    open={confirmingAction !== null}
+                    onOpenChange={(open) => {
+                      if (!open) setConfirmingAction(null);
+                    }}
+                  >
+                    <DropdownMenu>
+                      <MeetingControlTooltip label="more meeting actions">
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-label="more meeting actions"
+                            className={cn(
+                        MEETING_RULE_ACTION_CLASS,
+                        // shadcn Button draws a full border; the rule only wants
+                        // the left separator the tabs and share button use.
+                        "border-y-0 border-r-0 px-3",
+                      )}
+                          >
+                            <MoreHorizontal className="h-3.5 w-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                      </MeetingControlTooltip>
+                      <DropdownMenuContent align="end" className="w-56">
+                        <DropdownMenuItem
+                          disabled={resuming}
+                          onSelect={() => void onResume()}
+                        >
+                          {resuming ? (
+                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Play className="mr-2 h-3.5 w-3.5" />
+                          )}
+                          {resuming ? "resuming meeting" : "resume meeting"}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={retranscribing || summaryWorking}
+                          onSelect={() => setConfirmingAction("retranscribe")}
+                        >
+                          {retranscribing ? (
+                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <AudioLines className="mr-2 h-3.5 w-3.5" />
+                          )}
+                          retranscribe saved audio
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={exporting}
+                          onSelect={() => void handleExport()}
+                        >
+                          {exporting ? (
+                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Download className="mr-2 h-3.5 w-3.5" />
+                          )}
+                          export to mp4
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          onSelect={() => setConfirmingAction("delete")}
+                        >
+                          <Trash2 className="mr-2 h-3.5 w-3.5" />
+                          delete meeting
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    {confirmingAction === "retranscribe" ? (
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>
+                            retranscribe meeting
+                          </AlertDialogTitle>
+                          <AlertDialogDescription>
+                            rebuild the transcript from saved audio. this
+                            replaces the current transcript and refreshes the
+                            summary when automatic summary is on.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => void handleRetranscribe()}
+                          >
+                            retranscribe
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    ) : confirmingAction === "delete" ? (
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>delete meeting</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            your notes and transcript will be permanently
+                            deleted.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            variant="destructive"
+                            onClick={() => void handleDelete()}
+                          >
+                            delete
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    ) : null}
+                  </AlertDialog>
+                )}
+    </TooltipProvider>
+  );
 
   return (
     <div ref={rootRef} className="relative flex h-full flex-col bg-background">
@@ -1609,17 +1770,21 @@ export function NoteView({
             // a third inside the summary tab used to compete with it, and the
             // reachable one was always the transcript dump.
             trailing={
-              <MeetingShareMenu
-                canShareSummary={canShareSummary}
-                busy={copying}
-                copiedAction={copiedAction}
-                onShare={(action) => {
-                  if (action === "summary") void handleCopySummary();
-                  else if (action === "email") void handleEmailSummary();
-                  else if (action === "transcript") void handleCopyTranscript();
-                  else void handleCopy();
-                }}
-              />
+              <>
+                <MeetingShareMenu
+                  canShareSummary={canShareSummary}
+                  busy={copying}
+                  copiedAction={copiedAction}
+                  onShare={(action) => {
+                    if (action === "summary") void handleCopySummary();
+                    else if (action === "email") void handleEmailSummary();
+                    else if (action === "transcript")
+                      void handleCopyTranscript();
+                    else void handleCopy();
+                  }}
+                />
+                {meetingActions}
+              </>
             }
           />
         </div>
@@ -1718,6 +1883,7 @@ export function NoteView({
         )}
       </main>
 
+      {footerVisible && (
       <footer className="z-30 min-w-0 shrink-0 border-t border-border bg-background">
         <div className={cn(MEETING_SHELL_CLASS, "py-3")}>
           {!isLive && inactivityPrompt && (
@@ -1848,152 +2014,9 @@ export function NoteView({
               </div>
             </div>
 
-            {/* The transcript toggle that used to sit here was a third way to
-                do what the TRANSCRIPT tab does: `transcriptOpen` is literally
-                `activeTab === "transcript"`. The tab is the one that survives. */}
-            <TooltipProvider delayDuration={200}>
-              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                {!isLive && (
-                  <MeetingControlTooltip label={summaryActionLabel}>
-                    {/* The summary tab owns the prominent generate/retry
-                        button next to the output it produces. This one is the
-                        shortcut from the other tabs, so it takes the same
-                        recessive treatment as the rest of the cluster. */}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={handleSummaryAction}
-                      disabled={
-                        summaryWorking || retranscribing || !canSummarizeMeeting
-                      }
-                      aria-label={summaryActionLabel}
-                      className={cn(MEETING_QUIET_CONTROL_CLASS, "h-9 w-9 p-0")}
-                    >
-                      {summaryWorking ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : summaryLifecycle.kind === "completed" ? (
-                        <RefreshCw className="h-3.5 w-3.5" />
-                      ) : summaryLifecycle.kind === "failed" ? (
-                        <RefreshCw className="h-3.5 w-3.5" />
-                      ) : (
-                        <Sparkles className="h-3.5 w-3.5" />
-                      )}
-                    </Button>
-                  </MeetingControlTooltip>
-                )}
-                {/* Everything past summarize is occasional or destructive, so
-                    it lives one level down instead of adding more identical
-                    squares next to the primary action. */}
-                {!isLive && (
-                  <AlertDialog
-                    open={confirmingAction !== null}
-                    onOpenChange={(open) => {
-                      if (!open) setConfirmingAction(null);
-                    }}
-                  >
-                    <DropdownMenu>
-                      <MeetingControlTooltip label="more meeting actions">
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            aria-label="more meeting actions"
-                            className={cn(
-                              MEETING_QUIET_CONTROL_CLASS,
-                              "h-9 w-9 p-0",
-                            )}
-                          >
-                            <MoreHorizontal className="h-3.5 w-3.5" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                      </MeetingControlTooltip>
-                      <DropdownMenuContent align="end" className="w-56">
-                        <DropdownMenuItem
-                          disabled={resuming}
-                          onSelect={() => void onResume()}
-                        >
-                          {resuming ? (
-                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Play className="mr-2 h-3.5 w-3.5" />
-                          )}
-                          {resuming ? "resuming meeting" : "resume meeting"}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          disabled={retranscribing || summaryWorking}
-                          onSelect={() => setConfirmingAction("retranscribe")}
-                        >
-                          {retranscribing ? (
-                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <AudioLines className="mr-2 h-3.5 w-3.5" />
-                          )}
-                          retranscribe saved audio
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          disabled={exporting}
-                          onSelect={() => void handleExport()}
-                        >
-                          {exporting ? (
-                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Download className="mr-2 h-3.5 w-3.5" />
-                          )}
-                          export to mp4
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          onSelect={() => setConfirmingAction("delete")}
-                        >
-                          <Trash2 className="mr-2 h-3.5 w-3.5" />
-                          delete meeting
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                    {confirmingAction === "retranscribe" ? (
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>
-                            retranscribe meeting
-                          </AlertDialogTitle>
-                          <AlertDialogDescription>
-                            rebuild the transcript from saved audio. this
-                            replaces the current transcript and refreshes the
-                            summary when automatic summary is on.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>cancel</AlertDialogCancel>
-                          <AlertDialogAction
-                            onClick={() => void handleRetranscribe()}
-                          >
-                            retranscribe
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    ) : confirmingAction === "delete" ? (
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>delete meeting</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            your notes and transcript will be permanently
-                            deleted.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>cancel</AlertDialogCancel>
-                          <AlertDialogAction
-                            variant="destructive"
-                            onClick={() => void handleDelete()}
-                          >
-                            delete
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    ) : null}
-                  </AlertDialog>
-                )}
-
+            {isLive && (
+              <TooltipProvider delayDuration={200}>
+                <div className="flex shrink-0 items-center justify-end">
                 {isLive && (
                   <MeetingControlTooltip label={stopActionLabel}>
                     <Button
@@ -2012,8 +2035,9 @@ export function NoteView({
                     </Button>
                   </MeetingControlTooltip>
                 )}
-              </div>
-            </TooltipProvider>
+                </div>
+              </TooltipProvider>
+            )}
           </div>
         </div>
         {isLive && (
@@ -2022,6 +2046,7 @@ export function NoteView({
           </div>
         )}
       </footer>
+      )}
     </div>
   );
 }
