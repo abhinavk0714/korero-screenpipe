@@ -129,6 +129,10 @@ import { copyMeetingSummary, emailMeetingSummary } from "./share-summary";
 import { ConnectedShareDialog } from "@/components/connected-share-dialog";
 import { createMeetingShareArtifact } from "@/lib/connected-share";
 import {
+  readRememberedShare,
+  rememberedSendLabel,
+} from "@/lib/connected-share-preference";
+import {
   resolveTranscriptOpen,
   type TranscriptOpenIntent,
 } from "./transcript-open-state";
@@ -246,6 +250,12 @@ export function NoteView({
     null,
   );
   const [shareOpen, setShareOpen] = useState(false);
+  // Read once per open rather than on every render: the menu only needs to
+  // name the app, and the dialog re-reads the full preference when it mounts.
+  const sendLabel = useMemo(
+    () => rememberedSendLabel(readRememberedShare("meeting")),
+    [shareOpen],
+  );
   const [resumingCapture, setResumingCapture] = useState(false);
   const [savingBeforeStop, setSavingBeforeStop] = useState(false);
   const [autoSummaryEnabled, setAutoSummaryEnabled] = useState<boolean | null>(
@@ -1793,6 +1803,7 @@ export function NoteView({
                 <MeetingShareMenu
                   canShareSummary={canShareSummary}
                   canSend={shareArtifact.sections.length > 0}
+                  sendLabel={sendLabel}
                   busy={copying}
                   copiedAction={copiedAction}
                   onShare={(action) => {

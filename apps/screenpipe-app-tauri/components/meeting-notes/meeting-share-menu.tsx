@@ -71,6 +71,7 @@ const ACTION_ICON: Record<
 export function MeetingShareMenu({
   canShareSummary,
   canSend = false,
+  sendLabel,
   busy = false,
   copiedAction = null,
   onShare,
@@ -84,6 +85,11 @@ export function MeetingShareMenu({
    * and a destination picker is not more likely than copying.
    */
   canSend?: boolean;
+  /**
+   * Names the app this meeting was last sent to. Recognising "send to Slack"
+   * is faster than reading "send to an app" and then discovering which.
+   */
+  sendLabel?: string;
   busy?: boolean;
   /** Which action last landed on the clipboard, for the transient check. */
   copiedAction?: MeetingShareAction | null;
@@ -149,7 +155,9 @@ export function MeetingShareMenu({
                 className="text-xs"
               >
                 <Icon className="mr-2 h-3.5 w-3.5" />
-                {ACTION_LABEL[action]}
+                {action === "send"
+                  ? (sendLabel ?? ACTION_LABEL.send)
+                  : ACTION_LABEL[action]}
                 {copiedAction === action && (
                   <Check className="ml-auto h-3.5 w-3.5" />
                 )}

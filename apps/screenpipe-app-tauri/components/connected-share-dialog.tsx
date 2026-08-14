@@ -52,6 +52,11 @@ import {
   type ConnectedShareArtifact,
   type ShareConnectionAvailability,
 } from "@/lib/connected-share";
+import {
+  preferredShareDestination,
+  readRememberedShare,
+  writeRememberedShare,
+} from "@/lib/connected-share-preference";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import { commands } from "@/lib/utils/tauri";
 
@@ -244,7 +249,23 @@ export function ConnectedShareDialog({
         if (cancelled) return;
         setAvailability(ready);
         setConnectionsChecked(true);
-        setDestination("copy");
+        // Open where this surface was last sent, so the common case — the same
+        // standup into the same channel every week — is a confirmation rather
+        // than a fresh five-step interrogation. Only the destination is
+        // recalled; the explicit final send still stands in front of the write.
+        const remembered = readRememberedShare(artifact.surface);
+        const connected: string[] = [
+          "copy",
+          ...(ready.direct.slack ? ["slack"] : []),
+          ...(ready.direct.linear ? ["linear"] : []),
+          ...(ready.chat.linear ? ["chat-linear"] : []),
+          ...(ready.chat.notion ? ["chat-notion"] : []),
+        ];
+        setDestination(
+          preferredShareDestination(remembered, connected) as Destination,
+        );
+        if (remembered?.target) setSlackTarget(remembered.target);
+        if (remembered?.instance) setSlackInstance(remembered.instance);
       })
       .catch((error) => {
         if (cancelled) return;
@@ -552,6 +573,13 @@ export function ConnectedShareDialog({
       if (destination === "linear") await sendToLinear();
       if (destination === "chat-linear") await prepareInChat("linear");
       if (destination === "chat-notion") await prepareInChat("notion");
+      // Remember only what landed. A failed send must not train the dialog to
+      // reopen on a destination that does not work.
+      writeRememberedShare(artifact.surface, {
+        destination,
+        target: destination === "slack" ? slackTarget : linearTeamId || undefined,
+        instance: destination === "slack" ? slackInstance : undefined,
+      });
       if (destination === "slack" || destination === "linear") {
         posthog.capture("connected_share_completed", {
           surface: artifact.surface,

@@ -173,6 +173,30 @@ describe("meeting share control", () => {
     expect(onShare).toHaveBeenCalledWith("send");
   });
 
+  // Recognising "send to Slack" beats reading "send to an app" and then
+  // discovering which one it meant.
+  it("names the app it will send to once there is a remembered one", async () => {
+    render(
+      <MeetingShareMenu
+        canShareSummary
+        canSend
+        sendLabel="send to Slack…"
+        onShare={vi.fn()}
+      />,
+    );
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "more share options" }),
+      { key: "Enter" },
+    );
+
+    expect(
+      await screen.findByRole("menuitem", { name: /send to Slack/ }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("menuitem", { name: /send to an app/ }),
+    ).not.toBeInTheDocument();
+  });
+
   it("locks the control while a copy is in flight", () => {
     render(<MeetingShareMenu canShareSummary busy onShare={vi.fn()} />);
 
