@@ -175,8 +175,10 @@ export function useAnnouncement(): UseAnnouncementResult {
   // rust side emits the `announcement` event with the announcement object.
   // The hook swallows a failed `listen()` (e.g. not running under Tauri in
   // tests), matching the previous `.catch(() => {})` guard.
+  // Parsed as `local`: this channel is reachable by any same-user process and
+  // carries no provenance, so it does not get the pipe-install destination.
   useTauriEvent("announcement", (event) => {
-    const a = parseAnnouncement(event.payload);
+    const a = parseAnnouncement(event.payload, "local");
     if (a) setTriggered(a);
   });
 

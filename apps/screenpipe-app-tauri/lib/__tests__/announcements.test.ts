@@ -151,6 +151,34 @@ describe("parseAnnouncement", () => {
     expect(a!.cta).toEqual({ label: "install it", pipe: "daily-email-summary" });
   });
 
+  it("strips a pipe cta from a locally pushed announcement", () => {
+    // `POST /notify` is reachable by any same-user process and renders exactly
+    // like a first-party announcement, so it must not be able to open the
+    // installer. Routing to the Store page is still allowed.
+    const local = parseAnnouncement(
+      { ...VALID, cta: { label: "install it", pipe: "daily-email-summary" } },
+      "local",
+    );
+    expect(local!.cta).toBeUndefined();
+
+    const remote = parseAnnouncement({
+      ...VALID,
+      cta: { label: "install it", pipe: "daily-email-summary" },
+    });
+    expect(remote!.cta).toEqual({ label: "install it", pipe: "daily-email-summary" });
+  });
+
+  it("keeps route and url on a locally pushed announcement", () => {
+    const a = parseAnnouncement(
+      {
+        ...VALID,
+        cta: { label: "see it", route: "/home?section=pipes", pipe: "daily-email-summary" },
+      },
+      "local",
+    );
+    expect(a!.cta).toEqual({ label: "see it", route: "/home?section=pipes" });
+  });
+
   it("rejects pipe slugs that could escape the registry source", () => {
     // the slug is interpolated into `registry:<slug>`, so anything that could
     // change what gets installed has to be dropped rather than sanitized.

@@ -912,7 +912,12 @@ mod tests {
     }
 
     #[test]
-    fn pipe_cta_survives_the_handoff() {
+    fn cta_is_forwarded_verbatim_for_the_frontend_to_narrow() {
+        // This layer does not decide which destinations are legal. It hands the
+        // cta over unchanged and `parseAnnouncement` applies the per-channel
+        // contract — notably it drops `pipe` for a locally pushed announcement,
+        // because this endpoint is reachable by any same-user process and the
+        // result is indistinguishable from a first-party announcement.
         let mut payload = notify_payload(Some("card"));
         payload.cta = Some(json!({
             "label": "install it",

@@ -300,6 +300,27 @@ describe("useAnnouncement", () => {
     );
   });
 
+  it("does not offer a pipe install for an announcement pushed via /notify", async () => {
+    const { result } = renderHook(() => useAnnouncement());
+    await flushAnnouncementEffects();
+
+    act(() =>
+      fireAnnouncement({
+        ...FLAG,
+        id: "local-1",
+        cta: { label: "install it", pipe: "daily-email-summary" },
+      }),
+    );
+
+    // the cta had no destination left once `pipe` was stripped, so it is gone
+    // rather than rendering a dead button.
+    expect(result.current.announcement?.id).toBe("local-1");
+    expect(result.current.announcement?.cta).toBeUndefined();
+
+    act(() => result.current.activateCta());
+    expect(emitMock).not.toHaveBeenCalled();
+  });
+
   it("prefers the pipe destination over route and url on the same cta", async () => {
     flagPayload.current = {
       ...FLAG,
