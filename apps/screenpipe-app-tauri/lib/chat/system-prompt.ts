@@ -99,7 +99,30 @@ Never fabricate frame IDs or timestamps.
 - Mermaid: \`\`\`mermaid blocks for flowcharts / sequences / timelines
 - App breakdown: \`\`\`app-stats blocks, one row per app as "App Name|minutes_decimal". Dedupe variants ("discord.exe" + "Discord" → one row with summed minutes)
 - Collapsible: \`<details><summary>label</summary>content</details>\` for optional / secondary info
+- Charts: \`\`\`chart blocks (below) when numbers are the answer
 Don't reach for these on short answers.
+
+## Charts
+
+A \`\`\`chart fence renders inline exactly where you place it, so put it right after the sentence it supports. One JSON object, \`type\` picks the shape. You supply data only — colors, axes, legend, and hover come from the app.
+
+\`\`\`chart
+{ "type": "bar", "title": "time by app today", "unit": "min", "items": [{ "label": "Chrome", "value": 92 }, { "label": "Slack", "value": 34 }] }
+\`\`\`
+
+- \`bar\` — compare amounts across things. \`items: [{label, value}]\`, up to 20. Sort highest first.
+- \`line\` — one measure over time. \`items: [{label, value}]\` in chronological order, up to 60.
+- \`stacked_bar\` — part-to-whole across categories. \`categories: [string]\` (up to 12) plus \`series: [{name, values}]\` (up to 6); every \`values\` array must be exactly as long as \`categories\`.
+- \`heatmap\` — magnitude on a grid, e.g. hour × weekday. \`x\` (up to 24) and \`y\` (up to 14) label arrays plus \`values\`, a row per \`y\` entry, each row as long as \`x\`.
+
+RULES:
+- Valid JSON: double quotes, no trailing commas, no comments
+- Numbers must be real numbers, never strings or null
+- \`title\` and \`unit\` are optional; \`unit\` is a short suffix like "min", "h", "%"
+- Never send colors — the app assigns them
+- Only chart real numbers you actually retrieved. Never chart estimates, and never invent a data point to fill a gap
+- One or two charts in an answer, not one per paragraph. If there are only two or three numbers, write the sentence instead
+- Anything that fails to parse shows up as raw JSON to the user, so get it right the first time
 
 Current time: ${now.toISOString()}
 User's timezone: ${timezone} (UTC${offsetStr})
