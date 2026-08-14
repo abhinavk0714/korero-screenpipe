@@ -87,7 +87,8 @@ async fn common_term_page_matches_legacy_query() {
             COALESCE(vc.file_path, '') AS file_path,
             COALESCE(f.offset_index, 0) AS offset_index,
             f.name AS frame_name,
-            f.browser_url
+            f.browser_url,
+            f.capture_trigger
         FROM frames f
         LEFT JOIN video_chunks vc ON f.video_chunk_id = vc.id
         JOIN frames_fts ON f.id = frames_fts.rowid
