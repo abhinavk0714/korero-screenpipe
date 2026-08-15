@@ -53,6 +53,74 @@ pub(super) fn install_notification_action_callback(app_handle: &tauri::AppHandle
 pub(super) fn install_shortcut_action_callback(app_handle: &tauri::AppHandle) {
     let _ = GLOBAL_APP_HANDLE.set(app_handle.clone());
     native_shortcut_reminder::set_action_callback(native_shortcut_action_callback);
+    // The native timeline shares the same trampoline lifetime, so install it
+    // here rather than adding a second startup hook that could drift.
+    crate::native_timeline::set_action_callback(native_timeline_action_callback);
+}
+
+/// Callback invoked from Swift when the native timeline asks the app to do
+/// something it deliberately cannot do itself: open another window, write to
+/// the clipboard, or delete a range.
+///
+/// A Rust panic crossing this Cocoa→Rust trampoline aborts the whole app, so
+/// everything is caught here.
+extern "C" fn native_timeline_action_callback(action_ptr: *const std::os::raw::c_char) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        native_timeline_action_callback_inner(action_ptr);
+    }));
+}
+
+fn native_timeline_action_callback_inner(action_ptr: *const std::os::raw::c_char) {
+    if action_ptr.is_null() {
+        return;
+    }
+    let raw = match unsafe { std::ffi::CStr::from_ptr(action_ptr) }.to_str() {
+        Ok(value) => value.to_string(),
+        Err(_) => return,
+    };
+    let Some(app) = GLOBAL_APP_HANDLE.get().cloned() else {
+        return;
+    };
+
+    use crate::native_timeline::TimelineAction;
+    use tauri::Emitter;
+
+    match TimelineAction::parse(&raw) {
+        TimelineAction::CloseWindow => {
+            crate::native_timeline::hide();
+        }
+        TimelineAction::OpenSearch => {
+            let _ = app.emit("timeline-open-search", ());
+        }
+        TimelineAction::OpenChat => {
+            let _ = app.emit("timeline-open-chat", ());
+        }
+        TimelineAction::OpenRecordingSettings => {
+            let _ = app.emit("timeline-open-recording-settings", ());
+        }
+        TimelineAction::CopyFrame { frame_id } => {
+            let _ = app.emit("timeline-copy-frame", frame_id);
+        }
+        TimelineAction::CopyText => {
+            let _ = app.emit("timeline-copy-text", ());
+        }
+        TimelineAction::AskAiSelection => {
+            let _ = app.emit("timeline-ask-ai-selection", ());
+        }
+        TimelineAction::ApplyTag { tag } => {
+            // Swift already wrote the tag optimistically; this is for anything
+            // in the app that wants to react (toasts, analytics).
+            let _ = app.emit("timeline-tag-applied", tag);
+        }
+        TimelineAction::DeleteRange => {
+            let _ = app.emit("timeline-delete-range", ());
+        }
+        TimelineAction::Unknown { raw } => {
+            // Forwarded rather than dropped so a newer Swift build is not
+            // silently ignored by an older Rust one.
+            let _ = app.emit("timeline-action", raw);
+        }
+    }
 }
 
 fn notification_copy_value(action: &serde_json::Value) -> Option<String> {

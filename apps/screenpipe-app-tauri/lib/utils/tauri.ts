@@ -1093,6 +1093,31 @@ async lockSync() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async nativeTimelineClose() : Promise<boolean> {
+    return await TAURI_INVOKE("native_timeline_close");
+},
+async nativeTimelineHide() : Promise<boolean> {
+    return await TAURI_INVOKE("native_timeline_hide");
+},
+/**
+ * Whether the native timeline can be used on this platform and build.
+ */
+async nativeTimelineIsAvailable() : Promise<boolean> {
+    return await TAURI_INVOKE("native_timeline_is_available");
+},
+/**
+ * Move the native timeline's playhead. Prefers `frame_id` when both are given,
+ * matching the webview's deep-link precedence.
+ */
+async nativeTimelineNavigate(timestamp: string | null, frameId: string | null) : Promise<boolean> {
+    return await TAURI_INVOKE("native_timeline_navigate", { timestamp, frameId });
+},
+/**
+ * Open the native timeline window.
+ */
+async nativeTimelineShow(port: number, apiKey: string | null, embedded: boolean | null) : Promise<boolean> {
+    return await TAURI_INVOKE("native_timeline_show", { port, apiKey, embedded });
+},
 /**
  * Cancel any in-flight OAuth flow(s) for the given integration.
  * Dropping the stored sender makes the awaiting `oauth_connect` call fail fast
@@ -3421,10 +3446,10 @@ captureOnClipboard?: boolean | null;
 /**
  * Override `UiRecorderConfig::capture_scroll`.
  * None = engine default (false). When true, scroll wheel events are
- * recorded into `ui_events` so the `ScrollBurstTracker` can fire a
- * `ScrollStop` trigger at burst-end and link the last scroll row to
- * the resulting frame. Off by default — wheel ticks fire at ~60Hz
- * and inflate the table fast.
+ * recorded into `ui_events` so the `ScrollBurstTracker` can retain every
+ * correlation ID, fire a `ScrollStop` trigger at burst-end, and link every
+ * persisted scroll row in the settled burst to the resulting frame. Off by
+ * default — wheel ticks fire at ~60Hz and inflate the table fast.
  */
 captureScroll?: boolean | null;
 /**
