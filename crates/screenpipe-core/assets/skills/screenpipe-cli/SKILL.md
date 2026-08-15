@@ -12,7 +12,9 @@ Use `bun x screenpipe@latest` to run CLI commands. No separate install needed.
 cd "$(mktemp -d)" && bun x screenpipe@latest <command>
 ```
 
-**Rules:** every invocation is `cd "$(mktemp -d)" && bun x screenpipe@latest …` · never drop the `cd` prefix · never drop `@latest` · copy the examples below verbatim rather than shortening them.
+**Rules:** every invocation is `cd "$(mktemp -d)" && bun x screenpipe@latest …` · never drop the `cd` prefix · never drop `@latest` · copy the examples below verbatim rather than shortening them · because the `cd` changes your working directory, **any path you pass must be absolute** (`~/...` or `/...`), never relative (`./my-pipe`).
+
+Works on macOS, Linux, and Windows: the CLI always runs under bash, and `mktemp` is present on all three (on Windows via the bundled git-portable `usr/bin`).
 
 > **Sandboxed shells:** some agents (e.g. Codex) block all shell network access, so `bun x` cannot fetch the package and CLI calls to `localhost:3030` fail instantly. If that happens, use the screenpipe MCP tools instead of the CLI.
 
@@ -36,7 +38,7 @@ cd "$(mktemp -d)" && bun x screenpipe@latest pipe enable <name>           # Enab
 cd "$(mktemp -d)" && bun x screenpipe@latest pipe disable <name>          # Disable a pipe
 cd "$(mktemp -d)" && bun x screenpipe@latest pipe run <name>              # Run once immediately (for testing)
 cd "$(mktemp -d)" && bun x screenpipe@latest pipe logs <name>             # View execution logs
-cd "$(mktemp -d)" && bun x screenpipe@latest pipe install <url-or-path>   # Install from GitHub or local path
+cd "$(mktemp -d)" && bun x screenpipe@latest pipe install <url-or-abs-path>  # Install from GitHub or an absolute local path
 cd "$(mktemp -d)" && bun x screenpipe@latest pipe delete <name>           # Delete a pipe
 cd "$(mktemp -d)" && bun x screenpipe@latest pipe models list             # View AI model presets
 ```
