@@ -19,7 +19,7 @@
 //! native binary that runs in ~150 ms. A pipe that makes five CLI calls burns
 //! ~20 s on process startup alone.
 //!
-//! This module removes that per-call cost the same way [`pi_config_dir`] and
+//! This module removes that per-call cost the same way `pi_config_dir` and
 //! `PI_SKIP_VERSION_CHECK` already remove pi's per-run update check: resolve
 //! once, out of band, and hand agents a stable path.
 //!
@@ -34,7 +34,7 @@
 //! - [`resolved_cli_binary`] is a single `stat`, so it is safe to call on every
 //!   spawn.
 //!
-//! Agents never read any of this directly. [`apply_pi_isolation_env`] exports
+//! Agents never read any of this directly. `apply_pi_isolation_env` exports
 //! `SCREENPIPE_CLI`, and the skills invoke
 //! `${SCREENPIPE_CLI:-bun x screenpipe@latest}` so the slow path still works
 //! when the app has not published a launcher yet — a plain terminal, a fresh
@@ -53,10 +53,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Refresh the resolved CLI at most this often.
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
-
-/// Version resolved when the registry cannot be reached and no receipt exists.
-/// Advanced by a release, exactly like `SCREENPIPE_MCP_PKG`.
-pub const CLI_VERSION_FLOOR: &str = "0.4.40";
 
 /// Environment variable carrying the resolved launcher to agent children.
 pub const CLI_ENV_VAR: &str = "SCREENPIPE_CLI";
