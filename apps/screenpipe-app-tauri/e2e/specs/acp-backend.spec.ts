@@ -590,14 +590,22 @@ describe("ACP backend", function () {
     // The whole picker comes from the static catalog (lib/acp/agents.json) in
     // file order, with the custom entry appended last (acpAdapterInfo falls
     // back to it).
+    //
+    // `disabled` entries are not offered as new choices — SELECTABLE_ACP_ADAPTERS
+    // filters them out in lib/utils/preset-appearance.ts, and ACP_ADAPTERS keeps
+    // them so an existing preset still resolves. opencode and kimi are disabled,
+    // so they are absent here by design; both were listed below when this spec
+    // was written in the same PR that disabled them (#5921), and Linux E2E has
+    // not completed since, so nothing caught it.
+    //
+    // Flagged agents (cursor, github-copilot-cli) DO appear: e2e builds pass
+    // ACP_ADAPTER_FLAGS as "all on" because PostHog never initializes here.
     expect(values).toEqual([
       "pi-acp",
       "codex-acp",
       "claude-acp",
-      "opencode",
       "cursor",
       "github-copilot-cli",
-      "kimi",
       "custom",
     ]);
     expect(options.map((option) => option.label)).toContain("Another ACP agent");

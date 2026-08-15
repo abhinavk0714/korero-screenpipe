@@ -131,7 +131,13 @@ describe('Settings sections', () => {
     await section.waitForExist({ timeout: 8_000 });
     const sectionText = (await section.getText()).toLowerCase();
     expect(sectionText).toContain('screen context capture');
-    expect(sectionText).toContain('screen recording');
+    // #5899 split recording settings into audio/screen destinations and the
+    // literal "screen recording" went with it — the header now reads "Screen
+    // capture quality, monitors, and power". Assert on a control that is
+    // actually in this destination rather than on section prose, which is what
+    // rotted here: the old string had been unreachable since that split and
+    // Linux E2E has not completed since to report it.
+    expect(sectionText).toContain('capture quality');
     expect(sectionText).not.toContain('audio recording');
     expect(sectionText).not.toContain('live meeting notes');
 
