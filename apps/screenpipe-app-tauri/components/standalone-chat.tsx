@@ -1120,6 +1120,7 @@ export function StandaloneChat({
     flushPendingSteerBatch,
     handleStop,
     openConnectionSetup,
+    pendingSend,
     sendMessage,
     steerMessage,
     steerQueuedPrompt,
@@ -2067,6 +2068,7 @@ export function StandaloneChat({
         onChatContextMenu={handleChatContextMenu}
         messages={messages}
         isPreparingPrefill={isPreparingPrefill}
+        pendingSend={pendingSend}
         activePipeExecution={activePipeExecution}
         continuousPipeChat={continuousPipeChat}
         isLoading={isLoading}
