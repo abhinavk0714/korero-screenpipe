@@ -33,7 +33,15 @@ No-auth endpoints: `/health`, `/ws/health`, `/audio/device/status`, `/connection
 
 ## Context Window Protection
 
-Responses can be large. Write curl output to a file (`-o /tmp/sp.json`), check size (`wc -c`), and if over ~5KB read only the first 50-100 lines / extract with `jq`. Never dump full large responses into context.
+Responses can be large. Write curl output to a file (`-o /tmp/sp.json`), check size (`wc -c`), and if over ~5KB read only the first 50-100 lines. Never dump full large responses into context.
+
+**Only assume `curl`, `wc`, `head`, `grep`, `sed` and `bun` exist.** `jq` is *not* installed on every machine — stock macOS and the bundled Windows bash both lack it. To pull fields out of JSON, either ask the API for flat rows (`format=csv`, below) and read them with `head`, or use bun, which always ships with screenpipe:
+
+```bash
+bun -e 'const d=await Bun.file("/tmp/sp.json").json(); for (const r of d.data.slice(0,20)) console.log(r.type, r.content.app_name??"", (r.content.text??r.content.transcription??"").slice(0,120))'
+```
+
+Use `jq` only after confirming it exists (`command -v jq`).
 
 Cut tokens at the source on list endpoints (`/search`, `/elements`). Two independent knobs, both shown in the examples below — copy them:
 
@@ -69,7 +77,7 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
   -H "X-Screenpipe-Client: api" \
   -o /tmp/sp.json \
   "http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=1h%20ago&fields=type,content.app_name,content.text,content.transcription,content.timestamp"
-wc -c /tmp/sp.json && jq -r '.data[] | "\(.type) \(.content.app_name // "") \(.content.text // .content.transcription)"' /tmp/sp.json | head -20
+wc -c /tmp/sp.json && head -c 2000 /tmp/sp.json
 ```
 
 | Parameter | Required | Description |
@@ -92,7 +100,7 @@ wc -c /tmp/sp.json && jq -r '.data[] | "\(.type) \(.content.app_name // "") \(.c
 | `format` | No | `json` (default), `csv`, `tsv`/`table`. CSV is lossless; TSV collapses newlines. |
 | `fields` | No | Column allowlist of dotted paths, e.g. `type,content.app_name,content.text`. |
 
-**Critical rules:** always include `start_time` (unbounded queries timeout) · always pass `fields=` with only the columns you need · always keep `limit` between 1 and 20 · always write the response to a file with `-o` and read it with `jq`/`head`, never straight to stdout · "recent" = 30 min, "today" = since midnight, "yesterday" = yesterday's range · if `/search` is empty, fall back to `/activity-summary` and check `data_status` before saying "no data" · on timeout, narrow the range.
+**Critical rules:** always include `start_time` (unbounded queries timeout) · always pass `fields=` with only the columns you need · always keep `limit` between 1 and 20 · always write the response to a file with `-o` and read it with `head`, never straight to stdout · "recent" = 30 min, "today" = since midnight, "yesterday" = yesterday's range · if `/search` is empty, fall back to `/activity-summary` and check `data_status` before saying "no data" · on timeout, narrow the range.
 
 Single `content_type` means uniform rows, so add `format=csv` too:
 
