@@ -1,0 +1,29 @@
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-Wl,--allow-multiple-definition"]
+
+# Force M1 target for all ARM64 macOS builds
+# This prevents whisper.cpp from using i8mm instructions that only M2+ chips have
+[target.aarch64-apple-darwin]
+rustflags = [
+    "-C", "target-cpu=apple-m1",
+    "-C", "link-arg=-framework",
+    "-C", "link-arg=Accelerate",
+    "-l", "c++",
+]
+
+[target.x86_64-apple-darwin]
+rustflags = "-lc++ -l framework=Accelerate"
+
+[env]
+# Use prebuilt NASM objects on Windows (no NASM install needed in CI): https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
+AWS_LC_SYS_PREBUILT_NASM = "1"
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+# SQLite's official page-level recovery API requires sqlite_dbpage. Compile it
+# into the already-bundled SQLite library so recovery never depends on a host
+# `sqlite3` executable or platform package manager.
+LIBSQLITE3_FLAGS = "SQLITE_ENABLE_DBPAGE_VTAB"
+
+# Cargo already uses the machine's available parallelism. A fixed value made
+# 10-core developer machines run 16 compiler processes at once, increasing
+# memory pressure and making cold builds slower. Keep this adaptive so
+# concurrent worktrees also divide the machine's resources more gracefully.
