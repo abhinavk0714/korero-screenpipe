@@ -4,7 +4,7 @@
 
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectedShareDialog } from "@/components/connected-share-dialog";
 import type { ConnectedShareArtifact } from "@/lib/connected-share";
 
@@ -591,6 +591,163 @@ describe("ConnectedShareDialog", () => {
       expect(
         await screen.findByTestId("connected-share-destination-slack"),
       ).toBeVisible();
+    });
+  });
+
+  /**
+   * The point of remembering is the second send, not the first.
+   *
+   * Recall is read when the connection check resolves, but the channel and team
+   * lists load after that and reset their own selection when they arrive. That
+   * ordering silently ate the remembered channel: the destination app came back
+   * but the channel fell to "my Slack messages" every time, so the weekly
+   * standup still had to be re-aimed. These assert on the request body rather
+   * than the label, because where the message actually lands is the thing that
+   * regressed.
+   */
+  describe("recall", () => {
+    const seedStorage = (value: unknown) => {
+      const store = new Map<string, string>();
+      if (value !== undefined) {
+        store.set(
+          "screenpipe.connected-share.last.meeting",
+          JSON.stringify(value),
+        );
+      }
+      const original = Object.getOwnPropertyDescriptor(
+        window,
+        "localStorage",
+      );
+      Object.defineProperty(window, "localStorage", {
+        configurable: true,
+        value: {
+          getItem: (key: string) => store.get(key) ?? null,
+          setItem: (key: string, next: string) => void store.set(key, next),
+        } as Storage,
+      });
+      restoreStorage = () => {
+        if (original) Object.defineProperty(window, "localStorage", original);
+        else delete (window as { localStorage?: unknown }).localStorage;
+      };
+    };
+
+    let restoreStorage: (() => void) | null = null;
+    afterEach(() => {
+      restoreStorage?.();
+      restoreStorage = null;
+    });
+
+    const sendBody = () => {
+      const call = mocks.localFetch.mock.calls.find(
+        ([path]) => path === "/connections/slack/send",
+      );
+      return JSON.parse(call?.[1]?.body as string);
+    };
+
+    it("sends to the remembered channel without asking again", async () => {
+      seedStorage({ destination: "slack", target: "C1", instance: "acme" });
+      render(
+        <ConnectedShareDialog open onOpenChange={vi.fn()} artifact={artifact} />,
+      );
+
+      // No destination pick and no channel pick: recall answered both.
+      const confirm = await screen.findByTestId("connected-share-confirm");
+      await waitFor(() =>
+        expect(
+          mocks.localFetch.mock.calls.some(([path]) =>
+            String(path).startsWith("/connections/slack/conversations"),
+          ),
+        ).toBe(true),
+      );
+      fireEvent.click(confirm);
+
+      await screen.findByText("sent to Slack");
+      expect(sendBody()).toMatchObject({ channel: "C1", instance: "acme" });
+    });
+
+    it("falls back to the private self-send when the channel is gone", async () => {
+      // Remembered a channel this account can no longer see. Leaving it
+      // selected would fail at send time; dropping it silently is the honest
+      // outcome, because a self-send cannot leak into the wrong room.
+      seedStorage({ destination: "slack", target: "C-deleted" });
+      render(
+        <ConnectedShareDialog open onOpenChange={vi.fn()} artifact={artifact} />,
+      );
+
+      const confirm = await screen.findByTestId("connected-share-confirm");
+      await waitFor(() =>
+        expect(
+          mocks.localFetch.mock.calls.some(([path]) =>
+            String(path).startsWith("/connections/slack/conversations"),
+          ),
+        ).toBe(true),
+      );
+      fireEvent.click(confirm);
+
+      await screen.findByText("sent to Slack");
+      expect(sendBody()).not.toHaveProperty("channel");
+    });
+
+    it("does not aim a recalled channel at a destination the user re-picked", async () => {
+      // Slack is remembered but no longer connected, so the destination falls
+      // back to a question. The stale channel must not survive that.
+      seedStorage({ destination: "slack", target: "C1" });
+      mocks.localFetch.mockImplementation(
+        async (path: string, init?: RequestInit) => {
+        if (path === "/connections") {
+          return jsonResponse({
+            data: [
+              { id: "slack", connected: false },
+              { id: "linear", connected: true },
+            ],
+          });
+        }
+        if (path === "/connections/linear/proxy/graphql") {
+          const body = JSON.parse((init as RequestInit)?.body as string);
+          if (body?.variables?.input) {
+            return jsonResponse({
+              data: {
+                issueCreate: {
+                  success: true,
+                  issue: { id: "i1", identifier: "COR-1", title: "Roadmap" },
+                },
+              },
+            });
+          }
+          return jsonResponse({
+            data: { teams: { nodes: [{ id: "T1", name: "Core", key: "COR" }] } },
+          });
+        }
+        throw new Error(`unexpected request: ${path}`);
+        },
+      );
+
+      render(
+        <ConnectedShareDialog open onOpenChange={vi.fn()} artifact={artifact} />,
+      );
+
+      await openDestinations();
+      fireEvent.click(
+        await screen.findByTestId("connected-share-destination-linear"),
+      );
+      await waitFor(() =>
+        expect(
+          mocks.localFetch.mock.calls.some(
+            ([path]) => path === "/connections/linear/proxy/graphql",
+          ),
+        ).toBe(true),
+      );
+      fireEvent.click(await screen.findByTestId("connected-share-confirm"));
+
+      // The team list chose its own first team; the Slack channel id never
+      // leaked across into the issue.
+      await waitFor(() => {
+        const create = mocks.localFetch.mock.calls
+          .filter(([path]) => path === "/connections/linear/proxy/graphql")
+          .map(([, init]) => JSON.parse((init as RequestInit)?.body as string))
+          .find((body) => body?.variables?.input);
+        expect(create?.variables.input.teamId).toBe("T1");
+      });
     });
   });
 });
