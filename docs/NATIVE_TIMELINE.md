@@ -1,7 +1,7 @@
 # Native Timeline (Swift)
 
 <!-- doc-covers: apps/screenpipe-app-tauri/src-tauri/swift/timeline -->
-<!-- doc-verified: 6d1aa954b -->
+<!-- doc-verified: cf8ac8db9 -->
 
 A pure-Swift reimplementation of the Rewind timeline that previously lived in
 the webview (`apps/screenpipe-app-tauri/components/rewind/`). Same feature set,
