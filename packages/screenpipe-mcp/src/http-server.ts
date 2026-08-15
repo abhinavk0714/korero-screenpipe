@@ -14,8 +14,9 @@
  * Expose to your LAN (requires --api-key):
  *   npx ts-node src/http-server.ts --listen-on-lan --api-key <secret>
  *
- * Loopback callers are always allowed without auth. Non-loopback callers
- * must send `Authorization: Bearer <secret>` whenever --api-key is set.
+ * Loopback callers are allowed without auth only through an exact local
+ * Host/Origin boundary. Non-loopback callers must send
+ * `Authorization: Bearer <secret>` whenever --api-key is set.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
@@ -118,6 +119,53 @@ export function isLoopbackRequest(req: { socket: { remoteAddress?: string } }): 
   if (addr === "127.0.0.1" || addr === "::1") return true;
   if (addr.startsWith("::ffff:127.")) return true;
   return false;
+}
+
+const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
+
+function normalizedHostname(value: string, origin: boolean): string | undefined {
+  try {
+    const url = origin ? new URL(value) : new URL(`http://${value}`);
+    const hostname = url.hostname.toLowerCase();
+    return hostname.startsWith("[") && hostname.endsWith("]")
+      ? hostname.slice(1, -1)
+      : hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+export function isAllowedLocalHost(host: string | undefined): boolean {
+  if (!host) return false;
+  const hostname = normalizedHostname(host, false);
+  return hostname !== undefined && LOCAL_HOSTNAMES.has(hostname);
+}
+
+export function isAllowedLocalOrigin(origin: string | undefined): boolean {
+  if (!origin) return true;
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    const hostname = normalizedHostname(origin, true);
+    return hostname !== undefined && LOCAL_HOSTNAMES.has(hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Browser boundary for the HTTP transport. A loopback bind is still reachable
+ * from arbitrary websites, and DNS rebinding preserves the attacker's Host.
+ * CLI/stdio clients normally omit Origin but still send an exact local Host.
+ * LAN mode may use a LAN Host, but remains bearer-gated by isAuthorized.
+ */
+export function isTrustedHttpBoundary(
+  req: { headers: { host?: string; origin?: string } },
+  bindHost: string
+): boolean {
+  if (!isAllowedLocalOrigin(req.headers.origin)) return false;
+  if (bindHost !== "0.0.0.0" && !isAllowedLocalHost(req.headers.host)) return false;
+  return true;
 }
 
 /**
@@ -321,8 +369,17 @@ export function buildHttpServer(config: CliConfig) {
   >();
 
   return createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    // CORS
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    if (!isTrustedHttpBoundary(req, config.host)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "forbidden origin or host" }));
+      return;
+    }
+
+    // Echo only a validated local origin. Non-browser callers do not need CORS.
+    if (req.headers.origin) {
+      res.setHeader("Access-Control-Allow-Origin", req.headers.origin);
+      res.setHeader("Vary", "Origin");
+    }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     res.setHeader(
       "Access-Control-Allow-Headers",

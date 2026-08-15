@@ -1350,6 +1350,7 @@ mod normalize_url_tests {
     use super::{
         build_eval_result_script, normalize_url, session_host_key,
         session_prompt_in_flight_timeout_error, session_prompt_timeout_error, OwnedBrowserState,
+        WEBVIEW_LABEL,
     };
 
     #[test]
@@ -1420,6 +1421,29 @@ mod normalize_url_tests {
         assert!(script.contains("\"eval-id-1\""));
         assert!(script.contains("window.__SP_OB_CHUNK__"));
         assert!(script.contains("id: window.__SP_OB_ID__ || \"\""));
+    }
+
+    #[test]
+    fn owned_browser_is_excluded_from_native_capabilities() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/main.json"))
+                .expect("main capability must remain valid JSON");
+
+        assert!(
+            capability.get("remote").is_none(),
+            "remote origins must never inherit the trusted UI capability"
+        );
+        assert!(
+            capability.get("windows").is_none(),
+            "a window capability would apply to every child webview in that window"
+        );
+
+        let webviews = capability["webviews"]
+            .as_array()
+            .expect("trusted UI capability must name explicit webviews");
+        assert!(webviews.iter().any(|label| label == "home"));
+        assert!(!webviews.iter().any(|label| label == "*"));
+        assert!(!webviews.iter().any(|label| label == WEBVIEW_LABEL));
     }
 
     // The `document.title` result-transport logic (inline + chunked) and the

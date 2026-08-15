@@ -6,8 +6,11 @@ import { describe, it, expect } from "vitest";
 import {
   buildHttpServer,
   CliError,
+  isAllowedLocalHost,
+  isAllowedLocalOrigin,
   isAuthorized,
   isLoopbackRequest,
+  isTrustedHttpBoundary,
   parseArgs,
   runFromArgv,
 } from "./http-server";
@@ -181,7 +184,81 @@ describe("isAuthorized", () => {
   });
 });
 
+describe("HTTP browser boundary", () => {
+  it("accepts exact loopback hosts and local browser origins", () => {
+    expect(isAllowedLocalHost("localhost:3031")).toBe(true);
+    expect(isAllowedLocalHost("127.0.0.1:3031")).toBe(true);
+    expect(isAllowedLocalHost("[::1]:3031")).toBe(true);
+    expect(isAllowedLocalOrigin("http://localhost:1420")).toBe(true);
+    expect(isAllowedLocalOrigin("https://127.0.0.1:3031")).toBe(true);
+  });
+
+  it("rejects attacker hosts, prefix tricks, and foreign origins", () => {
+    expect(isAllowedLocalHost("attacker.example")).toBe(false);
+    expect(isAllowedLocalHost("localhost.evil.example")).toBe(false);
+    expect(isAllowedLocalOrigin("https://attacker.example")).toBe(false);
+    expect(isAllowedLocalOrigin("http://localhost.evil.example")).toBe(false);
+    expect(isAllowedLocalOrigin("null")).toBe(false);
+  });
+
+  it("blocks DNS rebinding on loopback while preserving authenticated LAN mode", () => {
+    expect(
+      isTrustedHttpBoundary(
+        { headers: { host: "attacker.example", origin: "https://attacker.example" } },
+        "127.0.0.1"
+      )
+    ).toBe(false);
+    expect(
+      isTrustedHttpBoundary({ headers: { host: "127.0.0.1:3031" } }, "127.0.0.1")
+    ).toBe(true);
+    expect(
+      isTrustedHttpBoundary({ headers: { host: "192.168.1.20:3031" } }, "0.0.0.0")
+    ).toBe(true);
+    expect(
+      isTrustedHttpBoundary(
+        { headers: { host: "192.168.1.20:3031", origin: "https://attacker.example" } },
+        "0.0.0.0"
+      )
+    ).toBe(false);
+  });
+});
+
 describe("buildHttpServer", () => {
+  it("rejects foreign browser origins before health or MCP handling", async () => {
+    const server = buildHttpServer({
+      mcpPort: 0,
+      screenpipePort: 3030,
+      host: "127.0.0.1",
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected server.address() to return a bound port");
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/health`, {
+        headers: { origin: "https://attacker.example" },
+      });
+      expect(response.status).toBe(403);
+      expect(response.headers.get("access-control-allow-origin")).toBeNull();
+
+      const preflight = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+        method: "OPTIONS",
+        headers: { origin: "http://localhost:1420" },
+      });
+      expect(preflight.status).toBe(204);
+      expect(preflight.headers.get("access-control-allow-origin")).toBe(
+        "http://localhost:1420"
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
   it("persists initialized sessions so tools/list works on the next request", async () => {
     const server = buildHttpServer({
       mcpPort: 0,

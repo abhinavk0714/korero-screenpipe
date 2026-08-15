@@ -1,21 +1,19 @@
 {
   "identifier": "migrated",
-  "description": "permissions that were migrated from v1",
+  "description": "native permissions for trusted local screenpipe UI webviews",
   "local": true,
-  "windows": [
-    "*"
+  "webviews": [
+    "main",
+    "home",
+    "search",
+    "onboarding",
+    "chat",
+    "permission-recovery",
+    "shortcut-reminder",
+    "notification-inbox",
+    "notification-panel",
+    "viewer-*"
   ],
-  "remote": {
-    "urls": [
-      "http://localhost:*",
-      "https://api.openai.com/*",
-      "https://*.openai.com/*",
-      "https://api.screenpipe.com/*",
-      "https://*.anthropic.com/*",
-      "https://*.ollama.ai/*",
-      "https://*"
-    ]
-  },
   "permissions": [
     "core:event:allow-listen",
     "core:event:default",
