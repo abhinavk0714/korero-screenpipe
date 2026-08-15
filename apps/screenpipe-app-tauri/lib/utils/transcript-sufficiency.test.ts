@@ -158,7 +158,7 @@ describe("transcriptGapCopy", () => {
     );
     const verdict = assessTranscriptSufficiency(coverage, { ended: true });
     expect(transcriptGapCopy(verdict, coverage)).toBe(
-      "only 2 words were captured across this 11-minute meeting — only your microphone was captured — system audio wasn't recording, so the other side of this call is missing",
+      "only 2 words were captured across this 11-minute meeting. only your microphone was recording, so the other side of this call is missing",
     );
   });
 
@@ -166,7 +166,7 @@ describe("transcriptGapCopy", () => {
     const coverage = summarizeTranscriptCoverage([words(2, false)], meeting(11));
     const verdict = assessTranscriptSufficiency(coverage, { ended: true });
     expect(transcriptGapCopy(verdict, coverage)).toContain(
-      "your microphone wasn't recording",
+      "only system audio was recording",
     );
   });
 

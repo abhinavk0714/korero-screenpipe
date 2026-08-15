@@ -156,10 +156,10 @@ export function transcriptDeviceGapCopy(
   coverage: TranscriptCoverage,
 ): string | null {
   if (coverage.hasInputAudio && !coverage.hasOutputAudio) {
-    return "only your microphone was captured — system audio wasn't recording, so the other side of this call is missing";
+    return "only your microphone was recording, so the other side of this call is missing";
   }
   if (!coverage.hasInputAudio && coverage.hasOutputAudio) {
-    return "only system audio was captured — your microphone wasn't recording";
+    return "only system audio was recording, so your own side of this call is missing";
   }
   return null;
 }
@@ -176,21 +176,22 @@ export function transcriptGapCopy(
     return null;
   }
 
-  const deviceGap = transcriptDeviceGapCopy(coverage);
   const span = formatMinutes(coverage.durationMs);
 
+  // `empty` never has a device gap to report: a device only counts as having
+  // captured once one of its rows carried a word.
   if (sufficiency.kind === "empty") {
-    const base = span
+    return span
       ? `no transcript was captured across this ${span} meeting`
       : "no transcript was captured for this meeting";
-    return deviceGap ? `${base} — ${deviceGap}` : base;
   }
 
   const words = sufficiency.wordCount;
   const base = span
     ? `only ${words} word${words === 1 ? "" : "s"} were captured across this ${span} meeting`
     : `only ${words} word${words === 1 ? "" : "s"} were captured`;
-  return deviceGap ? `${base} — ${deviceGap}` : base;
+  const deviceGap = transcriptDeviceGapCopy(coverage);
+  return deviceGap ? `${base}. ${deviceGap}` : base;
 }
 
 /** Why summarize is unavailable, for the disabled menu label's tooltip. */
@@ -201,7 +202,7 @@ export function summarizeBlockedReason(
     return "no transcript was captured, so there is nothing to summarize";
   }
   if (sufficiency.kind === "sparse") {
-    return `only ${sufficiency.wordCount} words were captured — too little to summarize. retranscribe the saved audio first`;
+    return `only ${sufficiency.wordCount} words were captured, too little to summarize. retranscribe the saved audio first`;
   }
   return null;
 }

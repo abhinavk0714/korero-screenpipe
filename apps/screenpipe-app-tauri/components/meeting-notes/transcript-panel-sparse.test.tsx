@@ -118,7 +118,7 @@ describe("transcript panel thin-capture state", () => {
     const notice = await screen.findByTestId("transcript-sparse-notice");
     expect(notice.textContent).toContain("only 2 words were captured");
     // The device split is the part a transcript-only product cannot say.
-    expect(notice.textContent).toContain("system audio wasn't recording");
+    expect(notice.textContent).toContain("only your microphone was recording");
     // The captured words are still shown — we warn, we do not hide data.
     expect(screen.getAllByText(/Nice\./).length).toBeGreaterThan(0);
   });
