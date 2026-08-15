@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 
 import { __testing } from "../pipe-watch-writer";
-import type { AgentEventEnvelope } from "../types";
+import type { AgentEventEnvelope } from "@screenpipe/chat-core";
 import { useChatStore } from "@/lib/stores/chat-store";
 
 const SID = "pipe:my-pipe:42";

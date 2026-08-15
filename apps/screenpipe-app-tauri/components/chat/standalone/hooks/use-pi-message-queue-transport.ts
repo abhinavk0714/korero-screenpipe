@@ -5,9 +5,11 @@
 import posthog from "posthog-js";
 import { toast } from "@/components/ui/use-toast";
 import { commands } from "@/lib/utils/tauri";
-import { imageDataUrlsToPiImages } from "@/lib/chat/image-content";
+import {
+  imageDataUrlsToPiImages,
+  withConversationHistory,
+} from "@screenpipe/chat-core";
 import { queuedPreviewForText } from "@/lib/chat/queued-display";
-import { withConversationHistory } from "@/lib/chat/conversation-history";
 import type {
   PiSendCommand,
   PiSendTransportOptions,

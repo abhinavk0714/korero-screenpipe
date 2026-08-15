@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatSearchToolError,
   formatSearchToolResults,
-} from "@/lib/chat/search-tool-results";
+} from "../search-tool-results";
 
 describe("search tool result formatting", () => {
   it("formats OCR, audio, and UI results", () => {

@@ -7,7 +7,7 @@ import {
   imageDataUrlsFromPiContent,
   imageDataUrlsToPiImages,
   normalizeImageDataUrls,
-} from "@/lib/chat/image-content";
+} from "../image-content";
 
 describe("chat image content helpers", () => {
   it("converts image data URLs to Pi image content", () => {

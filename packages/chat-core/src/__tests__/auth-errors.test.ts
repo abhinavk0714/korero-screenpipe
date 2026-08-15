@@ -7,7 +7,7 @@ import {
   buildInvalidatedAuthTokenMessage,
   isAcpAuthenticationCancelledError,
   isInvalidatedAuthTokenError,
-} from "@/lib/chat/auth-errors";
+} from "../auth-errors";
 
 describe("auth error classification", () => {
   it("recognizes the Pi invalidated-token gateway error", () => {

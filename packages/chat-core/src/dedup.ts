@@ -23,7 +23,7 @@
 
 // `stripPromptPlumbing` lives in the tauri-free chat-title module, so importing
 // it here keeps chat-dedup.ts I/O-free (see module note above).
-import { stripPromptPlumbing } from "@/lib/utils/chat-title";
+import { stripPromptPlumbing } from "./fallback-title";
 
 /** Placeholder the chat panel writes for an assistant turn that hasn't started
  *  streaming yet (see standalone-chat.tsx send path). Centralized here so the

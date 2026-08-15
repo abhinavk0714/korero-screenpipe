@@ -117,7 +117,7 @@ import {
 } from "./note-save-queue";
 import { listenTyped, TAURI_EVENTS } from "@/lib/events/tauri-events";
 import { mountAgentEventBus, registerObserver } from "@/lib/events/bus";
-import { parsePipeSessionId } from "@/lib/events/types";
+import { parsePipeSessionId } from "@screenpipe/chat-core";
 import { writeBrowserLogNow } from "@/lib/logging/browser-log";
 import { copyMeetingToClipboard, copyMeetingTranscript } from "./copy-meeting";
 import {

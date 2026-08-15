@@ -12,7 +12,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { SourceCitation } from "@/lib/source-citations";
+import type { SourceCitation } from "@screenpipe/chat-core";
 import {
   KIND_ICON,
   SourceCitationIcon,

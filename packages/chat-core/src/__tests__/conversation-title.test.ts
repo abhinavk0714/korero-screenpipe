@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { resolveVisibleChatTitle } from "../conversation-title";
-import type { Message } from "@/lib/chat/types";
+import type { Message } from "../types";
 
 const userMsg = (content: string): Message =>
   ({ id: "1", role: "user", content, timestamp: 1 }) as Message;

@@ -47,12 +47,22 @@ import {
   onEvicted,
   type Unregister,
 } from "@/lib/events/bus";
+import {
+  agentActionMessage,
+  deriveFallbackConversationTitle,
+  isPendingAgentActionMessage,
+  normalizePlanEntries,
+  optimisticAssistantForUserEcho,
+  parseAgentActionRequest,
+  stripAgentActionBlocks,
+  upsertPlanBlock,
+} from "@screenpipe/chat-core";
 import type {
   AgentEventEnvelope,
   AgentInnerEvent,
-  AgentTerminatedPayload,
   AgentSessionEvictedPayload,
-} from "@/lib/events/types";
+  AgentTerminatedPayload,
+} from "@screenpipe/chat-core";
 import {
   CHAT_HISTORY_INITIAL_LIMIT,
   listConversations,
@@ -68,17 +78,9 @@ import {
   extractInjectedUserText,
   isInjectedTitleSourcePrompt,
 } from "@/lib/chat-utils";
-import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
-import { optimisticAssistantForUserEcho } from "@/lib/chat/cross-window-transcript-sync";
 import { isInternalTitleSession } from "@/lib/utils/internal-session";
 import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
-import {
-  agentActionMessage,
-  parseAgentActionRequest,
-  stripAgentActionBlocks,
-} from "@/lib/chat/agent-action-card";
 import type { Message } from "@/lib/chat/types";
-import { isPendingAgentActionMessage } from "@/lib/chat/message-rendering";
 import {
   getPersistedViewedAt,
   useChatStore,
@@ -88,7 +90,6 @@ import {
   type SessionRecord,
 } from "@/lib/stores/chat-store";
 import { connectionActionFromToolResult } from "@/components/chat/standalone/hooks/pi-event-handlers";
-import { normalizePlanEntries, upsertPlanBlock } from "@/lib/chat/acp-plan";
 import type { ContentBlock } from "@/lib/chat/types";
 
 // Module-level state — the router is a singleton process-wide.

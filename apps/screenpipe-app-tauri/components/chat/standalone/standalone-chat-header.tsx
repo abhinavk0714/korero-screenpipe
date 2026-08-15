@@ -12,7 +12,7 @@ import { formatShortcutDisplay } from "@/lib/chat-utils";
 import { cn } from "@/lib/utils";
 import type { Message } from "@/lib/chat/types";
 import { useChatStore } from "@/lib/stores/chat-store";
-import { resolveVisibleChatTitle } from "@/lib/chat/conversation-title";
+import { resolveVisibleChatTitle } from "@screenpipe/chat-core";
 
 interface StandaloneChatHeaderProps {
   className?: string;

@@ -11,7 +11,7 @@ import {
   onEvicted,
   __testing,
 } from "../bus";
-import type { AgentEventEnvelope } from "../types";
+import type { AgentEventEnvelope } from "@screenpipe/chat-core";
 
 const env = (sessionId: string, type = "text_delta", source: "pi" | "pipe" = "pi"): AgentEventEnvelope => ({
   source,

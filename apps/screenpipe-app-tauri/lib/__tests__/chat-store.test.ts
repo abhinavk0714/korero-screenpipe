@@ -20,7 +20,7 @@ import {
   type SessionRecord,
   type ChatSessionActivityPayload,
 } from "../stores/chat-store";
-import { conversationDedupIdentity } from "../chat-dedup";
+import { conversationDedupIdentity } from "@screenpipe/chat-core";
 
 function reset() {
   useChatStore.setState({ sessions: {}, currentId: null, panelSessionId: null });

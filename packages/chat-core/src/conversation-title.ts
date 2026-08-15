@@ -14,10 +14,10 @@
  * Both now call this. A new title source has exactly one place to be added.
  */
 
-import { isInjectedTitle, isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
-import { isPlaceholderConversationTitle } from "@/lib/chat/message-rendering";
-import type { Message } from "@/lib/chat/types";
-import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
+import { isInjectedTitle, isInjectedTitleSourcePrompt } from "./injected-prompts";
+import { isPlaceholderConversationTitle } from "./message-rendering";
+import type { Message } from "./types";
+import { deriveFallbackConversationTitle } from "./fallback-title";
 
 export type VisibleChatTitleInput = {
   /** Title held in the chat store; reflects renames immediately. */

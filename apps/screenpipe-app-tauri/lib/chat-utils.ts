@@ -12,100 +12,23 @@ import { commands } from "@/lib/utils/tauri";
 import { useChatStore } from "@/lib/stores/chat-store";
 
 /**
- * Detect if content is app-injected metadata (not real user content).
- * Used to filter when deriving conversation titles and sanitizing display.
+ * Injected-prompt handling moved to `@screenpipe/chat-core`.
  *
- * Canonical implementation — imported by pi-event-router.ts and
- * use-chat-conversations.ts. Update here only.
- *
- * Returns true for:
- * - <conversation_history>...</conversation_history> (sync prompts)
- * - <role>...</role> (bare metadata with no user content)
- * - <role>...</role><system>...</system> (bare metadata)
- *
- * Returns false for:
- * - <role>expert</role> analyze this (has user content after tags)
- * - Normal user messages
+ * These are pure predicates over the agent wire format, so they belong with the
+ * rest of the protocol rather than in a Tauri-coupled utils module that only
+ * the desktop app could import. Re-exported here because roughly thirty call
+ * sites already reach for them at this path, and moving the definition is the
+ * point, not churning the callers.
  */
-export function isInjectedTitleSourcePrompt(content?: string | null): boolean {
-  if (typeof content !== "string") return false;
-  const trimmed = content.trimStart();
-
-  // Skip <conversation_history> sync prompts
-  if (trimmed.startsWith("<conversation_history>")) return true;
-
-  // Skip ONLY bare role/system tags with no actual user content
-  // Pattern: <role>...</role> optionally followed by <system>...</system>, nothing else
-  const bareMetadataOnly = /^<role>[^<]*<\/role>\s*(<system>[^<]*<\/system>)?\s*$/;
-  if (bareMetadataOnly.test(trimmed)) return true;
-
-  // Any other content (including <role> with user text after it) is real
-  return false;
-}
-
-/**
- * Detect `<conversation_history>` sync prompts that Pi echoes back as
- * user events. Used by display code to hide these from the sidebar/title.
- *
- * This is intentionally narrow — only matches conversation_history tags.
- * For broader title-derivation filtering (bare <role>/<system> tags),
- * use `isInjectedTitleSourcePrompt` instead.
- */
-export function isConversationHistorySyncPrompt(value?: string | null): value is string {
-  return typeof value === "string" && value.startsWith("<conversation_history>");
-}
-
-export function extractConversationHistorySyncUserText(value?: string | null): string | null {
-  if (!isConversationHistorySyncPrompt(value)) return null;
-  const closingTag = "</conversation_history>";
-  const closingTagIndex = value.indexOf(closingTag);
-  if (closingTagIndex === -1) return "";
-  return value.slice(closingTagIndex + closingTag.length).replace(/^\s+/, "");
-}
-
-const CONNECTIONS_CONTEXT_CLOSE = "</connections_context>";
-
-/**
- * Detect the `<connections_context>` wrapper that the Pi backend prepends to
- * every foreground user turn (see `attach_foreground_connections_context` in
- * `pi.rs`). Pi echoes this wrapped message back as a user event; without
- * stripping it the blob leaks into the sidebar title and spawns a duplicate
- * "Current Screenpipe connected integrations context" chat.
- */
-export function isConnectionsContextPrompt(value?: string | null): value is string {
-  return typeof value === "string" && value.trimStart().startsWith("<connections_context>");
-}
-
-/** Return the original user text that follows the `</connections_context>`
- *  tag, or null when the value isn't a connections-context prompt. */
-export function extractConnectionsContextUserText(value?: string | null): string | null {
-  if (!isConnectionsContextPrompt(value)) return null;
-  const closingTagIndex = value.indexOf(CONNECTIONS_CONTEXT_CLOSE);
-  if (closingTagIndex === -1) return "";
-  return value.slice(closingTagIndex + CONNECTIONS_CONTEXT_CLOSE.length).replace(/^\s+/, "");
-}
-
-/**
- * Recover the original user text from a message Pi echoed back, peeling off
- * any injected wrappers. The connections-context wrapper is the outermost
- * (applied last, in `pi_prompt`), so strip it before the conversation-history
- * wrapper it may enclose.
- */
-export function extractInjectedUserText(value?: string | null): string | null {
-  if (typeof value !== "string") return null;
-  const connStripped = extractConnectionsContextUserText(value) ?? value;
-  return extractConversationHistorySyncUserText(connStripped) ?? connStripped;
-}
-
-/**
- * True when a stored title is actually an injected-plumbing wrapper rather
- * than a real title. Display-time safety net for conversations persisted by
- * older builds (before the wrapper was stripped at materialization) so they
- * render as "untitled" instead of leaking the raw blob into the sidebar.
- */
-export function isInjectedTitle(value?: string | null): value is string {
-  return isConversationHistorySyncPrompt(value) || isConnectionsContextPrompt(value);
-}
+export {
+  extractConnectionsContextUserText,
+  extractConversationHistorySyncUserText,
+  extractInjectedUserText,
+  isConnectionsContextPrompt,
+  isConversationHistorySyncPrompt,
+  isInjectedTitle,
+  isInjectedTitleSourcePrompt,
+} from "@screenpipe/chat-core";
 
 // ============================================================================
 // CHAT PREFILL - Reliable cross-window event delivery

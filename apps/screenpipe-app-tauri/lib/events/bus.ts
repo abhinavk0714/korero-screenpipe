@@ -42,7 +42,7 @@ import {
   type AgentEventEnvelope,
   type AgentTerminatedPayload,
   type AgentSessionEvictedPayload,
-} from "./types";
+} from "@screenpipe/chat-core";
 import { isInternalTitleSession } from "@/lib/utils/internal-session";
 
 export type EventHandler = (envelope: AgentEventEnvelope) => void | Promise<void>;

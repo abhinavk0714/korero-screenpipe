@@ -18,23 +18,25 @@ import {
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { MessageContent } from "@/components/chat/standalone/message-content";
 import { TurnStatus } from "@/components/chat/standalone/turn-status";
-import type { TurnSignals } from "@/lib/chat/turn-phase";
 import {
   buildCollapsedSteerRenderItems,
-  hasAssistantTextBody,
   getMessageIntentLabel,
-  isNormalUserMessage,
-  isSteeredAssistantMessage,
-  hasRenderableAssistantBody,
-  isPendingAgentActionMessage,
+  hasAssistantTextBody,
   hasPendingPermissionRequest,
-} from "@/lib/chat/message-rendering";
+  hasRenderableAssistantBody,
+  isNormalUserMessage,
+  isPendingAgentActionMessage,
+  isSteeredAssistantMessage,
+} from "@screenpipe/chat-core";
+import type {
+  MarkdownCitationPlan,
+  TurnSignals,
+} from "@screenpipe/chat-core";
 import { cn } from "@/lib/utils";
 import { useAcpBootLabel } from "@/lib/stores/acp-boot-state";
 import type { ContentBlock, Message } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
-import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
 
 function messageDate(timestamp: number): Date | null {
   const date = new Date(timestamp);

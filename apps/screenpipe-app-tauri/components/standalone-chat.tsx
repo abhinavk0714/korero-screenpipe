@@ -53,14 +53,20 @@ import {
 } from "@/lib/hooks/use-auto-suggestions";
 import { postChatSuggestionSendOptions } from "@/lib/chat/suggestion-telemetry";
 import {
+  AGENT_TOPICS,
+  agentActionMessage,
   buildInvalidatedAuthTokenMessage,
-} from "@/lib/chat/auth-errors";
+  computeChatCitationPlan,
+  connectRequestBlock,
+  parseAgentActionRequest,
+  stripAgentActionBlocks,
+} from "@screenpipe/chat-core";
+import type {
+  AgentEventEnvelope,
+} from "@screenpipe/chat-core";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { continuousPipeChatPolicy } from "@/lib/pipe-chat-policy";
 import { connectInlineConnection, type InlineConnectStatus } from "@/lib/connections/inline-connect";
-import {
-  computeChatCitationPlan,
-} from "@/lib/source-citations";
 import { INTEGRATION_ICON_KEYS } from "@/components/settings/connections-section";
 import { ImageViewerDialog } from "@/components/chat/standalone/image-viewer-dialog";
 import { StandaloneChatHeader } from "@/components/chat/standalone/standalone-chat-header";
@@ -101,14 +107,7 @@ import {
   usePipeGenerationCompletion,
 } from "@/components/chat/standalone/hooks/use-chat-window-events";
 import type { ChatSendOptions, ContentBlock, Message } from "@/lib/chat/types";
-import { connectRequestBlock } from "@/lib/chat/connect-card";
-import {
-  agentActionMessage,
-  parseAgentActionRequest,
-  stripAgentActionBlocks,
-} from "@/lib/chat/agent-action-card";
 import { useChatStore } from "@/lib/stores/chat-store";
-import { AGENT_TOPICS, type AgentEventEnvelope } from "@/lib/events/types";
 import { listenTyped, TAURI_EVENTS } from "@/lib/events/tauri-events";
 import { localFetch } from "@/lib/api";
 

@@ -10,7 +10,7 @@ import type { ChatMessageListProps } from "@/components/chat/standalone/chat-mes
 import type { ContentBlock, Message } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
-import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
+import type { MarkdownCitationPlan } from "@screenpipe/chat-core";
 
 interface UseChatMessageActionsOptions {
   messages: Message[];

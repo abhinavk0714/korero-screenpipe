@@ -5,7 +5,7 @@
 import { homeDir, join } from "@tauri-apps/api/path";
 
 import { mountAgentEventBus, registerForeground } from "@/lib/events/bus";
-import type { AgentEventEnvelope } from "@/lib/events/types";
+import type { AgentEventEnvelope } from "@screenpipe/chat-core";
 import { INTERNAL_TITLE_PREFIX } from "@/lib/utils/internal-session";
 import {
   commands,

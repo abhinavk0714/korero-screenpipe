@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { Message } from "@/lib/chat/types";
 import { useChatStore } from "@/lib/stores/chat-store";
-import { resolveVisibleChatTitle } from "@/lib/chat/conversation-title";
+import { resolveVisibleChatTitle } from "@screenpipe/chat-core";
 
 interface ChatTitleMenuProps {
   conversationId: string | null;

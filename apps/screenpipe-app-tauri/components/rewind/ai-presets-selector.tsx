@@ -15,7 +15,7 @@ import {
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useModelUpsellGating } from "@/lib/hooks/use-model-upsell-gating";
 import { usePiModels } from "@/lib/hooks/use-pi-models";
-import { modelAllowanceNotice } from "@/lib/chat/model-allowance-cost";
+import { modelAllowanceNotice } from "@screenpipe/chat-core";
 import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import {
   acpAdapterInfo,

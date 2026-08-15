@@ -6,7 +6,7 @@ import { useEffect, useRef } from "react";
 import type * as React from "react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { localFetch } from "@/lib/api";
-import { pipeSessionId } from "@/lib/events/types";
+import { pipeSessionId } from "@screenpipe/chat-core";
 import { conversationMetaFromJson, saveConversationFile } from "@/lib/chat-storage";
 import { pipeExecutionToConversation } from "@/lib/pipe-ndjson-to-chat";
 import { isTerminalPipeExecutionStatus } from "@/lib/pipe-execution-status";

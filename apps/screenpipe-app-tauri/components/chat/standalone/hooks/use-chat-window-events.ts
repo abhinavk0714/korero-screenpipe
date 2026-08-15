@@ -14,7 +14,7 @@ import {
   shouldHandleChatPrefillForWindow,
 } from "@/lib/chat-utils";
 import type { ContentBlock, Message, OptimisticSteerPayload } from "@/lib/chat/types";
-import { normalizeImageDataUrls } from "@/lib/chat/image-content";
+import { normalizeImageDataUrls } from "@screenpipe/chat-core";
 import type { ChatConversation } from "@/lib/hooks/use-settings";
 import type { AIPreset } from "@/lib/utils/tauri";
 import { useChatStore } from "@/lib/stores/chat-store";

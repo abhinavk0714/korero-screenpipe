@@ -64,7 +64,7 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { emit, once, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { mountAgentEventBus, registerDefault } from "@/lib/events/bus";
-import { parsePipeSessionId } from "@/lib/events/types";
+import { parsePipeSessionId } from "@screenpipe/chat-core";
 import { ChatPrefillData } from "@/lib/chat-utils";
 import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";

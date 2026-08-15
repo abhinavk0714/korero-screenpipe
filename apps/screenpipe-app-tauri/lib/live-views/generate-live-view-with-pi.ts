@@ -13,7 +13,7 @@ import {
 } from "@/lib/utils/tauri";
 import { mountAgentEventBus, registerForeground } from "@/lib/events/bus";
 import { agentEventErrorText } from "@/lib/events/error-text";
-import type { AgentEventEnvelope } from "@/lib/events/types";
+import type { AgentEventEnvelope } from "@screenpipe/chat-core";
 import { INTERNAL_TITLE_PREFIX } from "@/lib/utils/internal-session";
 import { applyResolvedModelLimits } from "@/lib/model-metadata";
 

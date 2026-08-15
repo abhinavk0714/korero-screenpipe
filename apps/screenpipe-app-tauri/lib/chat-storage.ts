@@ -26,7 +26,7 @@ import {
   conversationDedupIdentity,
   conversationDedupKey,
   messagesHaveCompletedReply,
-} from "@/lib/chat-dedup";
+} from "@screenpipe/chat-core";
 
 // Cap on how many (most-recent) conversation files a content search will open
 // and scan. Title matches are cheap over the full ordered list; only the

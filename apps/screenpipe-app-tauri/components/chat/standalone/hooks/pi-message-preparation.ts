@@ -4,7 +4,7 @@
 
 import { localFetch } from "@/lib/api";
 import { externalizeLargeContextIfNeeded } from "@/lib/chat/large-context";
-import { withConversationHistory } from "@/lib/chat/conversation-history";
+import { withConversationHistory } from "@screenpipe/chat-core";
 import { docsToPromptText, type ExtractedDoc } from "@/lib/pi/extract-document";
 import type { ChatAttachment, Message } from "@/lib/chat/types";
 

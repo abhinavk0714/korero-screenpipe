@@ -73,7 +73,7 @@ import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { commands } from "@/lib/utils/tauri";
 import { getE2eSeedFlags } from "@/lib/e2e/native";
-import { shouldAcceptTitleSource } from "@/lib/utils/chat-title";
+import { shouldAcceptTitleSource } from "@screenpipe/chat-core";
 import {
   formatShortcutDisplay,
   type ChatLoadConversationPayload,

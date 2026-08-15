@@ -7,9 +7,12 @@ import posthog from "posthog-js";
 import { toast } from "@/components/ui/use-toast";
 import { piProjectDirForSession } from "@/lib/chat/pi-project-dir";
 import { commands, type PiInfo, type Result } from "@/lib/utils/tauri";
-import { isPlaceholderConversationTitle } from "@/lib/chat/message-rendering";
+import {
+  isAcpAuthenticationCancelledError,
+  isAcpExternalAuthError,
+  isPlaceholderConversationTitle,
+} from "@screenpipe/chat-core";
 import { buildProviderErrorPresentation, preflightChatProvider } from "@/lib/chat/provider-errors";
-import { isAcpAuthenticationCancelledError, isAcpExternalAuthError } from "@/lib/chat/auth-errors";
 import { queuedPreviewForText } from "@/lib/chat/queued-display";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { createPiMessageQueueTransport } from "@/components/chat/standalone/hooks/use-pi-message-queue-transport";

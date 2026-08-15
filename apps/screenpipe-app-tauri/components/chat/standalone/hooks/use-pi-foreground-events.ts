@@ -12,8 +12,15 @@ import { useChatStore } from "@/lib/stores/chat-store";
 import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 import { statusForEvent } from "@/lib/stores/pi-event-router";
 import { extractInjectedUserText } from "@/lib/chat-utils";
-import { imageDataUrlsFromPiContent } from "@/lib/chat/image-content";
-import { acpSpawnSignature } from "@/lib/chat/acp-spawn-signature";
+import {
+  acpSpawnSignature,
+  buildInvalidatedAuthTokenMessage,
+  imageDataUrlsFromPiContent,
+  isInvalidatedAuthTokenError,
+  normalizePlanEntries,
+  optimisticAssistantForUserEcho,
+  upsertPlanBlock,
+} from "@screenpipe/chat-core";
 import {
   buildDailyLimitMessage,
   buildHostedBusyFinalMessage,
@@ -31,13 +38,10 @@ import {
   setQuotaUpgradeFromError,
 } from "@/lib/chat/quota-upgrade";
 import { clearFreeWall, setFreeWallFromError } from "@/lib/chat/free-wall";
-import { buildInvalidatedAuthTokenMessage, isInvalidatedAuthTokenError } from "@/lib/chat/auth-errors";
 import { buildNoResponseMessage, buildProviderErrorPresentation } from "@/lib/chat/provider-errors";
 import { chatTelemetryContextForResponse } from "@/lib/chat/response-feedback";
-import { optimisticAssistantForUserEcho } from "@/lib/chat/cross-window-transcript-sync";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { acpAdapterInfo } from "@/lib/utils/preset-appearance";
-import { normalizePlanEntries, upsertPlanBlock } from "@/lib/chat/acp-plan";
 import { useAcpBootState } from "@/lib/stores/acp-boot-state";
 import { toast } from "@/components/ui/use-toast";
 import { registerPiLogListener } from "@/components/chat/standalone/hooks/pi-log-listener";

@@ -36,7 +36,7 @@ import {
   registerDefault,
   type Unregister,
 } from "./bus";
-import type { AgentEventEnvelope, AgentInnerEvent } from "./types";
+import type { AgentEventEnvelope, AgentInnerEvent } from "@screenpipe/chat-core";
 import { useChatStore } from "@/lib/stores/chat-store";
 
 let mounted = false;

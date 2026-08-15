@@ -4,6 +4,11 @@ const nextConfig = {
     images: {
         unoptimized: true,
     },
+    // packages/chat-core ships raw TypeScript and is linked in as a `file:`
+    // dependency, so Next has to compile it the same way it compiles app
+    // source. Without this the build fails on the first `.ts` file it finds
+    // inside node_modules/@screenpipe/chat-core.
+    transpilePackages: ['@screenpipe/chat-core'],
     eslint: {
         // Disable eslint during builds - we run it separately in CI
         ignoreDuringBuilds: true,

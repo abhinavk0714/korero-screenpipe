@@ -8,7 +8,7 @@ import {
   stripPromptPlumbing,
   systemFallbackTitle,
   isFallbackLikeTitle,
-} from "@/lib/utils/chat-title";
+} from "@screenpipe/chat-core";
 
 /**
  * Tests for chat title utilities (lib/utils/chat-title.ts).

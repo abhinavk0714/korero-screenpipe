@@ -31,7 +31,7 @@ import { useEffect, useMemo } from "react";
 import { create } from "zustand";
 import { localFetch } from "@/lib/api";
 import { mountAgentEventBus, registerObserver, type Unregister } from "@/lib/events/bus";
-import { parsePipeSessionId } from "@/lib/events/types";
+import { parsePipeSessionId } from "@screenpipe/chat-core";
 
 export interface RunningPipe {
   /** Pipe directory name — e.g. "apple-photo-sync" */

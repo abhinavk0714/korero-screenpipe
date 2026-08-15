@@ -61,6 +61,9 @@ jobs:
               - 'apps/screenpipe-app-tauri/package.json'
               - 'apps/screenpipe-app-tauri/bun.lock'
               - 'apps/screenpipe-app-tauri/knip.json'
+              # chat-core is a `file:` dependency of the app, so a change there
+              # can make an app dependency unused or an import unresolvable.
+              - 'packages/chat-core/**'
               - '.github/workflows/style.yml'
             coverage:
               - 'apps/screenpipe-app-tauri/e2e/**'

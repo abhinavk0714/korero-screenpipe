@@ -8,8 +8,8 @@ import {
   parseAgentActionRequest,
   agentActionMessage,
   stripAgentActionBlocks,
-} from "@/lib/chat/agent-action-card";
-import type { Message } from "@/lib/chat/types";
+} from "../agent-action-card";
+import type { Message } from "../types";
 
 describe("parseAgentActionRequest", () => {
   it("parses an auth select into a normalized, humanized request", () => {

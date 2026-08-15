@@ -21,7 +21,7 @@ import {
   TerminalSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { SourceCitation, SourceCitationKind } from "@/lib/source-citations";
+import type { SourceCitation, SourceCitationKind } from "@screenpipe/chat-core";
 import { jumpToTimelineMoment, openSearchForQuery } from "@/lib/timeline-navigation";
 
 interface SourceCitationFooterProps {

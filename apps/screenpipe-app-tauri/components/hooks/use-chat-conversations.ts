@@ -16,13 +16,17 @@ import {
 import { emit, listen } from "@tauri-apps/api/event";
 import { ChatConversation } from "@/lib/hooks/use-settings";
 import { titleCreatedByAI } from "@/lib/utils/generate-title-with-preset";
-import { isPendingAgentActionMessage } from "@/lib/chat/message-rendering";
 import {
   deriveFallbackConversationTitle,
   isFallbackLikeTitle,
+  isPendingAgentActionMessage,
+  savedTurnEventState,
   shouldAcceptTitleSource,
+  shouldAdoptPersistedTranscript,
   stripPromptPlumbing,
-} from "@/lib/utils/chat-title";
+  synchronizedActiveTurn,
+  toRuntimeMessages,
+} from "@screenpipe/chat-core";
 import { isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
 import {
   getCachedBrowserStateEntry,
@@ -45,12 +49,6 @@ import {
 } from "@/lib/chat-storage";
 import { pipeConversationDeletionKey } from "@/lib/pipe-execution-status";
 import type { ContentBlock, Message } from "@/lib/chat/types";
-import {
-  savedTurnEventState,
-  shouldAdoptPersistedTranscript,
-  synchronizedActiveTurn,
-  toRuntimeMessages,
-} from "@/lib/chat/cross-window-transcript-sync";
 
 // --- Hook options ---
 

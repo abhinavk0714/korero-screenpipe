@@ -19,7 +19,7 @@ import type {
   AgentEventEnvelope,
   AgentSessionEvictedPayload,
   AgentTerminatedPayload,
-} from "./types";
+} from "@screenpipe/chat-core";
 
 export const TAURI_EVENTS = {
   job: "job:event",

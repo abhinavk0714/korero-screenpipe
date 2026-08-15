@@ -4,7 +4,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import type { AgentEventEnvelope } from "@/lib/events/types";
+import type { AgentEventEnvelope } from "@screenpipe/chat-core";
 import type { ActivitySnapshot } from "./learning-window";
 
 // The module talks to Tauri and the agent event bus at import time. Mock both

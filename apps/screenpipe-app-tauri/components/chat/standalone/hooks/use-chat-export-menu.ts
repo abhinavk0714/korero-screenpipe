@@ -8,8 +8,12 @@ import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { toast } from "@/components/ui/use-toast";
 import { commands } from "@/lib/utils/tauri";
-import { formatChatAsMarkdown } from "@/lib/chat/markdown-export";
-import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
+import {
+  formatChatAsMarkdown,
+} from "@screenpipe/chat-core";
+import type {
+  MarkdownCitationPlan,
+} from "@screenpipe/chat-core";
 import type { Message } from "@/lib/chat/types";
 
 interface UseChatExportMenuOptions {

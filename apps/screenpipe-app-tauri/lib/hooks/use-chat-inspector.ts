@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 import {
   aggregateSourceCitations,
   type SourceCitation,
-} from "@/lib/source-citations";
+} from "@screenpipe/chat-core";
 
 interface ToolCallLike {
   toolName: string;

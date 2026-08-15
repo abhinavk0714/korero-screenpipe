@@ -11,6 +11,7 @@
       "apps/screenpipe-app-tauri/**/*.tsx",
       "apps/screenpipe-app-tauri/**/*.js",
       "apps/screenpipe-app-tauri/**/*.jsx",
+      "packages/chat-core/**/*.ts",
       "!**/node_modules/**",
       "!**/.next/**",
       "!**/dist/**",
@@ -21,8 +22,14 @@
       "!apps/screenpipe-app-tauri/lib/utils/tauri.ts"
     ]
   },
-  "formatter": { "enabled": false },
-  "javascript": { "formatter": { "enabled": false } },
+  "formatter": {
+    "enabled": false
+  },
+  "javascript": {
+    "formatter": {
+      "enabled": false
+    }
+  },
   "assist": {
     "enabled": false,
     "actions": {
@@ -74,7 +81,9 @@
   },
   "overrides": [
     {
-      "includes": ["apps/screenpipe-app-tauri/lib/http/tauri-fetch.ts"],
+      "includes": [
+        "apps/screenpipe-app-tauri/lib/http/tauri-fetch.ts"
+      ],
       "linter": {
         "rules": {
           "style": {

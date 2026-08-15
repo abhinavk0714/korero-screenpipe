@@ -13,7 +13,7 @@ import {
 import { useChatPipeWatch } from "@/components/chat/standalone/hooks/use-chat-pipe-watch";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { handlePiEvent } from "@/lib/stores/pi-event-router";
-import { parsePipeSessionId } from "@/lib/events/types";
+import { parsePipeSessionId } from "@screenpipe/chat-core";
 import type { ContentBlock, Message } from "@/lib/chat/types";
 
 interface UseChatSessionRuntimeOptions {

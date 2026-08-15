@@ -121,7 +121,7 @@ import {
   shouldReloadPipeExecutionHistory,
   uniquePipeExecutionConversations,
 } from "@/lib/pipe-execution-status";
-import { parsePipeSessionId } from "@/lib/events/types";
+import { parsePipeSessionId } from "@screenpipe/chat-core";
 import type { ChatConversation } from "@/lib/hooks/use-settings";
 import {
   PIPES_SIDEBAR_COLLAPSED_EVENT,

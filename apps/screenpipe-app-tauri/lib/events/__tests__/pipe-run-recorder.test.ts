@@ -35,7 +35,7 @@ vi.mock("@/lib/hooks/use-settings", async () => {
 });
 
 import { __testing } from "../pipe-run-recorder";
-import type { AgentEventEnvelope } from "../types";
+import type { AgentEventEnvelope } from "@screenpipe/chat-core";
 import { useChatStore } from "@/lib/stores/chat-store";
 
 const SID = "pipe:my-pipe:42";

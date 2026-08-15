@@ -6,7 +6,7 @@ import { useRef } from "react";
 import posthog from "posthog-js";
 import { toast } from "@/components/ui/use-toast";
 import { commands, type PiQueuedPrompt } from "@/lib/utils/tauri";
-import { imageDataUrlsToPiImages } from "@/lib/chat/image-content";
+import { imageDataUrlsToPiImages } from "@screenpipe/chat-core";
 import { queuedPreviewForText } from "@/lib/chat/queued-display";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { buildSteerPrompt } from "@/components/chat/standalone/hooks/pi-steering-helpers";

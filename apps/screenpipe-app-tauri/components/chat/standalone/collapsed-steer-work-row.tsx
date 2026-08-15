@@ -9,7 +9,7 @@ import {
   collapsedSteerWorkDuration,
   collapsedSteerFailedCount,
   type ChatRenderItem,
-} from "@/lib/chat/message-rendering";
+} from "@screenpipe/chat-core";
 
 interface CollapsedSteerWorkRowProps {
   item: Extract<ChatRenderItem, { type: "collapsed-steer-work" }>;

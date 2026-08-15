@@ -34,7 +34,7 @@ import {
   turnSpineNodes,
   type TurnPhase,
   type TurnSignals,
-} from "@/lib/chat/turn-phase";
+} from "@screenpipe/chat-core";
 
 /** A 3x5 scan that reads as the system looking at captured frames. */
 function ScanGlyph({ live, phase }: { live: boolean; phase: TurnPhase }) {

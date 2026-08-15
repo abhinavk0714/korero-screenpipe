@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    // No DOM, no node. The package must import cleanly in a browser tab, a
+    // desktop webview, a server render and a plain node test, so reaching for
+    // a host global is a compile error here rather than a runtime fault in
+    // whichever host got unlucky. src/globals.d.ts declares the small
+    // universal surface that is genuinely allowed.
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "types": []
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/__tests__/**"]
+}

@@ -14,6 +14,9 @@ on:
       - 'apps/screenpipe-app-tauri/bun.lock'
       - 'apps/screenpipe-app-tauri/vitest.config.ts'
       - 'apps/screenpipe-app-tauri/tsconfig*.json'
+      # chat-core is compiled into the app bundle, so an edit there is a
+      # frontend edit. Without this filter the package would land ungated.
+      - 'packages/chat-core/**'
       - '.github/workflows/test-frontend.yml'
   pull_request:
     paths:
@@ -24,6 +27,9 @@ on:
       - 'apps/screenpipe-app-tauri/bun.lock'
       - 'apps/screenpipe-app-tauri/vitest.config.ts'
       - 'apps/screenpipe-app-tauri/tsconfig*.json'
+      # chat-core is compiled into the app bundle, so an edit there is a
+      # frontend edit. Without this filter the package would land ungated.
+      - 'packages/chat-core/**'
       - '.github/workflows/test-frontend.yml'
 
 concurrency:
@@ -49,6 +55,22 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.2
+
+      # chat-core is a `file:` dependency of the app, so it must install and
+      # pass on its own before the app is checked against it. Its suite runs in
+      # plain node with no DOM, which is what proves the package stays portable
+      # enough to also run on the web.
+      - name: Install chat-core
+        working-directory: packages/chat-core
+        run: bun install --frozen-lockfile
+
+      - name: chat-core type-check
+        working-directory: packages/chat-core
+        run: bun run typecheck
+
+      - name: chat-core tests (node, no DOM)
+        working-directory: packages/chat-core
+        run: bunx vitest run
 
       - name: Install dependencies
         # --frozen-lockfile so a stale lock failure surfaces here instead of

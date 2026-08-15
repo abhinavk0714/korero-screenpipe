@@ -36,8 +36,13 @@ import {
   registerObserver,
   type Unregister,
 } from "./bus";
-import type { AgentEventEnvelope, AgentInnerEvent } from "./types";
-import { parsePipeSessionId } from "./types";
+import {
+  parsePipeSessionId,
+} from "@screenpipe/chat-core";
+import type {
+  AgentEventEnvelope,
+  AgentInnerEvent,
+} from "@screenpipe/chat-core";
 import {
   conversationMetaFromJson,
   loadConversationFile,

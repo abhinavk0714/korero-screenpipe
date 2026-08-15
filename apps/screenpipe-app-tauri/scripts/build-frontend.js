@@ -93,23 +93,44 @@ async function walk(dir, files) {
 	}
 }
 
-export async function computeInputHash(root = appRoot) {
-	const files = []
-	await walk(root, files)
-	files.sort() // deterministic regardless of readdir order
+// Frontend source that lives OUTSIDE the app directory.
+//
+// The exclude-list design above guarantees we can never silently miss an input
+// — but only for inputs under `appRoot`. `packages/chat-core` is compiled into
+// the bundle via `transpilePackages` (see next.config.mjs), so editing it
+// changes the emitted chunks exactly as editing `app/` does. Without it in the
+// hash, `tauri build` restores a cached `out/` and ships the PREVIOUS UI with
+// no error and no warning.
+//
+// Labelled rather than bare paths so a file's contribution to the hash is
+// stable no matter where the repo is checked out, and so two roots cannot
+// collide on the same relative path.
+const repoRoot = path.resolve(appRoot, '..', '..')
+const EXTERNAL_INPUT_ROOTS = [
+	{ label: 'packages/chat-core', dir: path.join(repoRoot, 'packages', 'chat-core', 'src') },
+]
 
+export async function computeInputHash(root = appRoot, externalRoots = EXTERNAL_INPUT_ROOTS) {
 	const hash = crypto.createHash('sha256')
-	for (const file of files) {
-		let content
-		try {
-			content = await fs.readFile(file)
-		} catch {
-			continue
+
+	const roots = [{ label: '', dir: root }, ...externalRoots]
+	for (const { label, dir } of roots) {
+		const files = []
+		await walk(dir, files)
+		files.sort() // deterministic regardless of readdir order
+
+		for (const file of files) {
+			let content
+			try {
+				content = await fs.readFile(file)
+			} catch {
+				continue
+			}
+			hash.update(label ? `${label}/${path.relative(dir, file)}` : path.relative(dir, file))
+			hash.update('\0')
+			hash.update(content)
+			hash.update('\0')
 		}
-		hash.update(path.relative(root, file))
-		hash.update('\0')
-		hash.update(content)
-		hash.update('\0')
 	}
 	for (const key of bundleInputEnvKeys()) {
 		hash.update(`${key}=${process.env[key] ?? ''}`)

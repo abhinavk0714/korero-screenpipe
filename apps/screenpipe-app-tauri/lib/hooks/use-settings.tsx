@@ -27,7 +27,7 @@ import {
 	normalizeAppUser,
 } from "@/lib/app-entitlement";
 import { screenpipeWebUrl } from "@/lib/web-url";
-import type { SourceCitation } from "@/lib/source-citations";
+import type { SourceCitation } from "@screenpipe/chat-core";
 import type {
 	EnterpriseAppUpdatePolicy,
 	EnterpriseInstallMetadata,

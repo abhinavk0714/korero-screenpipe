@@ -23,12 +23,14 @@
 import { create } from "zustand";
 import type { ConversationKind, PipeContext } from "@/lib/hooks/use-settings";
 import type { ConversationMeta } from "@/lib/chat-storage";
-import type { ChatTitleSource } from "@/lib/utils/chat-title";
 import {
   CONVERSATION_DEDUP_WINDOW_MS,
   conversationDedupIdentity,
   messagesHaveCompletedReply,
-} from "@/lib/chat-dedup";
+} from "@screenpipe/chat-core";
+import type {
+  ChatTitleSource,
+} from "@screenpipe/chat-core";
 
 export type SessionStatus =
   | "idle" // not currently producing output

@@ -6,7 +6,7 @@ import { homeDir, join } from "@tauri-apps/api/path";
 
 import { mountAgentEventBus, registerForeground } from "@/lib/events/bus";
 import { agentEventErrorText } from "@/lib/events/error-text";
-import type { AgentEventEnvelope } from "@/lib/events/types";
+import type { AgentEventEnvelope } from "@screenpipe/chat-core";
 import {
   buildDailySummaryAgentPrompt,
   DAILY_SUMMARY_AGENT_SYSTEM_PROMPT,
