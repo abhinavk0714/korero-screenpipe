@@ -23,9 +23,13 @@ function AgentLogo({ id }: { id: ConnectAllToolId }) {
       // eslint-disable-next-line @next/next/no-img-element
       return <img src="/images/claude-ai.svg" alt="" className={size} />;
     case "codex":
+      // No `dark:invert` here, unlike the Settings tools card. codex.svg is
+      // LobeHub's COLOUR variant: a white plate behind a blue gradient glyph.
+      // Inverting it turns the plate black and the glyph yellow, which is not
+      // the Codex mark and reads as a rendering bug next to Claude's.
       return (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src="/images/codex.svg" alt="" className={cn(size, "dark:invert")} />
+        <img src="/images/codex.svg" alt="" className={cn(size, "rounded-[2px]")} />
       );
     case "cursor":
       return <CursorLogo className={size} />;
