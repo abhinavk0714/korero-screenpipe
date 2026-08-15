@@ -42,8 +42,39 @@ function jsonResponse(body: unknown, ok = true) {
   return { ok, json: async () => body } as Response;
 }
 
+/**
+ * A fresh remembered-destination store per test.
+ *
+ * The dialog writes where it last sent, so any test that completes a send
+ * leaves a destination behind for the next one. Under a runtime that really
+ * has `localStorage` that leak is real: a later test opening on a recalled
+ * destination instead of "choose where this goes" is the dialog behaving
+ * correctly and the suite lying about the starting state.
+ *
+ * It stayed hidden because the two runtimes disagree. The local runner has no
+ * `localStorage` at all, so recall silently no-ops and every test starts clean;
+ * CI has one, so state carries. Stubbing it here removes the divergence rather
+ * than papering over it: both runtimes now get the same empty store, and a
+ * test that wants a memory says so.
+ */
+const originalLocalStorage = Object.getOwnPropertyDescriptor(
+  window,
+  "localStorage",
+);
+let storageBacking = new Map<string, string>();
+
 describe("ConnectedShareDialog", () => {
   beforeEach(() => {
+    storageBacking = new Map();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => storageBacking.get(key) ?? null,
+        setItem: (key: string, value: string) =>
+          void storageBacking.set(key, value),
+        removeItem: (key: string) => void storageBacking.delete(key),
+      } as Storage,
+    });
     vi.clearAllMocks();
     mocks.showChatWithPrefill.mockResolvedValue(undefined);
     mocks.localFetch.mockImplementation(async (path: string) => {
@@ -75,6 +106,14 @@ describe("ConnectedShareDialog", () => {
       }
       throw new Error(`unexpected request: ${path}`);
     });
+  });
+
+  afterEach(() => {
+    if (originalLocalStorage) {
+      Object.defineProperty(window, "localStorage", originalLocalStorage);
+    } else {
+      delete (window as { localStorage?: unknown }).localStorage;
+    }
   });
 
   // Destinations moved from seven always-visible tiles into one grouped menu,
@@ -607,35 +646,11 @@ describe("ConnectedShareDialog", () => {
    */
   describe("recall", () => {
     const seedStorage = (value: unknown) => {
-      const store = new Map<string, string>();
-      if (value !== undefined) {
-        store.set(
-          "screenpipe.connected-share.last.meeting",
-          JSON.stringify(value),
-        );
-      }
-      const original = Object.getOwnPropertyDescriptor(
-        window,
-        "localStorage",
+      storageBacking.set(
+        "screenpipe.connected-share.last.meeting",
+        JSON.stringify(value),
       );
-      Object.defineProperty(window, "localStorage", {
-        configurable: true,
-        value: {
-          getItem: (key: string) => store.get(key) ?? null,
-          setItem: (key: string, next: string) => void store.set(key, next),
-        } as Storage,
-      });
-      restoreStorage = () => {
-        if (original) Object.defineProperty(window, "localStorage", original);
-        else delete (window as { localStorage?: unknown }).localStorage;
-      };
     };
-
-    let restoreStorage: (() => void) | null = null;
-    afterEach(() => {
-      restoreStorage?.();
-      restoreStorage = null;
-    });
 
     const sendBody = () => {
       const call = mocks.localFetch.mock.calls.find(
