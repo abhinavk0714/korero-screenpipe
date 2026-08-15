@@ -114,6 +114,42 @@ export function resolveTurnPhase(
   return nextRank >= prevRank ? next : previous;
 }
 
+/**
+ * Where the elapsed clock starts: the earliest plausible of the two readings.
+ *
+ * Two sources exist and each is right in a different situation. The local
+ * clock starts when the row first paints, which for the sending window is the
+ * moment of the send — the true start of the turn. The turn's own timestamp
+ * comes from the durable assistant row, which is stamped only after the
+ * preflight, so it can be many seconds later than the send.
+ *
+ * Preferring the metadata blindly makes the counter jump backwards the moment
+ * the durable row lands. Preferring the local clock blindly restarts it at
+ * zero on any remount — a conversation switch, or a second window hydrating
+ * the same turn. Taking the earliest satisfies both: a remount inherits the
+ * real start, and a late durable row cannot rewind the clock.
+ *
+ * A timestamp in the future, or one absurdly far in the past, is clock skew or
+ * a bad row rather than a real turn start, so it is discarded instead of
+ * rendering a nonsense duration.
+ */
+const MAX_PLAUSIBLE_TURN_MS = 24 * 60 * 60 * 1000;
+
+export function resolveTurnStart(
+  metadataStartedAt: number | null | undefined,
+  localStartedAt: number,
+  now: number,
+): number {
+  const plausible =
+    metadataStartedAt != null &&
+    Number.isFinite(metadataStartedAt) &&
+    metadataStartedAt <= now &&
+    now - metadataStartedAt <= MAX_PLAUSIBLE_TURN_MS;
+  return plausible
+    ? Math.min(metadataStartedAt as number, localStartedAt)
+    : localStartedAt;
+}
+
 /** Duration is only meaningful once it is worth reading. */
 export function formatTurnElapsed(ms: number): string | null {
   if (!Number.isFinite(ms) || ms < 1000) return null;

@@ -614,6 +614,7 @@ export function ChatMessageList({
               <TurnStatus
                 signals={signals}
                 turnKey={lastAssistant?.id ?? "pending-turn"}
+                startedAt={lastAssistant?.timestamp ?? null}
               />
             </motion.div>
           );

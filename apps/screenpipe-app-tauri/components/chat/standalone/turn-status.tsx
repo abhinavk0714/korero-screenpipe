@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 import {
   formatTurnElapsed,
   isTerminalPhase,
+  resolveTurnStart,
   resolveTurnPhase,
   turnPhaseLabel,
   turnSpineNodes,
@@ -91,6 +92,13 @@ export type TurnStatusProps = {
    * when it changes, so a new turn never inherits the previous turn's trace.
    */
   turnKey?: string | null;
+  /**
+   * The turn's own start timestamp, when a durable row exists. Preferred over
+   * the local clock so the elapsed reading survives a remount: a conversation
+   * switch or a second window hydrating the same turn would otherwise restart
+   * it at zero.
+   */
+  startedAt?: number | null;
   /** Per-phase durations for the expanded spine, keyed by phase. */
   timings?: Partial<Record<TurnPhase, number>>;
   className?: string;
@@ -99,6 +107,7 @@ export type TurnStatusProps = {
 export function TurnStatus({
   signals,
   turnKey,
+  startedAt: turnStartedAt,
   timings,
   className,
 }: TurnStatusProps) {
@@ -132,7 +141,11 @@ export function TurnStatus({
       traceRef.current.visited.push(phase);
     }
   }
-  const startedAt = traceRef.current.startedAt;
+  const startedAt = resolveTurnStart(
+    turnStartedAt,
+    traceRef.current.startedAt ?? now,
+    now,
+  );
   const visited = traceRef.current.visited;
 
   // One timer for the whole row. It stops the moment the turn ends, so a

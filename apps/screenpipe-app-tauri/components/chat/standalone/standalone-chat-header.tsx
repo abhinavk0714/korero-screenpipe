@@ -8,12 +8,11 @@ import { History, Plus } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Button } from "@/components/ui/button";
 import { ChatTitleMenu } from "@/components/chat/standalone/chat-title-menu";
-import { formatShortcutDisplay, isInjectedTitle, isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
-import { isPlaceholderConversationTitle } from "@/lib/chat/message-rendering";
+import { formatShortcutDisplay } from "@/lib/chat-utils";
 import { cn } from "@/lib/utils";
 import type { Message } from "@/lib/chat/types";
 import { useChatStore } from "@/lib/stores/chat-store";
-import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
+import { resolveVisibleChatTitle } from "@/lib/chat/conversation-title";
 
 interface StandaloneChatHeaderProps {
   className?: string;
@@ -71,29 +70,13 @@ export function StandaloneChatHeader({
   const streamingTitle = useChatStore((s) =>
     conversationId ? s.sessions[conversationId]?.streamingTitle : undefined
   );
-  const firstUserMsg = messages.find(
-    (m) => m.role === "user" && !isInjectedTitleSourcePrompt(m.content)
-  );
-  const pendingTitleSource =
-    pendingUserText && !isInjectedTitleSourcePrompt(pendingUserText)
-      ? pendingUserText
-      : undefined;
-  const derivedTitle = firstUserMsg
-    ? deriveFallbackConversationTitle(firstUserMsg)
-    : pendingTitleSource
-      ? deriveFallbackConversationTitle({
-          role: "user",
-          content: pendingTitleSource,
-        } as Message)
-      : undefined;
-  const hasMessages = messages.length > 0 || Boolean(pendingTitleSource);
-  const visibleTitle =
-    streamingTitle ||
-    (storeTitle &&
-      !isPlaceholderConversationTitle(storeTitle) &&
-      !isInjectedTitle(storeTitle)
-        ? storeTitle
-        : derivedTitle || (hasMessages ? "untitled" : ""));
+  const visibleTitle = resolveVisibleChatTitle({
+    storeTitle,
+    streamingTitle,
+    messages,
+    pendingUserText,
+  });
+  const hasMessages = messages.length > 0;
   const useCompactHeaderPadding = !className || Boolean(conversationId && visibleTitle);
   // With inline history hidden (main window) the row can end up with the title
   // menu suppressed and no right actions — an empty strip. Nothing to show and

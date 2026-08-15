@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatTurnElapsed,
+  resolveTurnStart,
   isLivePhase,
   isTerminalPhase,
   resolveTurnPhase,
@@ -146,6 +147,40 @@ describe("formatTurnElapsed", () => {
 
   it("tolerates a non-finite duration", () => {
     expect(formatTurnElapsed(Number.NaN)).toBeNull();
+  });
+});
+
+describe("resolveTurnStart", () => {
+  const now = 1_000_000;
+
+  it("uses the turn's own timestamp so a remount does not restart the clock", () => {
+    // Remount: the local clock just started, the durable row is older.
+    expect(resolveTurnStart(now - 5000, now - 10, now)).toBe(now - 5000);
+  });
+
+  it("keeps the send-time start when the durable row is stamped later", () => {
+    // Cold start: the row was stamped after a 20s preflight, but the turn
+    // began when the user hit send. Preferring the metadata here would make
+    // the visible counter jump backwards from 20s to 0s.
+    expect(resolveTurnStart(now - 200, now - 20_000, now)).toBe(now - 20_000);
+  });
+
+  it("falls back to the local clock before any durable row exists", () => {
+    expect(resolveTurnStart(undefined, now - 400, now)).toBe(now - 400);
+    expect(resolveTurnStart(null, now - 400, now)).toBe(now - 400);
+  });
+
+  it("rejects a future timestamp rather than rendering a negative duration", () => {
+    expect(resolveTurnStart(now + 5000, now - 200, now)).toBe(now - 200);
+  });
+
+  it("rejects an implausibly old timestamp", () => {
+    const twoDays = 48 * 60 * 60 * 1000;
+    expect(resolveTurnStart(now - twoDays, now - 200, now)).toBe(now - 200);
+  });
+
+  it("ignores a non-finite timestamp", () => {
+    expect(resolveTurnStart(Number.NaN, now - 300, now)).toBe(now - 300);
   });
 });
 

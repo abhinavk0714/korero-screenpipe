@@ -132,6 +132,7 @@ export function ChatMainPane({
         <div
           ref={scrollContainerRef}
           data-testid="chat-message-scroll"
+          role="log"
           className="h-full overflow-y-auto overflow-x-hidden"
           onScroll={onMessagesScroll}
           onContextMenu={onChatContextMenu}
