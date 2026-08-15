@@ -1625,6 +1625,7 @@ export function NoteView({
     summaryLifecycle,
     refreshingAfterRetranscription: retranscriptionSummaryRefreshWorking,
     transcriptTurnCount: chatTranscript.turnCount,
+    hasWrittenContext: Boolean(note.trim()),
     hasPreset: Boolean(chatPreset),
     quotaExhausted: chatQuotaExhausted,
     turnInFlight: meetingChat.inFlight,
