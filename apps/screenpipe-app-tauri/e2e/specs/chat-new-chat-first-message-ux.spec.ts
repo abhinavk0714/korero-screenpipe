@@ -50,6 +50,7 @@ type Frame = {
   composerValue: string;
   railTop: number;
   statusTop: number;
+  headerTitle: string;
 };
 
 async function readFrames(): Promise<Frame[]> {
@@ -163,6 +164,12 @@ describe("New chat, first message", function () {
           statusTop: status
             ? Math.round(status.getBoundingClientRect().top)
             : -1,
+          // Read the RENDERED title, not an attribute we control: the header
+          // strip can mount with no title inside it, which is what "the title
+          // is gone" actually looked like.
+          headerTitle: (
+            document.querySelector('[data-testid="chat-title"]')?.textContent ?? ""
+          ).trim(),
         });
       };
 
@@ -185,18 +192,25 @@ describe("New chat, first message", function () {
         );
     });
 
+    // Capture on every distinct visual signature AND on a periodic tick, so
+    // the PR gets a real filmstrip of the turn rather than three frames.
     const seen = new Set<string>();
     let shot = 2;
+    let nextTick = 0;
     const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) {
       const frames = await readFrames();
       const cur = frames.at(-1);
       if (cur) {
         const sig = `u${cur.userBubbles}a${cur.assistantBubbles}s${cur.statusCount}${cur.centered ? "c" : "t"}`;
-        if (!seen.has(sig)) {
-          seen.add(sig);
+        const isNewPhase = !seen.has(sig);
+        const isTick = cur.ms >= nextTick;
+        if (isNewPhase || isTick) {
+          if (isNewPhase) seen.add(sig);
+          if (isTick) nextTick = cur.ms + 2000;
+          const tag = isNewPhase ? sig : `tick-${sig}`;
           await browser.saveScreenshot(
-            join(SHOTS, `${String(shot++).padStart(2, "0")}-t${cur.ms}ms-${sig}.png`),
+            join(SHOTS, `${String(shot++).padStart(2, "0")}-t${cur.ms}ms-${tag}.png`),
           );
         }
         if (cur.assistantBubbles > 0 && cur.statusCount === 0 && cur.ms > 2000) break;
@@ -232,6 +246,12 @@ describe("New chat, first message", function () {
     // 3. One status surface, never two.
     expect(frames.filter((f) => f.statusCount > 1)).toHaveLength(0);
 
+    // 3b. A chat that has a message has a title. The optimistic bubble lives
+    //     outside `messages`, so without feeding it to the header the chat
+    //     showed a message under an empty header for the whole preflight and
+    //     the title read as missing.
+    expect(after.filter((f) => f.headerTitle.trim() === "")).toHaveLength(0);
+
     // 4. The empty layout is left in that same commit, so there is no
     //    centered -> top snap a frame later, and no starter grid behind a turn.
     expect(after.filter((f) => f.centered)).toHaveLength(0);
@@ -258,7 +278,7 @@ describe("New chat, first message", function () {
       const sig = `u${f.userBubbles} a${f.assistantBubbles} status=${f.statusCount} ${f.centered ? "centered" : "top"}`;
       if (sig !== prev) {
         console.log(
-          `${String(f.ms).padStart(6)}ms  ${sig.padEnd(38)} composer="${f.composerValue}" railTop=${f.railTop} statusTop=${f.statusTop}`,
+          `${String(f.ms).padStart(6)}ms  ${sig.padEnd(38)} title="${f.headerTitle}" composer="${f.composerValue}" railTop=${f.railTop} statusTop=${f.statusTop}`,
         );
         prev = sig;
       }

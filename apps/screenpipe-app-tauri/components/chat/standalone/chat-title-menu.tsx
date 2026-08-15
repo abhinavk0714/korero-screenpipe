@@ -18,6 +18,12 @@ import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
 interface ChatTitleMenuProps {
   conversationId: string | null;
   messages: Message[];
+  /**
+   * Text of a dispatched send whose durable row has not landed yet. This menu
+   * renders the visible title, so without it a chat showing an optimistic
+   * bubble has a header strip and no title in it.
+   */
+  pendingUserText?: string | null;
   renameConversation: (id: string, title: string) => Promise<void> | void;
   deleteConversation: (id: string) => Promise<void> | void;
   startNewConversation: (id?: string) => Promise<void> | void;
@@ -26,6 +32,7 @@ interface ChatTitleMenuProps {
 export function ChatTitleMenu({
   conversationId,
   messages,
+  pendingUserText,
   renameConversation,
   deleteConversation,
   startNewConversation,
@@ -57,10 +64,19 @@ export function ChatTitleMenu({
   const firstUserMsg = messages.find(
     (m) => m.role === "user" && !isInjectedTitleSourcePrompt(m.content)
   );
+  const pendingTitleSource =
+    pendingUserText && !isInjectedTitleSourcePrompt(pendingUserText)
+      ? pendingUserText
+      : undefined;
   const derivedTitle = firstUserMsg
     ? deriveFallbackConversationTitle(firstUserMsg)
-    : undefined;
-  const hasMessages = messages.length > 0;
+    : pendingTitleSource
+      ? deriveFallbackConversationTitle({
+          role: "user",
+          content: pendingTitleSource,
+        } as Message)
+      : undefined;
+  const hasMessages = messages.length > 0 || Boolean(pendingTitleSource);
   const title =
     streamingTitle ||
     (storeTitle &&
@@ -157,7 +173,7 @@ export function ChatTitleMenu({
           className="relative z-10 inline-flex items-center gap-1 max-w-[260px] h-7 px-2 rounded-md text-xs font-medium text-foreground hover:bg-muted/50 transition-colors"
           title="Chat options"
         >
-          <span className="truncate">{title}</span>
+          <span data-testid="chat-title" className="truncate">{title}</span>
           <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground/70" />
         </button>
       </PopoverTrigger>

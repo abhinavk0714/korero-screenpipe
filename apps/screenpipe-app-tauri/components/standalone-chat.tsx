@@ -1984,6 +1984,7 @@ export function StandaloneChat({
         className={className}
         conversationId={conversationId}
         messages={messages}
+        pendingUserText={pendingSend?.text ?? null}
         sidebarCollapsed={sidebarCollapsed}
         isMac={isMac}
         isFullscreen={isFullscreen}
