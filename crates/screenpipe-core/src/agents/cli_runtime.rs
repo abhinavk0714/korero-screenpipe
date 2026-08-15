@@ -61,16 +61,28 @@ pub const CLI_VERSION_FLOOR: &str = "0.4.40";
 /// Environment variable carrying the resolved launcher to agent children.
 pub const CLI_ENV_VAR: &str = "SCREENPIPE_CLI";
 
-/// Platform package that ships the native binary. Mirrors `PLATFORMS` in
-/// `packages/cli/screenpipe/lib/index.js` — keep the two in sync.
-pub fn platform_package() -> Option<&'static str> {
-    Some(match (std::env::consts::OS, std::env::consts::ARCH) {
+/// Platform package that ships the native binary, for an explicit host.
+///
+/// Mirrors `PLATFORMS` in `packages/cli/screenpipe/lib/index.js` — keep the two
+/// in sync. Split from [`platform_package`] so every target can be asserted
+/// from any build host, rather than only the one running the tests.
+///
+/// Hosts we publish no CLI for (notably `linux-aarch64`) return `None`. That is
+/// the same answer `getBinaryPath` gives, and it makes the caller fall back to
+/// `bun x` rather than fabricate a package name that does not exist.
+pub fn platform_package_for(os: &str, arch: &str) -> Option<&'static str> {
+    Some(match (os, arch) {
         ("macos", "aarch64") => "@screenpipe/cli-darwin-arm64",
         ("macos", "x86_64") => "@screenpipe/cli-darwin-x64",
         ("linux", "x86_64") => "@screenpipe/cli-linux-x64",
         ("windows", "x86_64") => "@screenpipe/cli-win32-x64",
         _ => return None,
     })
+}
+
+/// Platform package for the running host.
+pub fn platform_package() -> Option<&'static str> {
+    platform_package_for(std::env::consts::OS, std::env::consts::ARCH)
 }
 
 /// Binary name inside the platform package's `bin/`.
@@ -199,17 +211,39 @@ fn is_executable_file(path: &Path) -> bool {
     let Ok(meta) = std::fs::metadata(path) else {
         return false;
     };
-    if !meta.is_file() {
+    if !meta.is_file() || meta.len() == 0 {
+        // Windows has no executable bit, so size is the only cheap signal that
+        // separates a real binary from a truncated or hand-emptied file. A
+        // zero-byte launcher would otherwise be published and exec'd.
         return false;
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        return meta.permissions().mode() & 0o111 != 0;
+        meta.permissions().mode() & 0o111 != 0
     }
     #[cfg(not(unix))]
     {
+        // Size was already checked above; Windows has no exec bit to test.
         true
+    }
+}
+
+/// Remove leftover `*.tmp-<pid>` files from an interrupted copy.
+///
+/// `publish` only renames a fully copied temp file into place, so a crash
+/// between copy and rename leaves the temp behind and the destination absent.
+/// Harmless, but it would accumulate one file per interrupted attempt.
+fn sweep_stale_temps(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(binary_file_name()) && name.contains(".tmp-") {
+            let _ = std::fs::remove_file(entry.path());
+        }
     }
 }
 
@@ -267,6 +301,7 @@ pub fn publish(
             let _ = std::fs::remove_file(&tmp);
             return Err(e);
         }
+        sweep_stale_temps(&dest_dir);
         // Matches `getBinaryPath` in packages/cli/screenpipe/lib/index.js: a
         // binary copied out of a downloaded package carries the macOS
         // quarantine bit and would be refused by Gatekeeper.
@@ -448,6 +483,75 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(at, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
+    }
+
+    #[test]
+    fn every_published_target_maps_and_unpublished_ones_do_not() {
+        // Asserted for all targets from any host, so a macOS test run still
+        // covers Windows and Linux. Must stay in sync with
+        // `optionalDependencies` in packages/cli/screenpipe/package.json.
+        assert_eq!(
+            platform_package_for("macos", "aarch64"),
+            Some("@screenpipe/cli-darwin-arm64")
+        );
+        assert_eq!(
+            platform_package_for("macos", "x86_64"),
+            Some("@screenpipe/cli-darwin-x64")
+        );
+        assert_eq!(
+            platform_package_for("linux", "x86_64"),
+            Some("@screenpipe/cli-linux-x64")
+        );
+        assert_eq!(
+            platform_package_for("windows", "x86_64"),
+            Some("@screenpipe/cli-win32-x64")
+        );
+
+        // We publish no CLI for these. `None` makes the caller fall back to
+        // `bun x` instead of inventing a package name that 404s.
+        assert_eq!(platform_package_for("linux", "aarch64"), None);
+        assert_eq!(platform_package_for("windows", "aarch64"), None);
+        assert_eq!(platform_package_for("freebsd", "x86_64"), None);
+    }
+
+    #[test]
+    fn binary_name_carries_the_exe_suffix_only_on_windows() {
+        if cfg!(windows) {
+            assert_eq!(binary_file_name(), "screenpipe.exe");
+        } else {
+            assert_eq!(binary_file_name(), "screenpipe");
+        }
+    }
+
+    #[test]
+    fn a_zero_byte_binary_is_never_trusted() {
+        // The only cheap integrity signal on Windows, which has no exec bit.
+        let dir = tmpdir();
+        let empty = dir.join("empty");
+        std::fs::write(&empty, b"").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&empty, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(!is_executable_file(&empty));
+    }
+
+    #[test]
+    fn publish_sweeps_temps_left_by_an_interrupted_copy() {
+        let dir = tmpdir();
+        let src = dir.join("src-binary");
+        fake_binary(&src);
+
+        // Simulate a crash between copy and rename on an earlier attempt.
+        let vdir = version_dir(&dir, "0.4.40");
+        std::fs::create_dir_all(&vdir).unwrap();
+        let orphan = vdir.join(format!("{}.tmp-999999", binary_file_name()));
+        std::fs::write(&orphan, b"partial").unwrap();
+
+        publish(&dir, "0.4.40", &src, SystemTime::now()).unwrap();
+        assert!(!orphan.exists(), "interrupted temp was not swept");
+        assert!(is_executable_file(&binary_path_for(&dir, "0.4.40")));
     }
 
     #[test]

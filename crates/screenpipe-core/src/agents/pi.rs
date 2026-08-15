@@ -2423,32 +2423,19 @@ pub fn apply_pi_isolation_env(apply: &mut dyn FnMut(&str, &str)) {
     // registry on every single call. Hand them an already-resolved native
     // binary when one is published; the skills fall back to `bun x` when this
     // is unset, so an unpublished launcher is slow, never broken.
-    if let Some(dir) = screenpipe_home_dir() {
-        if let Some(cli) = super::cli_runtime::resolved_cli_binary(&dir) {
-            apply(super::cli_runtime::CLI_ENV_VAR, &cli.to_string_lossy());
-        }
-        // Due-or-missing launcher: resolve out of band so the *next* run is
-        // fast. Single-flighted and best-effort — this call never blocks the
-        // spawn it is attached to, and a failure just leaves the `bun x`
-        // fallback in place.
-        if let Some(bun) = find_bun_executable() {
-            super::cli_runtime::maybe_refresh_in_background(&dir, std::path::Path::new(&bun));
-        }
+    // `default_screenpipe_data_dir` is the one authority for this path on every
+    // platform — including Windows, where `%LOCALAPPDATA%\screenpipe` holds
+    // bundled tooling (git-portable, bun) but *not* the data dir.
+    let dir = crate::paths::default_screenpipe_data_dir();
+    if let Some(cli) = super::cli_runtime::resolved_cli_binary(&dir) {
+        apply(super::cli_runtime::CLI_ENV_VAR, &cli.to_string_lossy());
     }
-}
-
-/// `~/.screenpipe`, or `$SCREENPIPE_DATA_DIR` when the user relocated it.
-///
-/// Deliberately does not create the directory: this runs on every spawn and a
-/// read-only probe must not have side effects.
-fn screenpipe_home_dir() -> Option<PathBuf> {
-    if let Ok(v) = std::env::var("SCREENPIPE_DATA_DIR") {
-        let v = v.trim();
-        if !v.is_empty() {
-            return Some(PathBuf::from(v));
-        }
+    // Due-or-missing launcher: resolve out of band so the *next* run is fast.
+    // Single-flighted and best-effort — this never blocks the spawn it is
+    // attached to, and a failure just leaves the `bun x` fallback in place.
+    if let Some(bun) = find_bun_executable() {
+        super::cli_runtime::maybe_refresh_in_background(&dir, std::path::Path::new(&bun));
     }
-    Some(dirs::home_dir()?.join(".screenpipe"))
 }
 
 /// Marker file recording that the one-time seed from `~/.pi/agent` ran.
