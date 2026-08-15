@@ -57,6 +57,7 @@ const WORKDIR = path.join(DIR, '.packaged-e2e');
 const DATA_DIR = path.join(WORKDIR, 'data');
 const APP_INSTALL_DIR = path.join(WORKDIR, 'installed');
 const RESULTS_DIR = path.join(APP_ROOT, 'e2e', 'results');
+const MANIFEST_PATH = path.join(DIR, 'manifest.json');
 
 const NEW_VERSION = '9.9.9';
 const API_PORT = 3061;
@@ -298,7 +299,7 @@ async function main(): Promise<void> {
   mkdirSync(DATA_DIR, { recursive: true });
 
   // Update server (subprocess; killed in teardown).
-  const serve = Bun.spawn(['bun', HARNESS, 'serve'], {
+  let serve = Bun.spawn(['bun', HARNESS, 'serve'], {
     cwd: APP_ROOT,
     stdout: 'ignore',
     stderr: 'ignore',
@@ -438,6 +439,32 @@ async function main(): Promise<void> {
     log('simulating a failed install (marker from == running version)…');
     killWorkdirApp();
     await sleep(1500);
+
+    // Point the already-signed local manifest at the exact version recorded
+    // in the failed marker. The artifact bytes do not matter: a correctly
+    // seeded cooldown must stop before the download request.
+    serve.kill();
+    await serve.exited;
+    const failedManifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8'));
+    failedManifest.version = '10.0.0';
+    await Bun.write(MANIFEST_PATH, `${JSON.stringify(failedManifest, null, 2)}\n`);
+    serve = Bun.spawn(['bun', HARNESS, 'serve'], {
+      cwd: APP_ROOT,
+      stdout: 'ignore',
+      stderr: 'ignore',
+    });
+    await waitFor('failed-version update manifest', 15_000, async () => {
+      try {
+        const res = await fetch(`http://127.0.0.1:${UPDATE_SERVER_PORT}/`, {
+          signal: AbortSignal.timeout(1000),
+        });
+        if (!res.ok) return null;
+        const manifest = (await res.json()) as { version?: string };
+        return manifest.version === '10.0.0' ? true : null;
+      } catch {
+        return null;
+      }
+    });
     await Bun.write(
       path.join(DATA_DIR, 'update-attempt.json'),
       JSON.stringify({
@@ -450,12 +477,19 @@ async function main(): Promise<void> {
     const failedBoot = await waitFor('app up after synthetic failed attempt', 60_000, fetchState);
     check(
       'failed attempt surfaced in menu',
-      failedBoot.menu_text === "Update didn't apply — click to retry",
+      failedBoot.menu_text === 'Update failed — click to retry',
       failedBoot.menu_text,
     );
     check('failed-attempt menu is clickable', failedBoot.menu_enabled);
-    const failLog = await todayLog();
+    const failLog = await waitFor('automatic retry blocked by cooldown', 60_000, async () => {
+      const current = await todayLog();
+      return current.includes('recently failed to install; skipping auto-download') ? current : null;
+    });
     check('log: failed attempt detected', failLog.includes('previous update install did NOT apply'));
+    check(
+      'automatic retry was blocked before re-download',
+      failLog.includes('update v10.0.0 recently failed to install; skipping auto-download'),
+    );
     check(
       'marker consumed (single-shot)',
       !existsSync(path.join(DATA_DIR, 'update-attempt.json')),

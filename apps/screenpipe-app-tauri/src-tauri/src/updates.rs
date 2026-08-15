@@ -506,6 +506,12 @@ fn consume_update_attempt_marker(app: &tauri::AppHandle) -> Option<UpdateAttempt
     }
 }
 
+fn initial_failed_update(
+    failed_attempt: Option<&UpdateAttempt>,
+) -> Option<(String, std::time::Instant)> {
+    failed_attempt.map(|attempt| (attempt.to_version.clone(), std::time::Instant::now()))
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tray update flow
 // ─────────────────────────────────────────────────────────────────────────────
@@ -791,6 +797,7 @@ impl UpdatesManager {
 
         // Did the previous process quit to apply an update that never landed?
         let failed_attempt = consume_update_attempt_marker(app);
+        let last_failed_update = initial_failed_update(failed_attempt.as_ref());
 
         let update_menu_item = if is_enterprise_build(app) {
             None
@@ -819,7 +826,7 @@ impl UpdatesManager {
             app: app.clone(),
             update_menu_item,
             is_checking: AtomicBool::new(false),
-            last_failed_update: Arc::new(Mutex::new(None)),
+            last_failed_update: Arc::new(Mutex::new(last_failed_update)),
         })
     }
 
@@ -1697,6 +1704,25 @@ mod tests {
     use super::*;
 
     const HOUR: Duration = Duration::from_secs(3600);
+    #[test]
+    fn failed_boot_attempt_seeds_the_automatic_retry_cooldown() {
+        let attempt = UpdateAttempt {
+            from_version: "2.6.21".into(),
+            to_version: "2.6.23".into(),
+            ts_epoch_secs: 1_786_749_757,
+        };
+        let failed = initial_failed_update(Some(&attempt));
+
+        let (version, failed_at) = failed
+            .as_ref()
+            .expect("the failed target version must seed the cooldown at boot");
+        assert_eq!(version, "2.6.23");
+        assert!(failed_version_in_cooldown(
+            Some((version.as_str(), failed_at.elapsed())),
+            "2.6.23",
+            UPDATE_FAILURE_COOLDOWN,
+        ));
+    }
 
     #[test]
     fn sweep_removes_installer_leftovers_only() {
