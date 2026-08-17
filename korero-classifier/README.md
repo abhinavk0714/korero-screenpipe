@@ -34,7 +34,12 @@ pip install -r requirements.txt
 
 ## Running
 
-1. Make sure `screenpipe record` is running (see the main repo README).
+1. Make sure screenpipe is running:
+   ```bash
+   ./target/release/screenpipe record --disable-audio --disable-telemetry
+   ```
+   (`--disable-audio` since this classifier doesn't use it; `--disable-telemetry`
+   to keep everything fully local, no anonymous usage events sent externally.)
 2. Make sure `ollama serve` is running with `llama3.2:3b` pulled.
 3. Run:
 
