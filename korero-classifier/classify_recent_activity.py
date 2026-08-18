@@ -17,6 +17,12 @@ Prerequisites:
     ollama pull llama3.2:3b
 
 Run: python classify_recent_activity.py [--minutes 5]
+
+For comparing variations (different label sets, prompts, models) against
+the same underlying data rather than fresh live captures each time, use
+--start/--end with a fixed, already-captured time window instead of
+--minutes — this queries the same stored data every run:
+    python classify_recent_activity.py --start 2026-08-17T18:00:00Z --end 2026-08-17T18:05:00Z
 """
 
 import argparse
@@ -61,13 +67,17 @@ def get_api_token() -> str:
     return lines[-1]
 
 
-def fetch_recent_text(token: str, minutes: int) -> str:
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(minutes=minutes)
+def fetch_recent_text(token: str, minutes: int = None, start: str = None, end: str = None) -> str:
+    if start and end:
+        # fixed window — same data every call, for comparing variations fairly
+        pass
+    else:
+        end = datetime.now(timezone.utc).isoformat()
+        start = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
     headers = {"Authorization": f"Bearer {token}"}
     params = {
-        "start_time": start.isoformat(),
-        "end_time": end.isoformat(),
+        "start_time": start,
+        "end_time": end,
         "limit": 50,
     }
 
@@ -100,7 +110,14 @@ def classify(text: str) -> str:
     prompt = PROMPT_TEMPLATE.format(labels=", ".join(LABELS), text=text[:6000])
     resp = requests.post(
         f"{OLLAMA_API}/api/generate",
-        json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
+        json={
+            "model": OLLAMA_MODEL,
+            "prompt": prompt,
+            "stream": False,
+            # deterministic decoding — same input must give the same output,
+            # otherwise run-to-run variation gets wrongly blamed on the data
+            "options": {"temperature": 0, "seed": 42},
+        },
         timeout=60,
     )
     resp.raise_for_status()
@@ -111,6 +128,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--minutes", type=int, default=5,
                          help="How many minutes of recent activity to classify")
+    parser.add_argument("--start", type=str, default=None,
+                         help="Fixed window start (ISO 8601). Use with --end to "
+                              "query the same already-captured data every run, "
+                              "instead of a shifting 'last N minutes' window.")
+    parser.add_argument("--end", type=str, default=None,
+                         help="Fixed window end (ISO 8601). See --start.")
     args = parser.parse_args()
 
     try:
@@ -119,9 +142,10 @@ def main():
         print(f"Could not get API token — is screenpipe built and set up? ({e})")
         sys.exit(1)
 
-    text = fetch_recent_text(token, args.minutes)
+    text = fetch_recent_text(token, minutes=args.minutes, start=args.start, end=args.end)
     if not text:
-        print(f"No screen text captured in the last {args.minutes} minute(s). "
+        window = f"{args.start} to {args.end}" if args.start else f"last {args.minutes} minute(s)"
+        print(f"No screen text captured in the window ({window}). "
               f"Is `screenpipe record` running?")
         sys.exit(1)
 
