@@ -34,7 +34,9 @@ import requests
 
 SCREENPIPE_API = "http://localhost:3030"
 OLLAMA_API = "http://localhost:11434"
-OLLAMA_MODEL = "llama3.2:3b"
+# qwen2.5:3b — see FINDINGS.md; the other two candidates tested
+# (llama3.2:3b, phi3.5) each had a disqualifying failure mode.
+OLLAMA_MODEL = "qwen2.5:3b"
 
 LABELS = [
     "writing",
